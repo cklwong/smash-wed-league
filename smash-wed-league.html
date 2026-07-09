@@ -129,7 +129,7 @@
     <div class="brand-row">
       <div class="brand">
         <h1>Smash Wed</h1>
-        <span class="sub">Wednesday night singles league</span>
+        <span class="sub">Wednesday night singles league · 5:30–8:30pm</span>
       </div>
     </div>
     <nav>
@@ -224,9 +224,22 @@
 
 <script>
 const PLAYERS = [{"name": "Lanting Jiang", "rank": 1, "avg": 6.25, "trend": [5.0, 7.0, 6.0, 7.0]}, {"name": "Colin Lord", "rank": 2, "avg": 5.5, "trend": [3.0, 6.0, 5.0]}, {"name": "Keaton Junus", "rank": 2, "avg": 5.5, "trend": [5.0, 6.0]}, {"name": "Ellyn Park", "rank": 4, "avg": 5.33, "trend": [3.0, 5.0, 5.0, 6.0]}, {"name": "Marcus Lei", "rank": 5, "avg": 5.0, "trend": [6.0, 4.0, 5.0, 6.0]}, {"name": "Justin Tran", "rank": 5, "avg": 5.0, "trend": [5.0]}, {"name": "Chinatip Arsaman", "rank": 5, "avg": 5.0, "trend": [5.0]}, {"name": "David", "rank": 8, "avg": 4.5, "trend": [4.0, 4.0, 7.0, 2.0, 5.0]}, {"name": "Jayden Yoon", "rank": 9, "avg": 4.25, "trend": [5.0, 3.0, 4.0, 5.0, 1.0, 5.0, 3.0, 3.0]}, {"name": "Ansley", "rank": 10, "avg": 4.0, "trend": [5.0, 3.0, 4.0, 5.0]}, {"name": "Eden Wong", "rank": 10, "avg": 4.0, "trend": [7.0, 6.0, 6.0, 6.0, 0.0]}, {"name": "Minwoo Tak", "rank": 10, "avg": 4.0, "trend": [3.0, 1.0, 4.0, 5.0, 5.0, 2.0]}, {"name": "Nico Cao", "rank": 10, "avg": 4.0, "trend": [5.0, 2.0, 5.0, 4.0]}, {"name": "Dylan Chu", "rank": 10, "avg": 4.0, "trend": [4.0, 2.0, 6.0]}, {"name": "Alex Tran", "rank": 10, "avg": 4.0, "trend": [4.0]}, {"name": "Rayansh", "rank": 16, "avg": 3.75, "trend": [4.0, 6.0, 4.0, 3.0, 4.0, 4.0]}, {"name": "Daniel", "rank": 16, "avg": 3.75, "trend": [3.0, 5.0, 6.0, 3.0, 4.0, 2.0]}, {"name": "Lucas Tang", "rank": 18, "avg": 3.67, "trend": [5.0, 5.0, 1.0, 5.0]}, {"name": "Anishka", "rank": 18, "avg": 3.67, "trend": [4.0, 2.0, 5.0]}, {"name": "Alice", "rank": 18, "avg": 3.67, "trend": [4.0, 3.0, 4.0]}, {"name": "Yuhang Xie", "rank": 21, "avg": 3.5, "trend": [8.0, 5.0, 3.0, 2.0, 5.0, 4.0]}, {"name": "Tim Liang", "rank": 21, "avg": 3.5, "trend": [2.0, 5.0, 1.0, 4.0, 3.0, 5.0, 2.0]}, {"name": "Xingtong Yang", "rank": 21, "avg": 3.5, "trend": [5.0, 2.0]}, {"name": "Lydia Tsai", "rank": 21, "avg": 3.5, "trend": [2.0, 4.0, 3.0, 5.0]}, {"name": "Niva Shah", "rank": 25, "avg": 3.25, "trend": [1.0, 4.0, 1.0, 3.0, 5.0]}, {"name": "Havish Arunkumar", "rank": 26, "avg": 3.0, "trend": [6.0, 4.0, 2.0, 2.0, 5.0]}, {"name": "Amelia Zhu", "rank": 26, "avg": 3.0, "trend": [1.0, 3.0, 3.0]}, {"name": "Irene Jiang", "rank": 28, "avg": 2.75, "trend": [2.0, 4.0, 3.0, 2.0]}, {"name": "Emily Xu", "rank": 29, "avg": 2.33, "trend": [2.0, 4.0, 3.0, 0.0]}, {"name": "Jayden Chen", "rank": 29, "avg": 2.33, "trend": [5.0, 2.0, 3.0, 4.0, 0.0]}, {"name": "Aashi", "rank": 31, "avg": 2.25, "trend": [6.0, 1.0, 2.0, 2.0, 1.0, 4.0]}, {"name": "Jayden Lau", "rank": 32, "avg": 2.0, "trend": [2.0, 2.0, 3.0, 1.0]}, {"name": "Olivia Tsai", "rank": 32, "avg": 2.0, "trend": [3.0, 2.0, 1.0, 2.0]}, {"name": "Claire Cao", "rank": 32, "avg": 2.0, "trend": [1.0, 3.0, 2.0]}, {"name": "Arnav Gurjar", "rank": 35, "avg": 1.67, "trend": [3.0, 3.0, 1.0, 0.0, 4.0]}, {"name": "Ronit Gurjar", "rank": 35, "avg": 1.67, "trend": [0.0, 2.0, 2.0, 1.0, 2.0]}, {"name": "Matthew Chiu", "rank": 37, "avg": 1.5, "trend": [5.0, 1.0, 0.0, 3.0]}, {"name": "Kalli Liang", "rank": 37, "avg": 1.5, "trend": [3.0, 0.0]}, {"name": "Michael", "rank": 39, "avg": 1.33, "trend": [1.0, 2.0, 1.0, 3.0, 0.0]}, {"name": "Adley", "rank": 40, "avg": 1.25, "trend": [2.0, 0.0, 2.0, 1.0, 1.0, 1.0]}, {"name": "Ruthvik Pushadapu", "rank": 40, "avg": 1.25, "trend": [2.0, 0.0, 1.0, 1.0, 3.0]}, {"name": "Rey", "rank": 42, "avg": 1.0, "trend": [1.0, 1.0]}, {"name": "Chloe Chen", "rank": 43, "avg": 0.5, "trend": [3.0, 3.0, 1.0, 0.0]}, {"name": "Chris", "rank": 44, "avg": 0.0, "trend": []}, {"name": "Mohith", "rank": 44, "avg": 0.0, "trend": [4.0, 0.0]}, {"name": "Lucas Lei", "rank": 44, "avg": 0.0, "trend": []}, {"name": "Shawn Ji", "rank": 44, "avg": 0.0, "trend": []}, {"name": "Jake Tang", "rank": 44, "avg": 0.0, "trend": []}, {"name": "Lucas Lu", "rank": 44, "avg": 0.0, "trend": [0.0]}, {"name": "Raymond Lu", "rank": 44, "avg": 0.0, "trend": [0.0]}, {"name": "Sriram Bhogaraju", "rank": 44, "avg": 0.0, "trend": [4.0, 0.0, 0.0]}];
-const SEED_NAMES = ["Tim Liang","Minwoo Tak","Ellyn Park","Chloe Chen","Jayden Chen","Matthew Chiu","Havish Arunkumar","Arnav Gurjar","Ronit Gurjar","Armaan Thusoo","Adley","Anishka","Jayden Yoon","Ruthvik Pushadapu","Jayden Lau","Rayansh"];
+const SEED_NAMES = ["Chinatip Arsaman","Minwoo Tak","Anishka","Alice","David","Daniel","Rayansh","Ellyn Park","Niva Shah","Armaan Thusoo","Jayden Chen","Ronit Gurjar","Lucas Tang","Yuhang Xie","Matthew Chiu","Adley","Jayden Lau","Nico Cao","Arnav Gurjar","Lydia Tsai","Amelia Zhu"];
+const SEED_SESSIONS = [
+  ["Lanting Jiang","Colin Lord","Keaton Junus","Marcus Lei","Justin Tran","Chinatip Arsaman","David","Nico Cao","Dylan Chu","Alex Tran"],
+  ["Lucas Tang","Xingtong Yang","Lydia Tsai","Niva Shah","Amelia Zhu","Irene Jiang"],
+  ["Yuhang Xie","Emily Xu","Jayden Chen","Aashi"]
+];
+function getNextOpenWednesdays(n){
+  const candidates = getUpcomingWednesdays(n+4);
+  return candidates.filter(d=>Date.now() < pacificNoonTimestamp(d)).slice(0,n);
+}
+function seedNamesForDate(dateISO){
+  if(dateISO === getSessionDateISO()) return SEED_NAMES;
+  const idx = getNextOpenWednesdays(3).indexOf(dateISO);
+  return idx===-1 ? [] : SEED_SESSIONS[idx];
+}
 const CAP = 24;
-const MAX_POOL_SIZE = 6;
 
 const hasStorage = (typeof window !== 'undefined') && !!window.storage;
 let memStore = {};
@@ -348,10 +361,9 @@ document.getElementById('standings-search').addEventListener('input', e=>renderS
 async function loadSession(dateISO){
   const raw = await storageGet('session:'+dateISO, true);
   if(raw){ try{ return JSON.parse(raw); }catch(e){} }
-  const seeded = dateISO === getSessionDateISO() ? true : false;
   return {
     date: dateISO,
-    signups: seeded ? SEED_NAMES.map(n=>({id:uid(), name:n, ts:Date.now()})) : [],
+    signups: seedNamesForDate(dateISO).map(n=>({id:uid(), name:n, ts:Date.now()})),
     pools: null
   };
 }
@@ -373,7 +385,7 @@ function generatePools(activeSignups){
   const sorted = [...activeSignups].sort((a,b)=> rankOf(a.name)-rankOf(b.name));
   const N = sorted.length;
   if(N===0) return null;
-  const poolCount = Math.min(4, Math.ceil(N/MAX_POOL_SIZE));
+  const poolCount = N<=16 ? 2 : (N<=21 ? 3 : 4);
   const base = Math.floor(N/poolCount), rem = N%poolCount;
   const labels = ['A','B','C','D'];
   const groups = [];
@@ -416,7 +428,7 @@ async function renderSchedule(){
 
   let html = `<div class="session-banner">
     <div><div class="date">Wed, ${fmtDate(dateISO)}</div>
-    <div class="meta">Signups close noon Pacific match day · 4 courts, ~10 min/game, 2.5 hr window</div></div>
+    <div class="meta">Signups close noon Pacific match day</div></div>
     <div style="display:flex; gap:8px;">
       <div class="cap-pill"><div class="n">${confirmed.length}/${CAP}</div><div class="l">Confirmed</div></div>
       <div class="cap-pill"><div class="n">${waitlist.length}</div><div class="l">Waitlist</div></div>
@@ -556,7 +568,7 @@ async function renderJoinedList(){
 }
 
 function renderJoinOptions(){
-  const dates = getUpcomingWednesdays(3);
+  const dates = getNextOpenWednesdays(3);
   const now = Date.now();
   const statuses = dates.map(d=>({date:d, closed: now >= pacificNoonTimestamp(d)}));
   const firstOpenIdx = statuses.findIndex(s=>!s.closed);
