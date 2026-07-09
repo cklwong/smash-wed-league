@@ -90,7 +90,7 @@
   .stat .value{font-family:'Oswald'; font-size:26px; color:var(--ink);}
   form .field{margin-bottom:14px;}
   form label{display:block; font-size:13px; font-weight:500; margin-bottom:5px; color:var(--text);}
-  form input{width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px; background:#fff;}
+  form input, form select{width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px; background:#fff;}
   .radio-row{display:flex; gap:8px; flex-wrap:wrap;}
   .radio-row label{border:1px solid var(--border); border-radius:8px; padding:8px 12px; font-weight:400; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; margin:0;}
   .radio-row input{width:auto;}
@@ -104,6 +104,8 @@
   .roster-list li:last-child{border-bottom:none;}
   .roster-list .num{width:24px; color:var(--text-mute); font-size:12px;}
   .roster-list .rname{flex:1;}
+  .roster-list .remove-btn{background:none; border:none; font-size:15px; line-height:1; cursor:pointer; padding:4px 6px; flex-shrink:0; opacity:.75;}
+  .roster-list .remove-btn:hover{opacity:1;}
   .empty-row{color:var(--text-mute); font-size:13px; padding:8px 0;}
   .mine-badge{background:var(--amber-tint); color:var(--amber-deep); font-size:11px; padding:2px 7px; border-radius:20px; font-weight:500;}
   .skel{color:var(--text-mute); font-size:13px; padding:10px 0;}
@@ -172,8 +174,21 @@
           <label>Which Wednesday?</label>
           <div class="radio-row" id="jf-date-options"></div>
         </div>
-        <div class="field"><label for="jf-name">Name</label><input id="jf-name" type="text" placeholder="Your full name" required></div>
-        <div class="field"><label for="jf-contact">Email or phone</label><input id="jf-contact" type="text" placeholder="name@email.com" required></div>
+        <div class="field">
+          <label>Player type</label>
+          <div class="radio-row" id="jf-type-options">
+            <label><input type="radio" name="jf-type" value="existing" checked> Existing player</label>
+            <label><input type="radio" name="jf-type" value="new"> New player</label>
+          </div>
+        </div>
+        <div class="field" id="jf-existing-field">
+          <label for="jf-existing-select">Select your name</label>
+          <select id="jf-existing-select"></select>
+        </div>
+        <div id="jf-new-fields" style="display:none;">
+          <div class="field"><label for="jf-name">Name</label><input id="jf-name" type="text" placeholder="Your full name"></div>
+          <div class="field"><label for="jf-contact">Email or phone</label><input id="jf-contact" type="text" placeholder="name@email.com"></div>
+        </div>
         <button type="submit" class="btn" id="join-submit-btn" style="width:100%;">Request a spot</button>
         <p class="note" id="join-error" style="display:none; color:var(--loss);"></p>
       </form>
@@ -183,11 +198,11 @@
         <p style="font-size:13px; color:var(--text-soft); margin:0 0 16px;" id="confirm-detail"></p>
         <button class="btn ghost" onclick="resetJoinForm()">Add another player</button>
       </div>
-      <p class="note">Your signup is saved directly to the league roster. Contact the organizer if you need to change or remove it.</p>
+      <p class="note">Your signup is saved directly to the league roster. Use the remove button below if your plans change.</p>
     </div>
     <div class="card" style="max-width:440px;">
-      <h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Joined</h3>
-      <ul class="roster-list" id="jf-joined-list"><li class="empty-row">Loading…</li></ul>
+      <h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Registered</h3>
+      <ul class="roster-list" id="jf-registered-list"><li class="empty-row">Loading…</li></ul>
     </div>
     <div class="card" style="max-width:440px;" id="jf-waitlist-card">
       <h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Wait List</h3>
@@ -239,6 +254,16 @@ async function postJoin(dateISO, name, contact){
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
       body: JSON.stringify({action:'join', date:dateISO, name, contact})
+    });
+    return await r.json();
+  }catch(e){ return {ok:false, error:String(e)}; }
+}
+async function postLeave(dateISO, name){
+  try{
+    const r = await fetch(GAS_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({action:'leave', date:dateISO, name})
     });
     return await r.json();
   }catch(e){ return {ok:false, error:String(e)}; }
@@ -415,6 +440,49 @@ function getSelectedJoinDate(){
   return checked ? checked.value : getSessionDateISO();
 }
 
+function updateJoinTypeFields(){
+  const type = (document.querySelector('input[name="jf-type"]:checked') || {}).value || 'existing';
+  const existingField = document.getElementById('jf-existing-field');
+  const newFields = document.getElementById('jf-new-fields');
+  const sel = document.getElementById('jf-existing-select');
+  const nameInp = document.getElementById('jf-name');
+  const contactInp = document.getElementById('jf-contact');
+  if(type === 'existing'){
+    existingField.style.display = 'block'; newFields.style.display = 'none';
+    sel.required = true; nameInp.required = false; contactInp.required = false;
+  } else {
+    existingField.style.display = 'none'; newFields.style.display = 'block';
+    sel.required = false; nameInp.required = true; contactInp.required = true;
+  }
+}
+document.querySelectorAll('input[name="jf-type"]').forEach(r=>r.addEventListener('change', updateJoinTypeFields));
+
+function populateExistingSelect(alreadyNames){
+  const sel = document.getElementById('jf-existing-select');
+  const already = new Set((alreadyNames||[]).map(n=>n.toLowerCase()));
+  const names = PLAYERS.map(p=>p.name).slice().sort((a,b)=>a.localeCompare(b));
+  const prev = sel.value;
+  sel.innerHTML = names.length
+    ? names.map(n=>`<option value="${n.replace(/"/g,'&quot;')}" ${already.has(n.toLowerCase())?'disabled':''}>${n}${already.has(n.toLowerCase())?' (already in)':''}</option>`).join('')
+    : '<option value="">No players found</option>';
+  if(names.includes(prev)) sel.value = prev;
+}
+
+async function removeSignup(dateISO, name){
+  if(!confirm(`Remove ${name} from Wed, ${fmtDate(dateISO)}?`)) return;
+  if(!confirm(`Are you sure? This can't be undone.`)) return;
+  const result = await postLeave(dateISO, name);
+  if(!result.ok){ alert('Could not remove — please try again.'); return; }
+  renderJoinedList();
+}
+function joinRosterRow(s, num, phase, dateISO){
+  return `<li>
+    <span class="num">${phase==='waitlist' ? CAP+num : num}</span>
+    <span class="rname">${s.name}${s.checkedIn?' <span class="mine-badge">Checked in</span>':''}</span>
+    <button type="button" class="remove-btn" title="Remove" aria-label="Remove ${s.name}" onclick="removeSignup('${dateISO}','${s.name.replace(/'/g,"\\'")}')">❌</button>
+  </li>`;
+}
+
 function updateJoinSubForSelected(){
   const dateISO = getSelectedJoinDate();
   const cutoff = pacificNoonTimestamp(dateISO);
@@ -436,7 +504,7 @@ function updateJoinSubForSelected(){
 
 async function renderJoinedList(){
   const dateISO = getSelectedJoinDate();
-  const list = document.getElementById('jf-joined-list');
+  const list = document.getElementById('jf-registered-list');
   const waitlistCard = document.getElementById('jf-waitlist-card');
   const waitlistList = document.getElementById('jf-waitlist-list');
   list.innerHTML = '<li class="empty-row">Loading…</li>';
@@ -445,15 +513,17 @@ async function renderJoinedList(){
   const confirmed = week.signups.slice(0, CAP);
   const waitlist = week.signups.slice(CAP);
   list.innerHTML = confirmed.length
-    ? confirmed.map((s,i)=>rosterRow(s,i+1,'confirmed')).join('')
+    ? confirmed.map((s,i)=>joinRosterRow(s,i+1,'confirmed',dateISO)).join('')
     : '<li class="empty-row">No signups yet for this date.</li>';
   if(waitlist.length){
-    waitlistList.innerHTML = waitlist.map((s,i)=>rosterRow(s,i+1,'waitlist')).join('');
+    waitlistList.innerHTML = waitlist.map((s,i)=>joinRosterRow(s,i+1,'waitlist',dateISO)).join('');
     waitlistCard.style.display = 'block';
   }
+  populateExistingSelect(week.signups.map(s=>s.name));
 }
 
-function renderJoinOptions(){
+async function renderJoinOptions(){
+  if(!PLAYERS.length) PLAYERS = await fetchRankings();
   const dates = getNextOpenWednesdays(3);
   const now = Date.now();
   const statuses = dates.map(d=>({date:d, closed: now >= pacificNoonTimestamp(d)}));
@@ -466,13 +536,22 @@ function renderJoinOptions(){
     </label>`).join('');
   container.querySelectorAll('input[name="jf-date"]').forEach(inp=>inp.addEventListener('change', ()=>{ updateJoinSubForSelected(); renderJoinedList(); }));
   updateJoinSubForSelected();
+  updateJoinTypeFields();
   renderJoinedList();
 }
 
 document.getElementById('join-form').addEventListener('submit', async e=>{
   e.preventDefault();
-  const name = document.getElementById('jf-name').value.trim() || 'Player';
-  const contact = document.getElementById('jf-contact').value.trim();
+  const type = (document.querySelector('input[name="jf-type"]:checked') || {}).value || 'existing';
+  let name, contact;
+  if(type === 'existing'){
+    name = document.getElementById('jf-existing-select').value;
+    contact = '';
+    if(!name) return;
+  } else {
+    name = document.getElementById('jf-name').value.trim() || 'Player';
+    contact = document.getElementById('jf-contact').value.trim();
+  }
   const dateISO = getSelectedJoinDate();
   const cutoff = pacificNoonTimestamp(dateISO);
   if(Date.now() >= cutoff){ updateJoinSubForSelected(); return; }
