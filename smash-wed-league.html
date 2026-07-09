@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smash Wed — league hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#16324A; --ink-2:#1F4260; --line:#F4F6F5; --card:#FFFFFF; --border:#E2E7E6;
+    --text:#1C2A2E; --text-soft:#5C6E70; --text-mute:#8A9698;
+    --amber:#E0932C; --amber-deep:#8A5A15; --amber-tint:#FBEBD3;
+    --win:#2F7D52; --win-tint:#E4F2E9;
+    --loss:#B3492F; --loss-tint:#FBE9E4;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--line); color:var(--text); font-family:'Inter',sans-serif; -webkit-font-smoothing:antialiased;}
+  h1,h2,h3,.display{font-family:'Oswald',sans-serif; text-transform:uppercase; letter-spacing:.02em;}
+  .num{font-family:'IBM Plex Mono',monospace;}
+  a{color:inherit;}
+  header{background:var(--ink); color:#fff; position:sticky; top:0; z-index:20; border-bottom:3px solid var(--amber);}
+  .header-inner{max-width:920px; margin:0 auto; padding:18px 20px 0;}
+  .brand-row{display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+  .brand{display:flex; align-items:baseline; gap:10px;}
+  .brand h1{font-size:26px; font-weight:600; margin:0; color:#fff;}
+  .brand span.sub{font-size:13px; color:#AEC4D4; font-weight:400; text-transform:none; letter-spacing:0; font-family:'Inter',sans-serif;}
+  nav{display:flex; gap:2px; margin-top:16px; overflow-x:auto;}
+  nav button{background:none; border:none; color:#B9CBD8; font-family:'Inter',sans-serif; font-size:14px; font-weight:500; padding:10px 16px; cursor:pointer; white-space:nowrap; border-bottom:2px solid transparent;}
+  nav button.active{color:#fff; border-bottom:2px solid var(--amber);}
+  nav button:hover{color:#fff;}
+  main{max-width:920px; margin:0 auto; padding:24px 20px 60px;}
+  .view{display:none;}
+  .view.active{display:block;}
+  .page-head{margin-bottom:20px;}
+  .page-head h2{font-size:20px; margin:0 0 4px; color:var(--ink);}
+  .page-head p{margin:0; color:var(--text-soft); font-size:14px;}
+  .card{background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px 18px; margin-bottom:14px;}
+  .search-row{display:flex; gap:10px; margin-bottom:14px;}
+  .search-row input{flex:1; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px; background:#fff;}
+  table.standings{width:100%; border-collapse:collapse;}
+  table.standings th{text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-mute); font-weight:500; padding:6px 8px; border-bottom:1px solid var(--border);}
+  table.standings td{padding:9px 8px; border-bottom:1px solid var(--border); font-size:14px; vertical-align:middle;}
+  table.standings tr:last-child td{border-bottom:none;}
+  table.standings tr.row-clickable{cursor:pointer;}
+  table.standings tr.row-clickable:hover{background:#FAFAF8;}
+  .rank-badge{display:inline-flex; align-items:center; justify-content:center; width:30px; height:26px; border:1.5px solid var(--ink); border-radius:4px; font-family:'IBM Plex Mono'; font-weight:500; font-size:13px; color:var(--ink);}
+  .rank-badge.top3{background:var(--amber-tint); border-color:var(--amber-deep); color:var(--amber-deep);}
+  .p-name{font-weight:500;}
+  .avg-val{font-family:'IBM Plex Mono'; font-weight:500;}
+  th.num-col, td.num-col{text-align:right;}
+  .session-banner{display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; background:var(--ink); color:#fff; border-radius:10px; padding:16px 18px; margin-bottom:16px;}
+  .session-banner .date{font-family:'Oswald'; font-size:18px; text-transform:uppercase;}
+  .session-banner .meta{font-size:13px; color:#AEC4D4; line-height:1.5;}
+  .cap-pill{background:rgba(255,255,255,.1); border-radius:8px; padding:8px 14px; text-align:center; min-width:90px;}
+  .cap-pill .n{font-family:'Oswald'; font-size:20px;}
+  .cap-pill .l{font-size:10px; text-transform:uppercase; color:#AEC4D4; letter-spacing:.04em;}
+  .pool-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:6px;}
+  .pool-head h3{margin:0; font-size:15px; color:var(--ink);}
+  .pool-status{font-size:12px; padding:3px 9px; border-radius:20px; font-weight:500;}
+  .pool-status.full{background:var(--win-tint); color:var(--win);}
+  .pool-status.open{background:var(--amber-tint); color:var(--amber-deep);}
+  .pool-status.closed{background:#EFEFEC; color:var(--text-mute);}
+  .pool-players{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;}
+  .chip{background:var(--line); border:1px solid var(--border); border-radius:20px; padding:4px 8px 4px 11px; font-size:13px; display:inline-flex; align-items:center; gap:6px;}
+  .chip.dropped{background:var(--loss-tint); border-color:#EBC2B8; color:var(--loss); text-decoration:line-through; text-decoration-color:var(--loss);}
+  .chip .x{cursor:pointer; border:none; background:none; color:var(--text-mute); font-size:14px; line-height:1; padding:0 2px;}
+  .chip .x:hover{color:var(--loss);}
+  .match-list{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:8px;}
+  .match{display:flex; align-items:center; justify-content:space-between; gap:8px; border:1px solid var(--border); border-radius:8px; padding:7px 10px; font-size:13px;}
+  .match.forfeit{background:var(--loss-tint); border-color:#EBC2B8;}
+  .match .vs{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .match input{width:32px; text-align:center; border:1px solid var(--border); border-radius:5px; padding:4px 2px; font-family:'IBM Plex Mono'; font-size:13px;}
+  .match .dash{color:var(--text-mute);}
+  .forfeit-tag{font-size:11px; font-weight:500; color:var(--loss); white-space:nowrap;}
+  .cta-line{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:var(--amber-tint); border-radius:8px; padding:10px 14px; margin-top:8px;}
+  .cta-line span{font-size:13px; color:var(--amber-deep); font-weight:500;}
+  button.btn{background:var(--ink); color:#fff; border:none; border-radius:8px; padding:9px 16px; font-family:'Inter'; font-weight:500; font-size:13px; cursor:pointer;}
+  button.btn:hover{background:var(--ink-2);}
+  button.btn.ghost{background:none; border:1px solid var(--ink); color:var(--ink);}
+  button.btn.ghost:hover{background:var(--line);}
+  button.btn.small{padding:6px 11px; font-size:12px;}
+  button.btn.danger{background:none; border:1px solid var(--loss); color:var(--loss);}
+  button.btn.danger:hover{background:var(--loss-tint);}
+  button.btn:disabled{opacity:.5; cursor:not-allowed;}
+  .players-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px;}
+  .player-card{cursor:pointer;}
+  .player-card:hover{border-color:var(--ink);}
+  .pc-top{display:flex; align-items:center; gap:10px; margin-bottom:8px;}
+  .avatar{width:38px; height:38px; border-radius:50%; background:var(--ink); color:#fff; display:flex; align-items:center; justify-content:center; font-family:'Oswald'; font-size:14px; flex-shrink:0;}
+  .pc-name{font-weight:500; font-size:14px; line-height:1.3;}
+  .pc-rank{font-size:12px; color:var(--text-mute); font-family:'IBM Plex Mono';}
+  .modal-overlay{display:none; position:fixed; inset:0; background:rgba(22,50,74,.5); align-items:center; justify-content:center; z-index:50; padding:20px;}
+  .modal-overlay.active{display:flex;}
+  .modal{background:#fff; border-radius:12px; max-width:380px; width:100%; padding:22px; max-height:80vh; overflow:auto;}
+  .modal-top{display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;}
+  .modal-close{background:none; border:none; font-size:20px; cursor:pointer; color:var(--text-mute); line-height:1;}
+  .stat-row{display:flex; gap:20px; margin:14px 0;}
+  .stat{flex:1;}
+  .stat .label{font-size:11px; color:var(--text-mute); text-transform:uppercase; letter-spacing:.03em;}
+  .stat .value{font-family:'Oswald'; font-size:26px; color:var(--ink);}
+  form .field{margin-bottom:14px;}
+  form label{display:block; font-size:13px; font-weight:500; margin-bottom:5px; color:var(--text);}
+  form input{width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px; background:#fff;}
+  .radio-row{display:flex; gap:8px; flex-wrap:wrap;}
+  .radio-row label{border:1px solid var(--border); border-radius:8px; padding:8px 12px; font-weight:400; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; margin:0;}
+  .radio-row input{width:auto;}
+  .confirm{display:none; text-align:center; padding:30px 10px;}
+  .confirm.active{display:block;}
+  .ok-badge{width:48px; height:48px; border-radius:50%; background:var(--win-tint); color:var(--win); display:flex; align-items:center; justify-content:center; margin:0 auto 14px; font-size:22px;}
+  .ok-badge.wait{background:var(--amber-tint); color:var(--amber-deep);}
+  .note{font-size:12px; color:var(--text-mute); margin-top:10px;}
+  .roster-list{list-style:none; margin:0; padding:0;}
+  .roster-list li{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); font-size:14px;}
+  .roster-list li:last-child{border-bottom:none;}
+  .roster-list .num{width:24px; color:var(--text-mute); font-size:12px;}
+  .roster-list .rname{flex:1;}
+  .empty-row{color:var(--text-mute); font-size:13px; padding:8px 0;}
+  .mine-badge{background:var(--amber-tint); color:var(--amber-deep); font-size:11px; padding:2px 7px; border-radius:20px; font-weight:500;}
+  .skel{color:var(--text-mute); font-size:13px; padding:10px 0;}
+  .my-panel{border-left:3px solid var(--amber); border-radius:0 8px 8px 0;}
+  .droplog{font-size:12px; color:var(--text-soft); margin-top:8px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="brand-row">
+      <div class="brand">
+        <h1>Smash Wed</h1>
+        <span class="sub">Wednesday night singles league</span>
+      </div>
+    </div>
+    <nav>
+      <button data-view="standings" class="active">Standings</button>
+      <button data-view="schedule">This week</button>
+      <button data-view="players">Players</button>
+      <button data-view="join">Join</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <section id="view-standings" class="view active">
+    <div class="page-head">
+      <h2>Standings</h2>
+      <p>Ranked by average points across your best 4 of the last 6 weeks.</p>
+    </div>
+    <div class="search-row"><input type="text" id="standings-search" placeholder="Find a player"></div>
+    <div class="card" style="padding:6px 12px;">
+      <table class="standings">
+        <thead><tr><th style="width:40px;">Rank</th><th>Player</th><th class="num-col">Avg pts</th><th style="width:80px;">Trend</th></tr></thead>
+        <tbody id="standings-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="view-schedule" class="view">
+    <div class="page-head">
+      <h2>This week</h2>
+      <p id="schedule-sub">Loading session…</p>
+    </div>
+    <div id="schedule-content"><div class="skel">Loading this week's session…</div></div>
+  </section>
+
+  <section id="view-players" class="view">
+    <div class="page-head">
+      <h2>Players</h2>
+      <p>51 players this season. Tap anyone for their full trend line.</p>
+    </div>
+    <div class="players-grid" id="players-grid"></div>
+  </section>
+
+  <section id="view-join" class="view">
+    <div class="page-head">
+      <h2>Join the league</h2>
+      <p id="join-sub">Loading…</p>
+    </div>
+    <div class="card" style="max-width:440px;">
+      <form id="join-form">
+        <div class="field">
+          <label>Which Wednesday?</label>
+          <div class="radio-row" id="jf-date-options"></div>
+        </div>
+        <div class="field"><label for="jf-name">Name</label><input id="jf-name" type="text" placeholder="Your full name" required></div>
+        <div class="field"><label for="jf-contact">Email or phone</label><input id="jf-contact" type="text" placeholder="name@email.com" required></div>
+        <button type="submit" class="btn" id="join-submit-btn" style="width:100%;">Request a spot</button>
+      </form>
+      <div class="confirm" id="join-confirm">
+        <div class="ok-badge" id="confirm-badge"><i>✓</i></div>
+        <h3 style="margin:0 0 6px; font-size:16px;" id="confirm-name"></h3>
+        <p style="font-size:13px; color:var(--text-soft); margin:0 0 16px;" id="confirm-detail"></p>
+        <button class="btn ghost" onclick="resetJoinForm()">Add another player</button>
+      </div>
+      <p class="note">Signups are remembered in this browser so you can manage your own spot. Signing up on a different device? Ask the organizer to remove you if needed.</p>
+    </div>
+    <div class="card" style="max-width:440px;">
+      <h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Already joined</h3>
+      <ul class="roster-list" id="jf-joined-list"><li class="empty-row">Loading…</li></ul>
+    </div>
+  </section>
+
+</main>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-top">
+      <div class="pc-top" style="margin-bottom:0;">
+        <div class="avatar" id="modal-avatar"></div>
+        <div><div class="pc-name" id="modal-name" style="font-size:16px;"></div><div class="pc-rank" id="modal-rank"></div></div>
+      </div>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="stat-row">
+      <div class="stat"><div class="label">Season avg</div><div class="value" id="modal-avg"></div></div>
+      <div class="stat"><div class="label">Weeks played</div><div class="value" id="modal-weeks"></div></div>
+    </div>
+    <div class="label" style="margin-bottom:6px;">Points, last weeks played</div>
+    <div id="modal-chart"></div>
+  </div>
+</div>
+
+<script>
+const PLAYERS = [{"name": "Lanting Jiang", "rank": 1, "avg": 6.25, "trend": [5.0, 7.0, 6.0, 7.0]}, {"name": "Colin Lord", "rank": 2, "avg": 5.5, "trend": [3.0, 6.0, 5.0]}, {"name": "Keaton Junus", "rank": 2, "avg": 5.5, "trend": [5.0, 6.0]}, {"name": "Ellyn Park", "rank": 4, "avg": 5.33, "trend": [3.0, 5.0, 5.0, 6.0]}, {"name": "Marcus Lei", "rank": 5, "avg": 5.0, "trend": [6.0, 4.0, 5.0, 6.0]}, {"name": "Justin Tran", "rank": 5, "avg": 5.0, "trend": [5.0]}, {"name": "Chinatip Arsaman", "rank": 5, "avg": 5.0, "trend": [5.0]}, {"name": "David", "rank": 8, "avg": 4.5, "trend": [4.0, 4.0, 7.0, 2.0, 5.0]}, {"name": "Jayden Yoon", "rank": 9, "avg": 4.25, "trend": [5.0, 3.0, 4.0, 5.0, 1.0, 5.0, 3.0, 3.0]}, {"name": "Ansley", "rank": 10, "avg": 4.0, "trend": [5.0, 3.0, 4.0, 5.0]}, {"name": "Eden Wong", "rank": 10, "avg": 4.0, "trend": [7.0, 6.0, 6.0, 6.0, 0.0]}, {"name": "Minwoo Tak", "rank": 10, "avg": 4.0, "trend": [3.0, 1.0, 4.0, 5.0, 5.0, 2.0]}, {"name": "Nico Cao", "rank": 10, "avg": 4.0, "trend": [5.0, 2.0, 5.0, 4.0]}, {"name": "Dylan Chu", "rank": 10, "avg": 4.0, "trend": [4.0, 2.0, 6.0]}, {"name": "Alex Tran", "rank": 10, "avg": 4.0, "trend": [4.0]}, {"name": "Rayansh", "rank": 16, "avg": 3.75, "trend": [4.0, 6.0, 4.0, 3.0, 4.0, 4.0]}, {"name": "Daniel", "rank": 16, "avg": 3.75, "trend": [3.0, 5.0, 6.0, 3.0, 4.0, 2.0]}, {"name": "Lucas Tang", "rank": 18, "avg": 3.67, "trend": [5.0, 5.0, 1.0, 5.0]}, {"name": "Anishka", "rank": 18, "avg": 3.67, "trend": [4.0, 2.0, 5.0]}, {"name": "Alice", "rank": 18, "avg": 3.67, "trend": [4.0, 3.0, 4.0]}, {"name": "Yuhang Xie", "rank": 21, "avg": 3.5, "trend": [8.0, 5.0, 3.0, 2.0, 5.0, 4.0]}, {"name": "Tim Liang", "rank": 21, "avg": 3.5, "trend": [2.0, 5.0, 1.0, 4.0, 3.0, 5.0, 2.0]}, {"name": "Xingtong Yang", "rank": 21, "avg": 3.5, "trend": [5.0, 2.0]}, {"name": "Lydia Tsai", "rank": 21, "avg": 3.5, "trend": [2.0, 4.0, 3.0, 5.0]}, {"name": "Niva Shah", "rank": 25, "avg": 3.25, "trend": [1.0, 4.0, 1.0, 3.0, 5.0]}, {"name": "Havish Arunkumar", "rank": 26, "avg": 3.0, "trend": [6.0, 4.0, 2.0, 2.0, 5.0]}, {"name": "Amelia Zhu", "rank": 26, "avg": 3.0, "trend": [1.0, 3.0, 3.0]}, {"name": "Irene Jiang", "rank": 28, "avg": 2.75, "trend": [2.0, 4.0, 3.0, 2.0]}, {"name": "Emily Xu", "rank": 29, "avg": 2.33, "trend": [2.0, 4.0, 3.0, 0.0]}, {"name": "Jayden Chen", "rank": 29, "avg": 2.33, "trend": [5.0, 2.0, 3.0, 4.0, 0.0]}, {"name": "Aashi", "rank": 31, "avg": 2.25, "trend": [6.0, 1.0, 2.0, 2.0, 1.0, 4.0]}, {"name": "Jayden Lau", "rank": 32, "avg": 2.0, "trend": [2.0, 2.0, 3.0, 1.0]}, {"name": "Olivia Tsai", "rank": 32, "avg": 2.0, "trend": [3.0, 2.0, 1.0, 2.0]}, {"name": "Claire Cao", "rank": 32, "avg": 2.0, "trend": [1.0, 3.0, 2.0]}, {"name": "Arnav Gurjar", "rank": 35, "avg": 1.67, "trend": [3.0, 3.0, 1.0, 0.0, 4.0]}, {"name": "Ronit Gurjar", "rank": 35, "avg": 1.67, "trend": [0.0, 2.0, 2.0, 1.0, 2.0]}, {"name": "Matthew Chiu", "rank": 37, "avg": 1.5, "trend": [5.0, 1.0, 0.0, 3.0]}, {"name": "Kalli Liang", "rank": 37, "avg": 1.5, "trend": [3.0, 0.0]}, {"name": "Michael", "rank": 39, "avg": 1.33, "trend": [1.0, 2.0, 1.0, 3.0, 0.0]}, {"name": "Adley", "rank": 40, "avg": 1.25, "trend": [2.0, 0.0, 2.0, 1.0, 1.0, 1.0]}, {"name": "Ruthvik Pushadapu", "rank": 40, "avg": 1.25, "trend": [2.0, 0.0, 1.0, 1.0, 3.0]}, {"name": "Rey", "rank": 42, "avg": 1.0, "trend": [1.0, 1.0]}, {"name": "Chloe Chen", "rank": 43, "avg": 0.5, "trend": [3.0, 3.0, 1.0, 0.0]}, {"name": "Chris", "rank": 44, "avg": 0.0, "trend": []}, {"name": "Mohith", "rank": 44, "avg": 0.0, "trend": [4.0, 0.0]}, {"name": "Lucas Lei", "rank": 44, "avg": 0.0, "trend": []}, {"name": "Shawn Ji", "rank": 44, "avg": 0.0, "trend": []}, {"name": "Jake Tang", "rank": 44, "avg": 0.0, "trend": []}, {"name": "Lucas Lu", "rank": 44, "avg": 0.0, "trend": [0.0]}, {"name": "Raymond Lu", "rank": 44, "avg": 0.0, "trend": [0.0]}, {"name": "Sriram Bhogaraju", "rank": 44, "avg": 0.0, "trend": [4.0, 0.0, 0.0]}];
+const SEED_NAMES = ["Tim Liang","Minwoo Tak","Ellyn Park","Chloe Chen","Jayden Chen","Matthew Chiu","Havish Arunkumar","Arnav Gurjar","Ronit Gurjar","Armaan Thusoo","Adley","Anishka","Jayden Yoon","Ruthvik Pushadapu","Jayden Lau","Rayansh"];
+const CAP = 24;
+const MAX_POOL_SIZE = 6;
+
+const hasStorage = (typeof window !== 'undefined') && !!window.storage;
+let memStore = {};
+async function storageGet(key, shared=false){
+  if(hasStorage){ try{ const r = await window.storage.get(key, shared); return r ? r.value : null; }catch(e){ return null; } }
+  return memStore[key] ?? null;
+}
+async function storageSet(key, value, shared=false){
+  if(hasStorage){ try{ await window.storage.set(key, value, shared); return true; }catch(e){ return false; } }
+  memStore[key] = value; return true;
+}
+
+function partsInTZ(date, timeZone){
+  return new Intl.DateTimeFormat('en-US',{timeZone,hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'})
+    .formatToParts(date).reduce((acc,p)=>{ if(p.type!=='literal') acc[p.type]=p.value; return acc; },{});
+}
+function pacificNoonTimestamp(dateISO){
+  let guess = new Date(dateISO+'T12:00:00Z').getTime();
+  for(let i=0;i<3;i++){
+    const p = partsInTZ(new Date(guess),'America/Los_Angeles');
+    const current = new Date(`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`);
+    const target = new Date(`${dateISO}T12:00:00`);
+    guess += (target - current);
+  }
+  return guess;
+}
+function getSessionDateISO(){
+  const now = new Date();
+  const p = partsInTZ(now,'America/Los_Angeles');
+  const wd = new Date(Date.UTC(+p.year,+p.month-1,+p.day)).getUTCDay();
+  let diff = (3 - wd + 7) % 7;
+  if(diff===0 && +p.hour >= 22) diff = 7;
+  const base = new Date(Date.UTC(+p.year,+p.month-1,+p.day));
+  base.setUTCDate(base.getUTCDate()+diff);
+  return base.toISOString().slice(0,10);
+}
+function fmtDate(iso){
+  const d = new Date(iso+'T12:00:00Z');
+  return d.toLocaleDateString('en-US',{timeZone:'UTC',weekday:'short',month:'short',day:'numeric'});
+}
+function addDaysISO(dateISO, days){
+  const d = new Date(dateISO+'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate()+days);
+  return d.toISOString().slice(0,10);
+}
+function getUpcomingWednesdays(n){
+  const base = getSessionDateISO();
+  const dates = [];
+  for(let i=0;i<n;i++) dates.push(addDaysISO(base, i*7));
+  return dates;
+}
+function fmtLocalTime(ts){
+  return new Date(ts).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+}
+function rankOf(name){
+  const p = PLAYERS.find(pl=>pl.name.toLowerCase()===name.trim().toLowerCase());
+  return p ? p.rank : 9999;
+}
+function uid(){ return 'p'+Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+
+function initials(name){ return name.trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
+function sparkline(trend){
+  if(!trend || trend.length < 2) return '';
+  const w=76,h=24,max=Math.max(...trend,1),min=Math.min(...trend,0),range=(max-min)||1;
+  const pts = trend.map((v,i)=>{ const x=(i/(trend.length-1))*w; const y=h-((v-min)/range)*h; return x.toFixed(1)+','+y.toFixed(1); }).join(' ');
+  const up = trend[trend.length-1] >= trend[0];
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="${up?'#2F7D52':'#B3492F'}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+function renderStandings(filter=''){
+  const body = document.getElementById('standings-body');
+  const f = filter.trim().toLowerCase();
+  body.innerHTML = PLAYERS.filter(p=>p.name.toLowerCase().includes(f)).map(p=>`
+    <tr class="row-clickable" onclick="openModal('${p.name.replace(/'/g,"\\'")}')">
+      <td><span class="rank-badge ${p.rank<=3?'top3':''}">${p.rank}</span></td>
+      <td class="p-name">${p.name}</td>
+      <td class="num-col avg-val">${p.avg.toFixed(2)}</td>
+      <td>${sparkline(p.trend)}</td>
+    </tr>`).join('');
+}
+function renderPlayers(){
+  document.getElementById('players-grid').innerHTML = PLAYERS.map(p=>`
+    <div class="card player-card" onclick="openModal('${p.name.replace(/'/g,"\\'")}')">
+      <div class="pc-top"><div class="avatar">${initials(p.name)}</div>
+        <div><div class="pc-name">${p.name}</div><div class="pc-rank">Rank ${p.rank} · ${p.avg.toFixed(2)} avg</div></div>
+      </div>${sparkline(p.trend)}
+    </div>`).join('');
+}
+function openModal(name){
+  const p = PLAYERS.find(pl=>pl.name===name);
+  if(!p) return;
+  document.getElementById('modal-avatar').textContent = initials(p.name);
+  document.getElementById('modal-name').textContent = p.name;
+  document.getElementById('modal-rank').textContent = 'Rank #' + p.rank;
+  document.getElementById('modal-avg').textContent = p.avg.toFixed(2);
+  document.getElementById('modal-weeks').textContent = p.trend.length;
+  const w=280,h=70;
+  let chart = '<p style="font-size:13px;color:var(--text-mute);">No games logged yet.</p>';
+  if(p.trend.length){
+    const max=Math.max(...p.trend,1), min=Math.min(...p.trend,0), range=(max-min)||1;
+    const pts = p.trend.map((v,i)=>{ const x=(i/(Math.max(p.trend.length-1,1)))*w; const y=h-((v-min)/range)*h; return x.toFixed(1)+','+y.toFixed(1); }).join(' ');
+    const dots = p.trend.map((v,i)=>{ const x=(i/(Math.max(p.trend.length-1,1)))*w; const y=h-((v-min)/range)*h; return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="#16324A"/>`; }).join('');
+    chart = `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="overflow:visible;"><polyline points="${pts}" fill="none" stroke="#16324A" stroke-width="1.8"/>${dots}</svg>`;
+  }
+  document.getElementById('modal-chart').innerHTML = chart;
+  document.getElementById('modal-overlay').classList.add('active');
+}
+function closeModal(){ document.getElementById('modal-overlay').classList.remove('active'); }
+document.getElementById('modal-overlay').addEventListener('click', e=>{ if(e.target.id==='modal-overlay') closeModal(); });
+function showView(name){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.getElementById('view-'+name).classList.add('active');
+  document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.view===name));
+  if(name==='schedule') renderSchedule();
+  if(name==='join') renderJoinOptions();
+}
+document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click', ()=>showView(b.dataset.view)));
+document.getElementById('standings-search').addEventListener('input', e=>renderStandings(e.target.value));
+
+async function loadSession(dateISO){
+  const raw = await storageGet('session:'+dateISO, true);
+  if(raw){ try{ return JSON.parse(raw); }catch(e){} }
+  const seeded = dateISO === getSessionDateISO() ? true : false;
+  return {
+    date: dateISO,
+    signups: seeded ? SEED_NAMES.map(n=>({id:uid(), name:n, ts:Date.now()})) : [],
+    pools: null
+  };
+}
+async function saveSession(session){
+  await storageSet('session:'+session.date, JSON.stringify(session), true);
+}
+async function getMySignups(){
+  const raw = await storageGet('my-signups', false);
+  if(raw){ try{ return JSON.parse(raw); }catch(e){} }
+  return [];
+}
+async function addMySignup(entry){
+  const mine = await getMySignups();
+  mine.push(entry);
+  await storageSet('my-signups', JSON.stringify(mine), false);
+}
+
+function generatePools(activeSignups){
+  const sorted = [...activeSignups].sort((a,b)=> rankOf(a.name)-rankOf(b.name));
+  const N = sorted.length;
+  if(N===0) return null;
+  const poolCount = Math.min(4, Math.ceil(N/MAX_POOL_SIZE));
+  const base = Math.floor(N/poolCount), rem = N%poolCount;
+  const labels = ['A','B','C','D'];
+  const groups = [];
+  let idx=0;
+  for(let i=0;i<poolCount;i++){
+    const size = base + (i<rem?1:0);
+    groups.push({
+      label: labels[i], court: i+1,
+      players: sorted.slice(idx, idx+size).map(p=>({id:p.id, name:p.name, status:'active', dropTag:null}))
+    });
+    idx += size;
+  }
+  return { generatedAt: Date.now(), groups, dropCount:0 };
+}
+
+async function ensurePoolsGenerated(session){
+  const cutoff = pacificNoonTimestamp(session.date);
+  if(Date.now() >= cutoff && !session.pools){
+    const confirmed = session.signups.slice(0, CAP);
+    session.pools = generatePools(confirmed);
+    await saveSession(session);
+  }
+  return session;
+}
+
+async function renderSchedule(){
+  const dateISO = getSessionDateISO();
+  document.getElementById('schedule-sub').textContent = `Wed, ${fmtDate(dateISO)} · pools fill by rank once signups close`;
+  const content = document.getElementById('schedule-content');
+  content.innerHTML = '<div class="skel">Loading this week&#39;s session…</div>';
+  let session = await loadSession(dateISO);
+  session = await ensurePoolsGenerated(session);
+  const mine = await getMySignups();
+  const myIdsThisWeek = new Set(mine.filter(m=>m.date===dateISO).map(m=>m.id));
+  const cutoff = pacificNoonTimestamp(dateISO);
+  const isPast = Date.now() >= cutoff;
+
+  const confirmed = session.signups.slice(0, CAP);
+  const waitlist = session.signups.slice(CAP);
+
+  let html = `<div class="session-banner">
+    <div><div class="date">Wed, ${fmtDate(dateISO)}</div>
+    <div class="meta">Signups close noon Pacific match day · 4 courts, ~10 min/game, 2.5 hr window</div></div>
+    <div style="display:flex; gap:8px;">
+      <div class="cap-pill"><div class="n">${confirmed.length}/${CAP}</div><div class="l">Confirmed</div></div>
+      <div class="cap-pill"><div class="n">${waitlist.length}</div><div class="l">Waitlist</div></div>
+    </div>
+  </div>`;
+
+  if(!isPast || !session.pools){
+    html += `<div class="card my-panel">
+      <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Signups are open until <strong>noon Pacific</strong> on match day. First ${CAP} in are confirmed — everyone else is on the waitlist and moves up automatically if a confirmed player drops.</p>
+      <button class="btn small" onclick="showView('join')">Add a player</button>
+    </div>`;
+    html += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Confirmed (${confirmed.length}/${CAP})</h3>
+      <ul class="roster-list">${confirmed.length ? confirmed.map((s,i)=>rosterRow(s,i+1,myIdsThisWeek,dateISO,'confirmed')).join('') : '<li class="empty-row">No signups yet — be the first.</li>'}</ul>
+    </div>`;
+    html += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Waitlist</h3>
+      <ul class="roster-list">${waitlist.length ? waitlist.map((s,i)=>rosterRow(s,i+1,myIdsThisWeek,dateISO,'waitlist')).join('') : '<li class="empty-row">Nobody waiting right now.</li>'}</ul>
+    </div>`;
+  } else if(!session.pools){
+    html += `<div class="card"><p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Signups have closed for this week. Pools haven't generated yet — this can happen if the page hasn't been opened since noon.</p>
+      <button class="btn" onclick="forceGeneratePools('${dateISO}')">Generate pools now</button></div>`;
+  } else {
+    const p = session.pools;
+    html += `<div class="card" style="background:var(--win-tint); border-color:#CFE6D8;">
+      <p style="margin:0; font-size:13px; color:var(--win); font-weight:500;">Pools locked at ${fmtLocalTime(p.generatedAt)}. Ranked seeding, one court per pool.</p>
+    </div>`;
+    p.groups.forEach(g=>{
+      const activeCount = g.players.filter(pl=>pl.status==='active').length;
+      html += `<div class="card">
+        <div class="pool-head"><h3>Pool ${g.label} · Court ${g.court}</h3><span class="pool-status full">${activeCount} playing</span></div>
+        <div class="pool-players">${g.players.map(pl=>poolChip(pl,myIdsThisWeek,dateISO,g.label)).join('')}</div>
+        <div class="match-list">${poolMatches(g)}</div>
+      </div>`;
+    });
+    const drops = p.groups.flatMap(g=>g.players.filter(pl=>pl.status==='drop').map(pl=>({...pl,pool:g.label})));
+    if(drops.length){
+      html += `<div class="card"><h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Late dropouts</h3>
+        <div class="droplog">${drops.map(d=>`${d.dropTag} — ${d.name} (Pool ${d.pool}). Their games are forfeits; a random substitute plays those slots at the end as bonus games that don't count toward standings.`).join('<br>')}</div>
+      </div>`;
+    }
+  }
+  content.innerHTML = html;
+}
+
+function rosterRow(s, num, myIds, dateISO, phase){
+  const isMine = myIds.has(s.id);
+  const cutoff = pacificNoonTimestamp(dateISO);
+  const canRemove = Date.now() < cutoff && isMine;
+  return `<li>
+    <span class="num">${phase==='waitlist' ? CAP+num : num}</span>
+    <span class="rname">${s.name}${isMine?' <span class="mine-badge">You</span>':''}</span>
+    ${canRemove ? `<button class="btn small danger" onclick="removeSignup('${dateISO}','${s.id}')">Leave list</button>` : ''}
+  </li>`;
+}
+function poolChip(pl, myIds, dateISO, poolLabel){
+  const isMine = myIds.has(pl.id);
+  if(pl.status==='drop'){
+    return `<span class="chip dropped">${pl.name} · ${pl.dropTag}</span>`;
+  }
+  return `<span class="chip">${pl.name}${isMine?' <span class="mine-badge">You</span>':''}${isMine?`<button class="x" title="Can't make it" onclick="markDropout('${dateISO}','${poolLabel}','${pl.id}')">&times;</button>`:''}</span>`;
+}
+function poolMatches(g){
+  const players = g.players;
+  const matches = [];
+  for(let i=0;i<players.length;i++) for(let j=i+1;j<players.length;j++) matches.push([players[i],players[j]]);
+  return matches.map(([a,b])=>{
+    const forfeit = a.status==='drop' || b.status==='drop';
+    if(forfeit){
+      const dropped = a.status==='drop' ? a : b;
+      const other = a.status==='drop' ? b : a;
+      return `<div class="match forfeit"><span class="vs">${other.name} <span class="dash">vs</span> ${dropped.name}</span><span class="forfeit-tag">Forfeit</span></div>`;
+    }
+    return `<div class="match"><span class="vs">${a.name} <span class="dash">vs</span> ${b.name}</span><input type="text" maxlength="2" inputmode="numeric" placeholder="–"><span class="dash">–</span><input type="text" maxlength="2" inputmode="numeric" placeholder="–"></div>`;
+  }).join('');
+}
+
+async function removeSignup(dateISO, id){
+  const session = await loadSession(dateISO);
+  session.signups = session.signups.filter(s=>s.id!==id);
+  await saveSession(session);
+  renderSchedule();
+  renderJoinedList();
+}
+async function markDropout(dateISO, poolLabel, id){
+  const session = await loadSession(dateISO);
+  if(!session.pools) return;
+  const group = session.pools.groups.find(g=>g.label===poolLabel);
+  const player = group && group.players.find(pl=>pl.id===id);
+  if(player && player.status==='active'){
+    session.pools.dropCount = (session.pools.dropCount||0) + 1;
+    player.status = 'drop';
+    player.dropTag = 'Drop ' + session.pools.dropCount;
+    await saveSession(session);
+  }
+  renderSchedule();
+}
+async function forceGeneratePools(dateISO){
+  const session = await loadSession(dateISO);
+  session.pools = generatePools(session.signups.slice(0, CAP));
+  await saveSession(session);
+  renderSchedule();
+}
+
+function getSelectedJoinDate(){
+  const checked = document.querySelector('input[name="jf-date"]:checked');
+  return checked ? checked.value : getSessionDateISO();
+}
+
+function updateJoinSubForSelected(){
+  const dateISO = getSelectedJoinDate();
+  const cutoff = pacificNoonTimestamp(dateISO);
+  const isPast = Date.now() >= cutoff;
+  const sub = document.getElementById('join-sub');
+  const btn = document.getElementById('join-submit-btn');
+  const anyOpen = !!document.querySelector('input[name="jf-date"]:not(:disabled)');
+  if(!anyOpen){
+    sub.textContent = `Signups are closed for the next few weeks — check back soon.`;
+    btn.disabled = true; btn.textContent = 'Signups closed';
+  } else if(isPast){
+    sub.textContent = `Signups for Wed, ${fmtDate(dateISO)} are closed — pick another date below.`;
+    btn.disabled = true; btn.textContent = 'Signups closed';
+  } else {
+    sub.textContent = `New players get placed into the next open pool by rank once signups close.`;
+    btn.disabled = false; btn.textContent = 'Request a spot';
+  }
+}
+
+async function renderJoinedList(){
+  const dateISO = getSelectedJoinDate();
+  const list = document.getElementById('jf-joined-list');
+  list.innerHTML = '<li class="empty-row">Loading…</li>';
+  const session = await loadSession(dateISO);
+  const mine = await getMySignups();
+  const myIds = new Set(mine.filter(m=>m.date===dateISO).map(m=>m.id));
+  list.innerHTML = session.signups.length
+    ? session.signups.map((s,i)=>rosterRow(s, i+1, myIds, dateISO, i<CAP?'confirmed':'waitlist')).join('')
+    : '<li class="empty-row">No signups yet for this date.</li>';
+}
+
+function renderJoinOptions(){
+  const dates = getUpcomingWednesdays(3);
+  const now = Date.now();
+  const statuses = dates.map(d=>({date:d, closed: now >= pacificNoonTimestamp(d)}));
+  const firstOpenIdx = statuses.findIndex(s=>!s.closed);
+  const container = document.getElementById('jf-date-options');
+  container.innerHTML = statuses.map((s,i)=>`
+    <label${s.closed?' style="opacity:.5;"':''}>
+      <input type="radio" name="jf-date" value="${s.date}" ${s.closed?'disabled':''} ${i===firstOpenIdx?'checked':''}>
+      Wed, ${fmtDate(s.date)}${s.closed?' · Closed':''}
+    </label>`).join('');
+  container.querySelectorAll('input[name="jf-date"]').forEach(inp=>inp.addEventListener('change', ()=>{ updateJoinSubForSelected(); renderJoinedList(); }));
+  updateJoinSubForSelected();
+  renderJoinedList();
+}
+
+document.getElementById('join-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const name = document.getElementById('jf-name').value.trim() || 'Player';
+  const dateISO = getSelectedJoinDate();
+  const cutoff = pacificNoonTimestamp(dateISO);
+  if(Date.now() >= cutoff){ updateJoinSubForSelected(); return; }
+  const session = await loadSession(dateISO);
+  const id = uid();
+  session.signups.push({id, name, ts:Date.now()});
+  await saveSession(session);
+  await addMySignup({id, name, date:dateISO});
+  const position = session.signups.length;
+  const confirmedSpot = position <= CAP;
+  document.getElementById('confirm-badge').className = 'ok-badge' + (confirmedSpot ? '' : ' wait');
+  document.getElementById('confirm-name').textContent = 'You\'re in, ' + name;
+  document.getElementById('confirm-detail').textContent = confirmedSpot
+    ? `Confirmed — spot #${position} for Wed, ${fmtDate(dateISO)}. Pools go up by rank right after noon Pacific.`
+    : `Waitlisted — #${position-CAP} in line for Wed, ${fmtDate(dateISO)}. You'll move up automatically if someone drops before noon.`;
+  document.getElementById('join-form').style.display = 'none';
+  document.getElementById('join-confirm').classList.add('active');
+  renderJoinedList();
+});
+function resetJoinForm(){
+  document.getElementById('join-form').reset();
+  document.getElementById('join-form').style.display = 'block';
+  document.getElementById('join-confirm').classList.remove('active');
+  renderJoinOptions();
+}
+
+renderStandings();
+renderPlayers();
+renderSchedule();
+renderJoinOptions();
+</script>
+</body>
+</html>
