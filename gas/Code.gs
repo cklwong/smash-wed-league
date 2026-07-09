@@ -7,6 +7,7 @@
  *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend}] }
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, signups, pools }
  *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error }
+ *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error }
  */
 
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
@@ -30,6 +31,7 @@ function doPost(e) {
   var result;
   try {
     if (body.action === 'join') result = addJoin(body.date, body.name, body.contact);
+    else if (body.action === 'leave') result = removeJoin(body.date, body.name);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
@@ -188,4 +190,22 @@ function addJoin(dateISO, name, contact) {
     sheet.getRange(targetRow, CONTACT_COL).setValue(contact);
   }
   return { ok: true, row: targetRow, position: position };
+}
+
+// Deletes the signup's row outright (rather than blanking it) so every row
+// below shifts up - this is what promotes the first waitlisted signup into
+// the newly-opened confirmed slot, since confirmed/waitlist is just a
+// position-based slice of the parsed signup order.
+function removeJoin(dateISO, name) {
+  var sheet = getWeekSheet(dateISO);
+  if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
+  var data = sheet.getDataRange().getValues();
+  var signups = parseSignups(data);
+  var target = null;
+  for (var i = 0; i < signups.length; i++) {
+    if (signups[i].name.toLowerCase() === (name || '').trim().toLowerCase()) { target = signups[i]; break; }
+  }
+  if (!target) return { ok: false, error: 'Signup not found for ' + name };
+  sheet.deleteRow(target.row);
+  return { ok: true };
 }
