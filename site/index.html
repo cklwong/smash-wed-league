@@ -328,13 +328,17 @@ function getUpcomingWednesdays(n){
   return dates;
 }
 function initials(name){ return name.trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
+function scoreOf(t){ return typeof t === 'number' ? t : t.score; } // backend may send trend as plain numbers (old deploy) or {date, score}
+function dateOf(t){ return (t && typeof t === 'object') ? t.date : null; }
 function chartDots(trend, w, h){
-  const scores = trend.map(t=>t.score);
+  const scores = trend.map(scoreOf);
   const max=Math.max(...scores,1), min=Math.min(...scores,0), range=(max-min)||1;
   return trend.map((t,i)=>{
+    const score = scoreOf(t);
     const x = ((trend.length-1) ? (i/(trend.length-1)) : 0)*w;
-    const y = h-((t.score-min)/range)*h;
-    const label = ((t.date ? fmtDate(t.date) : 'Week') + ': ' + t.score.toFixed(1) + ' pts').replace(/'/g,"\\'");
+    const y = h-((score-min)/range)*h;
+    const date = dateOf(t);
+    const label = ((date ? fmtDate(date) : 'Week') + ': ' + score.toFixed(1) + ' pts').replace(/'/g,"\\'");
     return {x,y,label};
   });
 }
@@ -343,7 +347,7 @@ function sparkline(trend){
   const w=76,h=24;
   const pts = chartDots(trend,w,h);
   const line = pts.map(p=>p.x.toFixed(1)+','+p.y.toFixed(1)).join(' ');
-  const up = trend[trend.length-1].score >= trend[0].score;
+  const up = scoreOf(trend[trend.length-1]) >= scoreOf(trend[0]);
   const color = up?'#2F7D52':'#B3492F';
   const dots = pts.map(p=>
     `<circle class="spark-hit" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5.5" fill="transparent" onclick="event.stopPropagation(); showChartTip(event,'${p.label}')"></circle>`+
