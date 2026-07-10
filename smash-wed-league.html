@@ -21,10 +21,14 @@
   a{color:inherit;}
   header{background:var(--ink); color:#fff; position:sticky; top:0; z-index:20; border-bottom:3px solid var(--amber);}
   .header-inner{max-width:920px; margin:0 auto; padding:18px 20px 0;}
-  .brand-row{display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+  .brand-row{display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap;}
   .brand{display:flex; align-items:baseline; gap:10px;}
   .brand h1{font-size:26px; font-weight:600; margin:0; color:#fff;}
   .brand span.sub{font-size:13px; color:#AEC4D4; font-weight:400; text-transform:none; letter-spacing:0; font-family:'Inter',sans-serif;}
+  .qr-row{display:flex; gap:10px;}
+  .qr-item{display:flex; flex-direction:column; align-items:center; gap:4px;}
+  .qr-item img{width:62px; height:62px; border-radius:6px; background:#fff; padding:3px; border:1px solid rgba(255,255,255,.25);}
+  .qr-item span{font-size:10px; color:#AEC4D4; text-transform:uppercase; letter-spacing:.03em; text-align:center; max-width:76px; line-height:1.25;}
   nav{display:flex; gap:2px; margin-top:16px; overflow-x:auto;}
   nav button{background:none; border:none; color:#B9CBD8; font-family:'Inter',sans-serif; font-size:14px; font-weight:500; padding:10px 16px; cursor:pointer; white-space:nowrap; border-bottom:2px solid transparent;}
   nav button.active{color:#fff; border-bottom:2px solid var(--amber);}
@@ -120,6 +124,16 @@
       <div class="brand">
         <h1>Smash Wed</h1>
         <span class="sub">Wednesday night singles league · 5:30–8:30pm</span>
+      </div>
+      <div class="qr-row">
+        <div class="qr-item">
+          <img src="qr-adults.png" alt="WhatsApp QR code to join the Smash Wed singles league group">
+          <span>Adults join chat</span>
+        </div>
+        <div class="qr-item">
+          <img src="qr-parents.png" alt="WhatsApp QR code to join the parents group for kids in the league">
+          <span>Parents join chat</span>
+        </div>
       </div>
     </div>
     <nav>
