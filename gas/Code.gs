@@ -4,7 +4,7 @@
  * Extensions > Apps Script, paste this in as Code.gs, then Deploy.
  *
  * Endpoints (after deploying as a Web App):
- *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend}] }
+ *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score}]}] }
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, signups, pools }
  *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error }
  *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error }
@@ -129,6 +129,15 @@ function getWeek(dateISO) {
   return { date: dateISO, exists: true, signups: signups, pools: pools };
 }
 
+// '7/1/26 RP' -> '2026-07-01'; returns null if the header doesn't look like a date
+function headerToISODate(header) {
+  var m = header.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (!m) return null;
+  var mo = parseInt(m[1], 10), da = parseInt(m[2], 10), yr = parseInt(m[3], 10);
+  if (yr < 100) yr += 2000;
+  return yr + '-' + (mo < 10 ? '0' : '') + mo + '-' + (da < 10 ? '0' : '') + da;
+}
+
 function getRankings() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
   if (!sheet) return { players: [] };
@@ -139,8 +148,13 @@ function getRankings() {
   var rankCol = header.indexOf('Rank');
   var avgCol = header.indexOf('Avg (4 of 6wk)');
   var dateCols = [];
+  var dateLabels = [];
   for (var c = 0; c < header.length; c++) {
-    if (/ RP$/.test((header[c] || '').toString())) dateCols.push(c); // most-recent-first
+    var h = (header[c] || '').toString();
+    if (/ RP$/.test(h)) { // most-recent-first
+      dateCols.push(c);
+      dateLabels.push(headerToISODate(h));
+    }
   }
 
   var players = [];
@@ -152,7 +166,7 @@ function getRankings() {
     for (var i = dateCols.length - 1; i >= 0; i--) { // reverse -> chronological
       var v = row[dateCols[i]];
       if (v === '' || v === null || typeof v === 'string') continue; // skip blanks / "1mo absence"
-      trend.push(Number(v));
+      trend.push({ date: dateLabels[i], score: Number(v) });
     }
     players.push({
       name: name,
