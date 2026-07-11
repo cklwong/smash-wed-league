@@ -21,6 +21,10 @@
  *   POST { action:'checkin', date, name }       -> { ok, seated } (restores a no-show's pool spot if their guest hasn't played; seated:false means a redraw is needed to seat them)
  *   POST { action:'noshow', date, name }        -> { ok } (marks 'ns' and swaps their pool spot for GuestX1, GuestX2, ...)
  *   POST { action:'clearstatus', date, name }   -> { ok } (undo a mis-tapped check-in / no-show)
+ *   POST { action:'startMatch', date, a, b, guestNames } -> { ok, match } (puts a same-pool unplayed pair on court; guestNames maps a guest seat label to who's playing as it tonight)
+ *   POST { action:'recordScore', date, matchId, scoreA, scoreB } -> { ok } (writes the score grid and stops the match; guest games count 1-0 for the real player, actual score kept as info)
+ *   POST { action:'editScore', date, a, b, scoreA, scoreB, matchId } -> { ok } (fixes a finished game's score; guest games only update the info score)
+ *   POST { action:'cancelMatch', date, matchId }-> { ok } (removes a mis-started, unfinished match)
  */
 
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
@@ -66,6 +70,10 @@ function doPost(e) {
     else if (body.action === 'checkin') result = setCheckin(body.date, body.name);
     else if (body.action === 'noshow') result = setNoShow(body.date, body.name);
     else if (body.action === 'clearstatus') result = clearStatus(body.date, body.name);
+    else if (body.action === 'startMatch') result = startMatch(body.date, body.a, body.b, body.guestNames);
+    else if (body.action === 'recordScore') result = recordScore(body.date, body.matchId, body.scoreA, body.scoreB);
+    else if (body.action === 'editScore') result = editScore(body.date, body.a, body.b, body.scoreA, body.scoreB, body.matchId);
+    else if (body.action === 'cancelMatch') result = cancelMatch(body.date, body.matchId);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
@@ -146,6 +154,22 @@ function getWeek(dateISO) {
       var summaryCol = cc; // GW column index
       var drawn = members.length > 0 && !/^[A-D]\d+$/.test(members[0]);
 
+      // Raw score grid (numbers or ''), so the site can compute live standings
+      // and per-game results without depending on the sheet's formula columns.
+      var lay = POOL_LAYOUT[m[1]];
+      var grid = [];
+      if (drawn) {
+        for (var gr = 0; gr < lay.size; gr++) {
+          var grow = data[lay.firstSlotRow - 1 + gr] || [];
+          var line = [];
+          for (var gc = 0; gc < lay.size; gc++) {
+            var gv = grow[GRID_FIRST_COL - 1 + gc];
+            line.push(gv === undefined || gv === null ? '' : gv);
+          }
+          grid.push(line);
+        }
+      }
+
       var players = members.map(function (memberName, i) {
         var prow = data[r2 + 1 + i] || [];
         return {
@@ -158,11 +182,17 @@ function getWeek(dateISO) {
           rankPts: prow[summaryCol + 5] || ''
         };
       });
-      pools.push({ label: m[1], drawn: drawn, players: players });
+      pools.push({ label: m[1], drawn: drawn, players: players, grid: grid });
     }
   }
 
-  return { date: dateISO, exists: true, hasScores: anyScoresEntered(data), signups: signups, pools: pools };
+  var live = getLiveState(dateISO);
+  return {
+    date: dateISO, exists: true, hasScores: anyScoresEntered(data),
+    signups: signups, pools: pools,
+    live: { matches: live.matches, checkins: live.checkins },
+    now: Date.now()
+  };
 }
 
 // True once any score has been typed into any pool's H..H+size grid block.
@@ -478,6 +508,13 @@ function generatePools(dateISO, pin, padGuests, redraw) {
   var lastRow = sheet.getLastRow();
   if (lastRow > 1) sheet.getRange(2, NOSHOW_GUEST_COL, lastRow - 1, 1).clearContent();
 
+  // Any matches from before the (re)draw refer to cleared grids; drop them
+  // but keep check-in times as the waiting baseline.
+  updateLiveState(dateISO, function (state) {
+    state.matches = [];
+    return { ok: true };
+  });
+
   return { ok: true, pools: pools };
 }
 
@@ -514,6 +551,11 @@ function setCheckin(dateISO, name) {
     }
   }
   sheet.getRange(target.row, 2).setValue('y');
+  // Waiting-time baseline for the match desk, until their first game finishes.
+  updateLiveState(dateISO, function (state) {
+    state.checkins[target.name.toLowerCase()] = Date.now();
+    return { ok: true };
+  });
   return { ok: true, seated: seated };
 }
 
@@ -540,6 +582,10 @@ function setNoShow(dateISO, name) {
     sheet.getRange(target.row, NOSHOW_GUEST_COL).setValue(guestLabel);
   }
   sheet.getRange(target.row, 2).setValue('ns');
+  updateLiveState(dateISO, function (state) {
+    delete state.checkins[target.name.toLowerCase()];
+    return { ok: true };
+  });
   return { ok: true };
 }
 
@@ -564,5 +610,203 @@ function clearStatus(dateISO, name) {
     }
   }
   sheet.getRange(target.row, 2).clearContent();
+  updateLiveState(dateISO, function (state) {
+    delete state.checkins[target.name.toLowerCase()];
+    return { ok: true };
+  });
   return { ok: true };
+}
+
+// ---- Live match desk (open to everyone, like check-in) ----
+//
+// The score grid stays the source of truth for results; what the grid can't
+// hold - who's on court right now, when each game started/finished (feeds the
+// waiting timers), who played as a guest, and a guest game's real score - is
+// kept as JSON in a per-date script property.
+
+function getLiveState(dateISO) {
+  var raw = PropertiesService.getScriptProperties().getProperty('LIVE_' + dateISO);
+  var state = {};
+  if (raw) { try { state = JSON.parse(raw) || {}; } catch (err) { state = {}; } }
+  if (!state.matches) state.matches = [];
+  if (!state.checkins) state.checkins = {};
+  return state;
+}
+
+// Serializes read-modify-write of the live state across concurrent devices.
+// The state is saved unless the mutator reports failure.
+function updateLiveState(dateISO, mutate) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var state = getLiveState(dateISO);
+    var result = mutate(state);
+    if (!result || result.ok !== false) {
+      PropertiesService.getScriptProperties().setProperty('LIVE_' + dateISO, JSON.stringify(state));
+    }
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function isGuestLabel(name) {
+  return /^Guest[A-D]\d*$/i.test((name || '').toString().trim());
+}
+
+function findUnfinishedFor(state, name) {
+  var key = (name || '').trim().toLowerCase();
+  for (var i = 0; i < state.matches.length; i++) {
+    var m = state.matches[i];
+    if (!m.finishedAt && (m.a.toLowerCase() === key || m.b.toLowerCase() === key)) return m;
+  }
+  return null;
+}
+
+function gridCellFilled(data, slotA, slotB) {
+  var v = (data[slotA.row - 1] || [])[GRID_FIRST_COL - 1 + slotB.index];
+  return v !== '' && v !== null && v !== undefined;
+}
+
+function validateScores(scoreA, scoreB) {
+  var a = Number(scoreA), b = Number(scoreB);
+  if (!isFinite(a) || !isFinite(b) || a % 1 !== 0 || b % 1 !== 0 || a < 0 || b < 0) {
+    return { ok: false, error: 'Scores must be whole numbers, 0 or more.' };
+  }
+  if (a === b) return { ok: false, error: 'A game cannot end in a tie.' };
+  return { ok: true, a: a, b: b };
+}
+
+function startMatch(dateISO, a, b, guestNames) {
+  var sheet = getWeekSheet(dateISO);
+  if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
+  var data = sheet.getDataRange().getValues();
+  var slotA = findSlotByValue(data, a);
+  var slotB = findSlotByValue(data, b);
+  if (!slotA) return { ok: false, error: (a || '?') + ' does not hold a pool seat.' };
+  if (!slotB) return { ok: false, error: (b || '?') + ' does not hold a pool seat.' };
+  if (slotA.letter !== slotB.letter) return { ok: false, error: 'Those players are in different pools.' };
+  if (slotA.index === slotB.index) return { ok: false, error: 'Pick two different players.' };
+  if (gridCellFilled(data, slotA, slotB) || gridCellFilled(data, slotB, slotA)) {
+    return { ok: false, error: 'That game already has a score.' };
+  }
+
+  var nameA = slotValue(data, slotA.letter, slotA.index);
+  var nameB = slotValue(data, slotB.letter, slotB.index);
+  var gn = {};
+  [nameA, nameB].forEach(function (n) {
+    if (isGuestLabel(n) && guestNames && guestNames[n]) {
+      gn[n] = String(guestNames[n]).trim().slice(0, 40);
+    }
+  });
+
+  return updateLiveState(dateISO, function (state) {
+    var busy = findUnfinishedFor(state, nameA) || findUnfinishedFor(state, nameB);
+    if (busy) return { ok: false, error: busy.a + ' vs ' + busy.b + ' is still on court — record or cancel it first.' };
+    var match = {
+      id: Utilities.getUuid(),
+      pool: slotA.letter,
+      a: nameA,
+      b: nameB,
+      startedAt: Date.now()
+    };
+    for (var k in gn) { if (!match.guestNames) match.guestNames = {}; match.guestNames[k] = gn[k]; }
+    state.matches.push(match);
+    return { ok: true, match: match };
+  });
+}
+
+// Writes a finished game into the grid. Guest games are recorded as a minimal
+// 1-0 win for the real player (the actual score is kept on the match as info
+// only); guest-vs-guest games never touch the grid.
+function writePairScore(sheet, data, nameA, nameB, scoreA, scoreB) {
+  var slotA = findSlotByValue(data, nameA);
+  var slotB = findSlotByValue(data, nameB);
+  if (!slotA) return { ok: false, error: nameA + ' no longer holds a pool seat.' };
+  if (!slotB) return { ok: false, error: nameB + ' no longer holds a pool seat.' };
+  if (slotA.letter !== slotB.letter) return { ok: false, error: 'Those players are in different pools.' };
+  var guestA = isGuestLabel(nameA), guestB = isGuestLabel(nameB);
+  if (guestA && guestB) return { ok: true, infoOnly: true };
+  var recA = scoreA, recB = scoreB;
+  if (guestA) { recA = 0; recB = 1; }
+  if (guestB) { recA = 1; recB = 0; }
+  sheet.getRange(slotA.row, GRID_FIRST_COL + slotB.index).setValue(recA);
+  sheet.getRange(slotB.row, GRID_FIRST_COL + slotA.index).setValue(recB);
+  return { ok: true, infoOnly: guestA || guestB };
+}
+
+function recordScore(dateISO, matchId, scoreA, scoreB) {
+  var sheet = getWeekSheet(dateISO);
+  if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
+  var v = validateScores(scoreA, scoreB);
+  if (!v.ok) return v;
+
+  return updateLiveState(dateISO, function (state) {
+    var match = null;
+    for (var i = 0; i < state.matches.length; i++) {
+      if (state.matches[i].id === matchId) { match = state.matches[i]; break; }
+    }
+    if (!match) return { ok: false, error: 'Match not found — refresh and try again.' };
+    if (match.finishedAt) return { ok: false, error: 'This match was already recorded.' };
+
+    var data = sheet.getDataRange().getValues();
+    var w = writePairScore(sheet, data, match.a, match.b, v.a, v.b);
+    if (!w.ok) return w;
+    match.finishedAt = Date.now(); // starts both players' waiting timers
+    if (w.infoOnly) match.infoScore = [v.a, v.b];
+    return { ok: true };
+  });
+}
+
+function editScore(dateISO, a, b, scoreA, scoreB, matchId) {
+  var sheet = getWeekSheet(dateISO);
+  if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
+  var v = validateScores(scoreA, scoreB);
+  if (!v.ok) return v;
+
+  if (!isGuestLabel(a) && !isGuestLabel(b)) {
+    // Real game: rewrite the two mirrored grid cells (also fixes games that
+    // were typed straight into the sheet).
+    var data = sheet.getDataRange().getValues();
+    var slotA = findSlotByValue(data, a);
+    var slotB = findSlotByValue(data, b);
+    if (!slotA) return { ok: false, error: (a || '?') + ' does not hold a pool seat.' };
+    if (!slotB) return { ok: false, error: (b || '?') + ' does not hold a pool seat.' };
+    if (slotA.letter !== slotB.letter) return { ok: false, error: 'Those players are in different pools.' };
+    sheet.getRange(slotA.row, GRID_FIRST_COL + slotB.index).setValue(v.a);
+    sheet.getRange(slotB.row, GRID_FIRST_COL + slotA.index).setValue(v.b);
+    return { ok: true };
+  }
+
+  // Guest game: the grid keeps its 1-0 default; only the info score changes.
+  return updateLiveState(dateISO, function (state) {
+    var keyA = (a || '').trim().toLowerCase(), keyB = (b || '').trim().toLowerCase();
+    var match = null;
+    for (var i = 0; i < state.matches.length; i++) {
+      var m = state.matches[i];
+      if (!m.finishedAt) continue;
+      if (matchId ? m.id === matchId
+                  : ((m.a.toLowerCase() === keyA && m.b.toLowerCase() === keyB) ||
+                     (m.a.toLowerCase() === keyB && m.b.toLowerCase() === keyA))) {
+        if (!match || m.finishedAt > match.finishedAt) match = m;
+      }
+    }
+    if (!match) return { ok: false, error: 'No recorded match found for that guest game.' };
+    // scoreA belongs to `a`; flip if the stored match has the pair reversed
+    match.infoScore = match.a.toLowerCase() === keyA ? [v.a, v.b] : [v.b, v.a];
+    return { ok: true };
+  });
+}
+
+function cancelMatch(dateISO, matchId) {
+  return updateLiveState(dateISO, function (state) {
+    for (var i = 0; i < state.matches.length; i++) {
+      var m = state.matches[i];
+      if (m.id !== matchId) continue;
+      if (m.finishedAt) return { ok: false, error: 'That match already finished — use Edit instead.' };
+      state.matches.splice(i, 1);
+      return { ok: true };
+    }
+    return { ok: false, error: 'Match not found — it may already be cancelled.' };
+  });
 }

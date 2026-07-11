@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Smash Wed — league hub</title>
+<script>
+  // Dev harness: ?mock=1 loads mock-backend.js, which patches window.fetch
+  // so the page runs entirely off in-memory sample data (no Apps Script
+  // needed). document.write here (during head parsing) guarantees it loads
+  // and executes before the page's own script runs. No-op otherwise.
+  if (new URLSearchParams(location.search).get('mock') === '1') {
+    document.write('<script src="mock-backend.js"><\/script>');
+  }
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -127,6 +136,28 @@
   .chart-tip{position:fixed; display:none; background:var(--ink); color:#fff; font-family:'IBM Plex Mono',monospace; font-size:12px; padding:6px 10px; border-radius:6px; pointer-events:none; z-index:100; white-space:nowrap; transform:translate(-50%,-100%); box-shadow:0 4px 10px rgba(0,0,0,.25);}
   .chart-tip.active{display:block;}
   .chart-tip:after{content:''; position:absolute; left:50%; top:100%; transform:translateX(-50%); border:5px solid transparent; border-top-color:var(--ink);}
+  .court-row{display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:10px 0; border-bottom:1px solid var(--border);}
+  .court-row:last-child{border-bottom:none; padding-bottom:2px;}
+  .court-row .who{font-size:14px; min-width:0;}
+  .pool-tag{display:inline-block; background:var(--line); border:1px solid var(--border); border-radius:4px; padding:1px 6px; font-size:11px; color:var(--text-soft); font-weight:500; vertical-align:1px;}
+  .elapsed{background:var(--amber-tint); color:var(--amber-deep); border-radius:20px; padding:2px 8px; font-size:12px; white-space:nowrap;}
+  .score-entry{display:flex; align-items:center; gap:6px; flex-shrink:0;}
+  .score-entry input{width:58px; padding:8px 4px; border:1px solid var(--border); border-radius:8px; font-family:'IBM Plex Mono',monospace; font-size:14px; text-align:center; background:#fff;}
+  .next-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:10px 0 4px;}
+  .next-row select{flex:1; min-width:130px; padding:9px 10px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px; background:#fff;}
+  .guest-who{margin-top:8px;}
+  .guest-who input{width:100%; padding:9px 10px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px;}
+  .game-row{display:flex; align-items:center; justify-content:flex-start; gap:8px; padding:7px 0; border-bottom:1px solid var(--border); font-size:13px; flex-wrap:wrap;}
+  .game-row:last-child{border-bottom:none;}
+  .game-row .vs{flex:1; min-width:180px;}
+  .game-note{color:var(--text-mute); font-size:12px;}
+  .wait-pill{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--text-soft); white-space:nowrap;}
+  .games-details{margin-top:10px;}
+  .games-details summary{cursor:pointer; font-size:11px; color:var(--text-mute); text-transform:uppercase; letter-spacing:.03em; list-style:none; display:flex; align-items:center; gap:4px;}
+  .games-details summary::-webkit-details-marker{display:none;}
+  .games-details summary:before{content:'▸'; display:inline-block; font-size:9px; transition:transform .15s;}
+  .games-details[open] summary:before{transform:rotate(90deg);}
+  .games-details[open] summary{margin-bottom:4px;}
 </style>
 </head>
 <body>
@@ -157,6 +188,7 @@
       <button data-view="standings" class="active">Standings</button>
       <button data-view="schedule">This week</button>
       <button data-view="join">Join</button>
+      <button data-view="admin">Admin</button>
     </nav>
   </div>
 </header>
@@ -183,17 +215,6 @@
       <p id="schedule-sub">Loading session…</p>
     </div>
     <div id="schedule-content"><div class="skel">Loading this week's session…</div></div>
-    <details class="card" id="admin-panel" style="max-width:440px;">
-      <summary style="cursor:pointer; font-size:13px; color:var(--text-soft); font-weight:500;">Organizer access</summary>
-      <div style="margin-top:10px;">
-        <p class="note" style="margin:0 0 8px;">Enter the admin passphrase to retrieve this week's pool PIN (it's also emailed to organizers at noon on match day).</p>
-        <div class="search-row" style="margin-bottom:0;">
-          <input type="password" id="admin-secret" placeholder="Admin passphrase" autocomplete="off">
-          <button type="button" class="btn" onclick="fetchEventPin()">Get PIN</button>
-        </div>
-        <p class="note" id="admin-pin-out" style="display:none;"></p>
-      </div>
-    </details>
   </section>
 
   <section id="view-join" class="view">
@@ -240,6 +261,27 @@
     <div class="card" style="max-width:440px;" id="jf-waitlist-card">
       <h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Wait List</h3>
       <ul class="roster-list" id="jf-waitlist-list"></ul>
+    </div>
+  </section>
+
+  <section id="view-admin" class="view">
+    <div class="page-head">
+      <h2>Admin</h2>
+      <p>Organizer tools for tonight's session.</p>
+    </div>
+    <div class="card" style="max-width:440px;">
+      <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Sign in</h3>
+      <p class="note" style="margin:0 0 8px;">Enter the admin passphrase to retrieve this week's pool PIN (it's also emailed to organizers at noon on match day).</p>
+      <div class="search-row" style="margin-bottom:0;">
+        <input type="password" id="admin-secret" placeholder="Admin passphrase" autocomplete="off">
+        <button type="button" class="btn" onclick="fetchEventPin()">Sign in</button>
+      </div>
+      <p class="note" id="admin-pin-out" style="display:none;"></p>
+    </div>
+    <div class="card" style="max-width:440px; display:none;" id="admin-mock-card">
+      <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Developer sandbox</h3>
+      <p class="note" style="margin:0 0 8px;">Experiment with the match desk using local sample data — no spreadsheet required, nothing here touches the real roster.</p>
+      <a class="btn ghost" href="?mock=1">Open mock backend (?mock=1)</a>
     </div>
   </section>
 
@@ -422,6 +464,7 @@ function showView(name){
   setScheduleTimer(name==='schedule'); // keeps the check-in board live during league play
   if(name==='schedule') renderSchedule();
   if(name==='join') renderJoinOptions();
+  if(name==='admin') renderAdmin();
 }
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click', ()=>showView(b.dataset.view)));
 document.getElementById('standings-search').addEventListener('input', e=>renderStandings(e.target.value));
@@ -440,7 +483,7 @@ function poolSplitSizes(n){
 function isNoShowGuest(name){ return /^Guest[A-D]\d+$/i.test(name); }
 function isGuest(name){ return /^Guest[A-D]\d*$/i.test(name); }
 
-async function renderSchedule(quiet=false){
+async function renderSchedule(quiet=false, force=false){
   const dateISO = getSessionDateISO();
   document.getElementById('schedule-sub').textContent = `Wed, ${fmtDate(dateISO)} · pools & results as entered by the organizer`;
   const content = document.getElementById('schedule-content');
@@ -448,10 +491,14 @@ async function renderSchedule(quiet=false){
   const week = await fetchWeek(dateISO);
 
   if(!week.exists){
-    content.innerHTML = `<div class="card"><p style="margin:0; font-size:13px; color:var(--text-soft);">No sheet found yet for Wed, ${fmtDate(dateISO)}.</p></div>`;
+    // On a background refresh a fetch hiccup reports exists:false - keep the
+    // current board (and any half-typed scores) rather than blanking it.
+    if(!quiet) content.innerHTML = `<div class="card"><p style="margin:0; font-size:13px; color:var(--text-soft);">No sheet found yet for Wed, ${fmtDate(dateISO)}.</p></div>`;
     return;
   }
 
+  WEEK_DATE = dateISO;
+  if(week.now) SERVER_OFFSET = week.now - Date.now();
   const confirmed = week.signups.slice(0, CAP);
   const waitlist = week.signups.slice(CAP);
   const drawnPools = week.pools.filter(p=>p.drawn);
@@ -478,23 +525,32 @@ async function renderSchedule(quiet=false){
       <ul class="roster-list">${waitlist.length ? waitlist.map((s,i)=>rosterRow(s,i+1,'waitlist')).join('') : '<li class="empty-row">Nobody waiting right now.</li>'}</ul>
     </div>`;
   } else {
-    html += `<div class="card" style="background:var(--win-tint); border-color:#CFE6D8;">
-      <p style="margin:0; font-size:13px; color:var(--win); font-weight:500;">Pools are set — results update here as scores are entered.</p>
-    </div>`;
+    const model = buildLiveModel(week);
+    WEEK_MODEL = model;
+    GAME_INDEX = {};
+    const avail = availablePlayers(model);
+    html += onCourtCard(model);
+    html += upNextCard(model, avail);
+    html += benchCard(model, avail);
     html += poolStatusCard(dateISO, week, confirmed, drawnPools);
     html += `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Tap <strong>Check in</strong> as players arrive. A no-show's pool spot goes to a Guest; if they turn up before the guest plays, checking them in puts them back.</p>
       <ul class="roster-list">${confirmed.map((s,i)=>checkinRow(s,i+1,dateISO)).join('')}</ul>
     </div>`;
-    drawnPools.forEach(p=>{
-      html += `<div class="card">
-        <div class="pool-head"><h3>Pool ${p.label}</h3><span class="pool-status full">${p.players.length} playing</span></div>
-        <div class="pool-players">${p.players.map(pl=>`<span class="chip${isGuest(pl.name)?' guest':''}">${pl.name}</span>`).join('')}</div>
-        ${poolResults(p.players)}
-      </div>`;
-    });
+    model.pools.forEach(mp=>{ html += poolLiveCard(mp, model); });
   }
+
+  // The 45s background refresh must not clobber scores or guest names being
+  // typed; a forced refresh (after an action) restores in-progress values.
+  if(quiet && !force && scheduleInputsBusy(content)) return;
+  const snap = {};
+  content.querySelectorAll('input[id]').forEach(el=>{ if(el.value !== '') snap[el.id] = el.value; });
   content.innerHTML = html;
+  for(const id in snap){ const el = document.getElementById(id); if(el) el.value = snap[id]; }
+  content.querySelectorAll('select[id^="next-a-"]').forEach(el=>{
+    nextSelChanged(Number(el.id.slice('next-a-'.length)));
+  });
+  tickLiveTimers();
 }
 
 // Preview text + guest-padding checkboxes for however many eligible players
@@ -612,11 +668,21 @@ async function statusAction(action, dateISO, name){
   renderSchedule(true);
 }
 
+function renderAdmin(){
+  document.getElementById('admin-secret').value = localStorage.getItem('sw-admin-secret') || '';
+  document.getElementById('admin-mock-card').style.display = 'none';
+  const out = document.getElementById('admin-pin-out');
+  out.style.display = 'none'; out.textContent = '';
+  // A cached passphrase signs the organizer back in automatically on revisit.
+  if(localStorage.getItem('sw-admin-secret')) fetchEventPin();
+}
+
 async function fetchEventPin(){
   const inp = document.getElementById('admin-secret');
   const secret = inp.value.trim() || localStorage.getItem('sw-admin-secret') || '';
   const out = document.getElementById('admin-pin-out');
   out.style.display = 'block';
+  document.getElementById('admin-mock-card').style.display = 'none';
   if(!secret){ out.textContent = 'Enter the admin passphrase first.'; return; }
   out.textContent = 'Checking…';
   const dateISO = getSessionDateISO();
@@ -628,7 +694,8 @@ async function fetchEventPin(){
   }
   localStorage.setItem('sw-admin-secret', secret);
   localStorage.setItem('sw-pin-'+dateISO, res.pin);
-  out.innerHTML = `PIN for Wed, ${fmtDate(dateISO)}: <strong class="num">${res.pin}</strong> — saved on this device, so Generate pools won't ask again.`;
+  out.innerHTML = `Signed in. PIN for Wed, ${fmtDate(dateISO)}: <strong class="num">${res.pin}</strong> — saved on this device, so Generate pools won't ask again.`;
+  document.getElementById('admin-mock-card').style.display = 'block';
 }
 
 function rosterRow(s, num, phase){
@@ -642,11 +709,436 @@ function statusBadge(s){
   if(s.noShow) return ' <span class="mine-badge ns">No show</span>';
   return '';
 }
-function poolResults(players){
-  if(!players.some(pl=>pl.score !== '')) return '';
-  return `<div class="match-list">${players.map(pl=>`
-    <div class="match"><span class="vs">${pl.name}</span><span class="num">${pl.gw}W–${pl.gl}L · Rank ${pl.rank || '–'}</span></div>
-  `).join('')}</div>`;
+// ---- Live match desk ----
+// The score grid (from the sheet) is the source of truth for results; the
+// backend's per-date live state supplies who's on court, start/finish times
+// (for the waiting timers), guest identities and guest games' info scores.
+
+let WEEK_MODEL = null;   // model of the latest render, for click handlers
+let WEEK_DATE = null;
+let SERVER_OFFSET = 0;   // server clock minus device clock
+let GAME_INDEX = {};     // game rowId -> data for the edit flow
+
+function playerKey(n){ return (n||'').trim().toLowerCase(); }
+function numOrNull(v){ return (typeof v === 'number' && isFinite(v)) ? v : null; }
+function firstName(n){ return (n||'').trim().split(/\s+/)[0]; }
+function escAttr(s){ return String(s).replace(/"/g,'&quot;'); }
+function fmtElapsed(ms){ const s=Math.max(0,Math.floor(ms/1000)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+function fmtWaiting(ms){
+  const m = Math.floor(ms/60000);
+  if(m < 1) return '<1m';
+  if(m < 60) return m+'m';
+  return Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m';
+}
+function pairId(i,j){ return Math.min(i,j)+'|'+Math.max(i,j); }
+// Guests are seat labels, not people: show who's filling the seat this match.
+function matchDisp(m, name){
+  const who = m && m.guestNames && m.guestNames[name];
+  return who ? `${name} (${who})` : name;
+}
+
+function buildLiveModel(week){
+  const live = week.live || {matches:[], checkins:{}};
+  const matches = live.matches || [];
+  const checkedIn = new Set(week.signups.filter(s=>s.checkedIn).map(s=>playerKey(s.name)));
+  const pools = week.pools.filter(p=>p.drawn).map((p,pi)=>{
+    const names = p.players.map(pl=>pl.name);
+    const grid = p.grid || [];
+    const cell = (i,j)=>numOrNull((grid[i]||[])[j]);
+    const stats = names.map(()=>({gw:0, gl:0, pf:0, pa:0, played:0}));
+    const pairs = [];            // every pair with anything in the grid
+    const playedSet = new Set(); // pairs that can no longer be started
+    for(let i=0;i<names.length;i++) for(let j=i+1;j<names.length;j++){
+      const a = cell(i,j), b = cell(j,i);
+      if(a===null && b===null) continue;
+      playedSet.add(pairId(i,j));
+      const complete = a!==null && b!==null;
+      pairs.push({i, j, a, b, complete});
+      if(complete){
+        stats[i].pf+=a; stats[i].pa+=b; stats[j].pf+=b; stats[j].pa+=a;
+        stats[i].played++; stats[j].played++;
+        if(a>b){ stats[i].gw++; stats[j].gl++; } else { stats[j].gw++; stats[i].gl++; }
+      }
+    }
+    return {label:p.label, idx:pi, names, stats, pairs, playedSet, totalPairs:names.length*(names.length-1)/2};
+  });
+  // Guest-vs-guest games never touch the grid - mark them played from the log.
+  matches.forEach(m=>{
+    if(!m.finishedAt) return;
+    const mp = pools.find(p=>p.label===m.pool);
+    if(!mp) return;
+    const i = mp.names.findIndex(n=>playerKey(n)===playerKey(m.a));
+    const j = mp.names.findIndex(n=>playerKey(n)===playerKey(m.b));
+    if(i>=0 && j>=0) mp.playedSet.add(pairId(i,j));
+  });
+  return {pools, matches, checkins: live.checkins || {}, checkedIn, hasLive: !!week.live};
+}
+
+function onCourtNow(model, name){
+  const k = playerKey(name);
+  return model.matches.some(m=>!m.finishedAt && (playerKey(m.a)===k || playerKey(m.b)===k));
+}
+// 0 = no timestamps at all -> sorts as waiting the longest.
+function waitingSince(model, name){
+  const k = playerKey(name);
+  let t = 0;
+  model.matches.forEach(m=>{
+    if(m.finishedAt && (playerKey(m.a)===k || playerKey(m.b)===k)) t = Math.max(t, m.finishedAt);
+  });
+  const ci = model.checkins[k];
+  if(ci) t = Math.max(t, ci);
+  return t;
+}
+function availablePlayers(model){
+  const out = [];
+  model.pools.forEach(mp=>{
+    mp.names.forEach((name,i)=>{
+      const guest = isGuest(name);
+      if(!guest && !model.checkedIn.has(playerKey(name))) return;
+      if(onCourtNow(model, name)) return;
+      const hasGame = mp.names.some((_,j)=>j!==i && !mp.playedSet.has(pairId(i,j)));
+      if(!hasGame) return;
+      out.push({pool:mp.idx, label:mp.label, i, name, guest, since:waitingSince(model, name)});
+    });
+  });
+  return out;
+}
+
+function shuffled(arr){
+  const out = arr.slice();
+  for(let i=out.length-1;i>0;i--){
+    const r = Math.floor(Math.random()*(i+1));
+    [out[i],out[r]] = [out[r],out[i]];
+  }
+  return out;
+}
+
+// One suggestion per pool, so several courts can be called at once. Before
+// any match has started tonight, each pool's first suggestion is random;
+// after that, longest-waiting players go first. Guest games are only
+// suggested when no guest-free pairing exists in that pool - though the desk
+// can still call one manually at any time.
+function suggestForPool(model, avail, poolIdx){
+  const cands = avail.filter(c=>c.pool===poolIdx);
+  const pickFrom = (list)=>{
+    for(const p1 of list) for(const p2 of list){
+      if(p1===p2) continue;
+      if(!model.pools[poolIdx].playedSet.has(pairId(p1.i,p2.i))) return [p1,p2];
+    }
+    return null;
+  };
+  const ordered = model.matches.length === 0 ? shuffled(cands) : cands.slice().sort((a,b)=>a.since-b.since);
+  return pickFrom(ordered.filter(c=>!c.guest)) || pickFrom(ordered);
+}
+
+function onCourtCard(model){
+  const liveM = model.matches.filter(m=>!m.finishedAt);
+  if(!liveM.length) return '';
+  const rows = liveM.map(m=>`
+    <div class="court-row">
+      <div class="who"><span class="pool-tag">Pool ${m.pool}</span> ${matchDisp(m,m.a)} vs ${matchDisp(m,m.b)} <span class="elapsed num" data-since="${m.startedAt}">0:00</span></div>
+      <div class="score-entry">
+        <input type="number" inputmode="numeric" min="0" id="score-${m.id}-a" placeholder="${escAttr(firstName(m.a))}">
+        <span>–</span>
+        <input type="number" inputmode="numeric" min="0" id="score-${m.id}-b" placeholder="${escAttr(firstName(m.b))}">
+        <button class="btn small" onclick="recordScoreClick('${m.id}')">Record</button>
+        <button class="btn small ghost" title="Cancel this match" onclick="cancelMatchClick('${m.id}')">✕</button>
+      </div>
+    </div>`).join('');
+  return `<div class="card my-panel"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">On court now</h3>${rows}</div>`;
+}
+
+function upNextCard(model, avail){
+  const head = '<h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Up next</h3>';
+  if(!model.hasLive){
+    return `<div class="card">${head}<p style="margin:0; font-size:13px; color:var(--text-soft);">The match desk needs the updated backend — paste the new Code.gs into Apps Script and deploy a new version.</p></div>`;
+  }
+  const why = model.matches.length ? 'longest waiting' : 'random first match';
+  // Pool first (A, B, C, ...), then within each pool longest-waiting first;
+  // guests have no meaningful wait time, so they always sort last.
+  const poolsSorted = model.pools.slice().sort((a,b)=>a.label.localeCompare(b.label));
+  const rows = poolsSorted.map(mp=>{
+    const cands = avail.filter(c=>c.pool===mp.idx)
+      .sort((a,b)=> (a.guest - b.guest) || (a.since - b.since));
+    const sug = suggestForPool(model, avail, mp.idx);
+    if(!sug){
+      if(!cands.length) return '';
+      const msg = model.matches.some(m=>!m.finishedAt && m.pool===mp.label)
+        ? 'everyone left to play is already on court'
+        : 'no pairing left to call — all games are done or unavailable';
+      return `<div class="next-row"><span class="pool-tag">Pool ${mp.label}</span><span class="game-note">${msg}</span></div>`;
+    }
+    const opts = (sel)=> cands.map(c=>
+      `<option value="${c.i}" ${sel && sel.i===c.i ? 'selected':''}>${c.name}${c.guest?' (guest seat)':''}</option>`).join('');
+    return `<div class="next-row" data-pool="${mp.idx}">
+      <span class="pool-tag">Pool ${mp.label}</span>
+      <select id="next-a-${mp.idx}" onchange="nextSelChanged(${mp.idx})">${opts(sug[0])}</select>
+      <span class="game-note">vs</span>
+      <select id="next-b-${mp.idx}" onchange="nextSelChanged(${mp.idx})">${opts(sug[1])}</select>
+      <button class="btn small" id="start-match-btn-${mp.idx}" onclick="startMatchClick(${mp.idx})">Start</button>
+    </div>
+    <div class="guest-who" id="guest-who-a-${mp.idx}" style="display:none;"><input id="guest-name-a-${mp.idx}"></div>
+    <div class="guest-who" id="guest-who-b-${mp.idx}" style="display:none;"><input id="guest-name-b-${mp.idx}"></div>
+    <p class="note" id="next-hint-${mp.idx}" style="display:none; color:var(--loss);"></p>`;
+  }).join('');
+  if(!rows) return `<div class="card">${head}<p style="margin:0; font-size:13px; color:var(--text-soft);">No games left to call anywhere — all possible pairings are done or unavailable.</p></div>`;
+  return `<div class="card">${head}
+    <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">One suggestion per pool (${why}) — change any dropdown to call a different game.</p>
+    ${rows}
+  </div>`;
+}
+
+function benchCard(model, avail){
+  const humans = avail.filter(c=>!c.guest).sort((a,b)=>a.since-b.since);
+  const guests = avail.filter(c=>c.guest);
+  if(!humans.length && !guests.length) return '';
+  const rows = humans.map(c=>
+    `<li><span class="rname">${c.name} <span class="pool-tag">Pool ${c.label}</span></span><span class="wait-pill" data-wait="${c.since||''}">…</span></li>`).join('')
+    + guests.map(c=>
+    `<li><span class="rname">${c.name} <span class="pool-tag">Pool ${c.label}</span></span><span class="game-note">guest seat — call any visitor</span></li>`).join('');
+  return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Waiting to play</h3>
+    <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">Longest waiting first — the suggestion above follows this order.</p>
+    <ul class="roster-list">${rows}</ul></div>`;
+}
+
+function poolLiveCard(mp, model){
+  // Ranking-point bonus: 3 pools -> Pool A, 4 pools -> Pools A & B.
+  const bonus = mp.idx < model.pools.length - 2 ? 1 : 0;
+  // Games left = pool round-robin size minus pairs already called (playedSet
+  // covers any pair with a score in the grid, even a half-entered one, since
+  // that pair can no longer be started again either).
+  const playedCount = mp.names.map(()=>0);
+  mp.playedSet.forEach(pid=>{
+    const [pi, pj] = pid.split('|').map(Number);
+    playedCount[pi]++; playedCount[pj]++;
+  });
+  const order = mp.names.map((_,i)=>i).sort((x,y)=>{
+    const s = mp.stats;
+    return ((s[y].gw-s[y].gl)-(s[x].gw-s[x].gl))
+        || ((s[y].pf-s[y].pa)-(s[x].pf-s[x].pa))
+        || (x-y);
+  });
+  const rows = order.map((i,pos)=>{
+    const s = mp.stats[i], name = mp.names[i];
+    const diff = s.pf-s.pa;
+    const left = (mp.names.length - 1) - playedCount[i];
+    return `<tr>
+      <td><span class="num" style="color:var(--text-mute);">${pos+1}</span></td>
+      <td class="p-name">${name}${isGuest(name)?' <span class="mine-badge">guest</span>':''}</td>
+      <td class="num-col num">${s.gw}–${s.gl}</td>
+      <td class="num-col num">${diff>0?'+':''}${diff}</td>
+      <td class="num-col num">${s.played ? s.gw+bonus : '–'}</td>
+      <td class="num-col num">${left}</td>
+    </tr>`;
+  }).join('');
+
+  const games = mp.pairs.map(pr=>({...pr, nameI:mp.names[pr.i], nameJ:mp.names[pr.j],
+                                   m:findFinishedMatch(model, mp.label, mp.names[pr.i], mp.names[pr.j])}));
+  model.matches.forEach(m=>{
+    if(m.finishedAt && m.pool===mp.label && isGuest(m.a) && isGuest(m.b)){
+      games.push({infoOnly:true, complete:true, m, nameI:m.a, nameJ:m.b});
+    }
+  });
+  const gameRows = games.map(g=>gameRowHtml(mp, g)).join('');
+  const done = mp.playedSet.size;
+
+  // Pending = every pair not yet called (no score, even partial) - includes
+  // pairs currently on court, flagged so it's not confused with "unstarted".
+  const pending = [];
+  for(let i=0;i<mp.names.length;i++) for(let j=i+1;j<mp.names.length;j++){
+    if(mp.playedSet.has(pairId(i,j))) continue;
+    const onCourt = model.matches.some(m=>!m.finishedAt && m.pool===mp.label &&
+      ((playerKey(m.a)===playerKey(mp.names[i]) && playerKey(m.b)===playerKey(mp.names[j])) ||
+       (playerKey(m.a)===playerKey(mp.names[j]) && playerKey(m.b)===playerKey(mp.names[i]))));
+    pending.push(`<div class="game-row"><span class="vs">${mp.names[i]} vs ${mp.names[j]}</span>${onCourt ? '<span class="game-note">on court now</span>' : ''}</div>`);
+  }
+  const unplayed = pending.length;
+
+  return `<div class="card">
+    <div class="pool-head"><h3>Pool ${mp.label}</h3><span class="pool-status full">${mp.names.length} players · ${done}/${mp.totalPairs} games · ${unplayed} unplayed${bonus?' · +1 rank pt':''}</span></div>
+    <table class="standings">
+      <thead><tr><th style="width:30px;">#</th><th>Player</th><th class="num-col">W–L</th><th class="num-col">Pts ±</th><th class="num-col">Rank pts</th><th class="num-col">Left</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${collapseSection(mp.label, 'played', 'Played', gameRows, games.length)}
+    ${collapseSection(mp.label, 'pending', 'Pending', pending.join(''), unplayed)}
+  </div>`;
+}
+
+// Open/closed state per pool+section, kept across re-renders (a plain
+// <details> loses it every time innerHTML is regenerated).
+let COLLAPSE_STATE = {};
+function collapseSection(poolLabel, key, title, rowsHtml, count){
+  if(!rowsHtml) return '';
+  const stateKey = poolLabel+'-'+key;
+  const open = !!COLLAPSE_STATE[stateKey];
+  return `<details class="games-details"${open ? ' open' : ''} ontoggle="COLLAPSE_STATE['${stateKey}']=this.open">
+    <summary>${title} (${count})</summary>
+    ${rowsHtml}
+  </details>`;
+}
+
+function findFinishedMatch(model, poolLabel, nameA, nameB){
+  const want = [playerKey(nameA), playerKey(nameB)].sort().join('|');
+  let best = null;
+  model.matches.forEach(m=>{
+    if(!m.finishedAt || m.pool!==poolLabel) return;
+    if([playerKey(m.a), playerKey(m.b)].sort().join('|') !== want) return;
+    if(!best || m.finishedAt > best.finishedAt) best = m;
+  });
+  return best;
+}
+
+function gameRowHtml(mp, g){
+  const guestGame = isGuest(g.nameI) || isGuest(g.nameJ);
+  const dispI = g.m ? matchDisp(g.m, g.nameI) : g.nameI;
+  const dispJ = g.m ? matchDisp(g.m, g.nameJ) : g.nameJ;
+  let scoreI = g.a, scoreJ = g.b, note = '';
+  if(guestGame){
+    if(g.m && g.m.infoScore){
+      const flip = playerKey(g.m.a) !== playerKey(g.nameI);
+      scoreI = g.m.infoScore[flip?1:0];
+      scoreJ = g.m.infoScore[flip?0:1];
+      note = g.infoOnly ? 'guest game — not counted' : `guest game — counts ${g.a}–${g.b}`;
+    } else {
+      note = 'guest game';
+    }
+  } else if(!g.complete){
+    note = 'score missing one side — edit to fix';
+  }
+  // A sheet-entered guest game has no info score to correct, and its 1-0 grid
+  // default isn't editable by design - so no Edit button for those.
+  const canEdit = !guestGame || (g.m && g.m.infoScore);
+  const rowId = g.infoOnly ? 'game-m-'+g.m.id : `game-${mp.idx}-${g.i}-${g.j}`;
+  GAME_INDEX[rowId] = {poolIdx:mp.idx, nameI:g.nameI, nameJ:g.nameJ, dispI, dispJ,
+                       scoreI, scoreJ, matchId: (guestGame && g.m) ? g.m.id : ''};
+  return `<div class="game-row" id="${rowId}">
+    <span class="vs">${dispI} <strong class="num">${scoreI ?? '?'}–${scoreJ ?? '?'}</strong> ${dispJ}</span>
+    ${note ? `<span class="game-note">${note}</span>` : ''}
+    ${canEdit ? `<button class="btn small ghost" onclick="editGameClick('${rowId}')">Edit</button>` : ''}
+  </div>`;
+}
+
+// "Busy" means someone is mid-entry: a focused select, or a typed score /
+// guest name. Checkboxes are excluded - their state survives re-renders via
+// PAD_STATE, and their .value is never empty.
+function scheduleInputsBusy(content){
+  const typed = el => el.type==='number' || el.type==='text';
+  const ae = document.activeElement;
+  if(ae && content.contains(ae) && (ae.tagName==='SELECT' || (ae.tagName==='INPUT' && typed(ae)))) return true;
+  return Array.from(content.querySelectorAll('input')).some(el=>typed(el) && el.value!=='');
+}
+
+function tickLiveTimers(){
+  const now = Date.now() + SERVER_OFFSET;
+  document.querySelectorAll('[data-since]').forEach(el=>{
+    el.textContent = fmtElapsed(now - Number(el.dataset.since));
+  });
+  document.querySelectorAll('[data-wait]').forEach(el=>{
+    const t = Number(el.dataset.wait);
+    el.textContent = t ? 'waiting '+fmtWaiting(now - t) : "hasn't played yet";
+  });
+}
+setInterval(tickLiveTimers, 1000);
+
+function selCand(poolIdx, side){
+  const el = document.getElementById('next-'+side+'-'+poolIdx);
+  if(!el || el.value==='' || !WEEK_MODEL) return null;
+  const mp = WEEK_MODEL.pools[poolIdx];
+  if(!mp) return null;
+  const i = Number(el.value);
+  return {pool:poolIdx, i, name: mp.names[i]};
+}
+
+function nextSelChanged(poolIdx){
+  const a = selCand(poolIdx,'a'), b = selCand(poolIdx,'b');
+  [['a',a],['b',b]].forEach(([side,c])=>{
+    const wrap = document.getElementById('guest-who-'+side+'-'+poolIdx);
+    if(!wrap) return;
+    const show = c && isGuest(c.name);
+    wrap.style.display = show ? 'block' : 'none';
+    if(show) wrap.querySelector('input').placeholder = `Who is playing as ${c.name}?`;
+  });
+  let msg = '';
+  if(a && b){
+    if(a.i === b.i) msg = 'Pick two different players.';
+    else if(WEEK_MODEL.pools[poolIdx].playedSet.has(pairId(a.i,b.i))) msg = 'They already played each other tonight.';
+  }
+  const hint = document.getElementById('next-hint-'+poolIdx);
+  if(hint){ hint.style.display = msg ? 'block' : 'none'; hint.textContent = msg; }
+  const btn = document.getElementById('start-match-btn-'+poolIdx);
+  if(btn) btn.disabled = !!msg || !a || !b;
+}
+
+async function startMatchClick(poolIdx){
+  const a = selCand(poolIdx,'a'), b = selCand(poolIdx,'b');
+  if(!a || !b) return;
+  const guestNames = {};
+  [['a',a],['b',b]].forEach(([side,c])=>{
+    if(!isGuest(c.name)) return;
+    const inp = document.getElementById('guest-name-'+side+'-'+poolIdx);
+    if(inp && inp.value.trim()) guestNames[c.name] = inp.value.trim();
+    if(inp) inp.value = '';
+  });
+  const btn = document.getElementById('start-match-btn-'+poolIdx);
+  if(btn){ btn.disabled = true; btn.textContent = 'Starting…'; }
+  const res = await postAction({action:'startMatch', date:WEEK_DATE, a:a.name, b:b.name, guestNames});
+  if(!res.ok) alert(res.error || 'Could not start the match — please try again.');
+  renderSchedule(true, true);
+}
+
+function checkScores(a, b){
+  const na = Number(a), nb = Number(b);
+  if(a==='' || b==='' || !Number.isInteger(na) || !Number.isInteger(nb) || na<0 || nb<0){
+    return {error:'Enter both scores as whole numbers.'};
+  }
+  if(na === nb) return {error:'A game cannot end in a tie.'};
+  return {a:na, b:nb};
+}
+
+async function recordScoreClick(matchId){
+  const ia = document.getElementById('score-'+matchId+'-a');
+  const ib = document.getElementById('score-'+matchId+'-b');
+  const v = checkScores(ia ? ia.value : '', ib ? ib.value : '');
+  if(v.error){ alert(v.error); return; }
+  const res = await postAction({action:'recordScore', date:WEEK_DATE, matchId, scoreA:v.a, scoreB:v.b});
+  if(!res.ok) alert(res.error || 'Could not record the score — please try again.');
+  else { if(ia) ia.value=''; if(ib) ib.value=''; }
+  renderSchedule(true, true);
+}
+
+async function cancelMatchClick(matchId){
+  if(!confirm('Cancel this match? No score will be recorded.')) return;
+  const res = await postAction({action:'cancelMatch', date:WEEK_DATE, matchId});
+  if(!res.ok) alert(res.error || 'Could not cancel — please try again.');
+  renderSchedule(true, true);
+}
+
+function editGameClick(rowId){
+  const g = GAME_INDEX[rowId];
+  const row = document.getElementById(rowId);
+  if(!g || !row) return;
+  row.innerHTML = `<span class="vs">${g.dispI} vs ${g.dispJ}</span>
+    <span class="score-entry">
+      <input type="number" inputmode="numeric" min="0" id="edit-${rowId}-a" value="${g.scoreI ?? ''}" placeholder="${escAttr(firstName(g.nameI))}">
+      <span>–</span>
+      <input type="number" inputmode="numeric" min="0" id="edit-${rowId}-b" value="${g.scoreJ ?? ''}" placeholder="${escAttr(firstName(g.nameJ))}">
+      <button class="btn small" onclick="saveGameEdit('${rowId}')">Save</button>
+      <button class="btn small ghost" onclick="renderSchedule(true, true)">Cancel</button>
+    </span>`;
+}
+
+async function saveGameEdit(rowId){
+  const g = GAME_INDEX[rowId];
+  if(!g) return;
+  const ia = document.getElementById('edit-'+rowId+'-a');
+  const ib = document.getElementById('edit-'+rowId+'-b');
+  const v = checkScores(ia ? ia.value : '', ib ? ib.value : '');
+  if(v.error){ alert(v.error); return; }
+  const res = await postAction({action:'editScore', date:WEEK_DATE, a:g.nameI, b:g.nameJ, scoreA:v.a, scoreB:v.b, matchId:g.matchId});
+  if(!res.ok) alert(res.error || 'Could not save the correction — please try again.');
+  else { if(ia) ia.value=''; if(ib) ib.value=''; }
+  renderSchedule(true, true);
 }
 
 function getSelectedJoinDate(){
@@ -801,7 +1293,6 @@ function resetJoinForm(){
   renderJoinOptions();
 }
 
-document.getElementById('admin-secret').value = localStorage.getItem('sw-admin-secret') || '';
 fetchRankings().then(players=>{ PLAYERS = players; renderStandings(); });
 renderSchedule();
 renderJoinOptions();
