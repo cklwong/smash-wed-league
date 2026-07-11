@@ -109,6 +109,16 @@
   .roster-list .remove-btn:hover{opacity:1;}
   .empty-row{color:var(--text-mute); font-size:13px; padding:8px 0;}
   .mine-badge{background:var(--amber-tint); color:var(--amber-deep); font-size:11px; padding:2px 7px; border-radius:20px; font-weight:500;}
+  .mine-badge.ok{background:var(--win-tint); color:var(--win);}
+  .mine-badge.ns{background:var(--loss-tint); color:var(--loss);}
+  .chip.guest{background:var(--amber-tint); border-color:#E8C48A; color:var(--amber-deep);}
+  .checkin-actions{display:flex; gap:6px; flex-shrink:0;}
+  button.btn.noshow{background:none; border:1px solid var(--loss); color:var(--loss);}
+  button.btn.noshow:hover{background:var(--loss-tint);}
+  .redraw-banner{background:var(--loss-tint); border:1px solid #E8C2B8; border-radius:10px; padding:12px 16px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+  .redraw-banner p{margin:0; font-size:13px; color:var(--loss); font-weight:500;}
+  .pad-row{display:flex; flex-direction:column; gap:6px; margin:10px 0;}
+  .pad-row label{display:flex; align-items:center; gap:7px; font-size:13px; cursor:pointer;}
   .skel{color:var(--text-mute); font-size:13px; padding:10px 0;}
   .my-panel{border-left:3px solid var(--amber); border-radius:0 8px 8px 0;}
   .spark-dot{transition:r .1s ease;}
@@ -173,6 +183,17 @@
       <p id="schedule-sub">Loading session…</p>
     </div>
     <div id="schedule-content"><div class="skel">Loading this week's session…</div></div>
+    <details class="card" id="admin-panel" style="max-width:440px;">
+      <summary style="cursor:pointer; font-size:13px; color:var(--text-soft); font-weight:500;">Organizer access</summary>
+      <div style="margin-top:10px;">
+        <p class="note" style="margin:0 0 8px;">Enter the admin passphrase to retrieve this week's pool PIN (it's also emailed to organizers at noon on match day).</p>
+        <div class="search-row" style="margin-bottom:0;">
+          <input type="password" id="admin-secret" placeholder="Admin passphrase" autocomplete="off">
+          <button type="button" class="btn" onclick="fetchEventPin()">Get PIN</button>
+        </div>
+        <p class="note" id="admin-pin-out" style="display:none;"></p>
+      </div>
+    </details>
   </section>
 
   <section id="view-join" class="view">
@@ -262,26 +283,18 @@ async function fetchWeek(dateISO){
     return await r.json();
   }catch(e){ return {date:dateISO, exists:false, signups:[], pools:[]}; }
 }
-async function postJoin(dateISO, name, contact){
+async function postAction(body){
   try{
     const r = await fetch(GAS_URL, {
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({action:'join', date:dateISO, name, contact})
+      body: JSON.stringify(body)
     });
     return await r.json();
   }catch(e){ return {ok:false, error:String(e)}; }
 }
-async function postLeave(dateISO, name){
-  try{
-    const r = await fetch(GAS_URL, {
-      method:'POST',
-      headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({action:'leave', date:dateISO, name})
-    });
-    return await r.json();
-  }catch(e){ return {ok:false, error:String(e)}; }
-}
+function postJoin(dateISO, name, contact){ return postAction({action:'join', date:dateISO, name, contact}); }
+function postLeave(dateISO, name){ return postAction({action:'leave', date:dateISO, name}); }
 
 function getNextOpenWednesdays(n){
   const candidates = getUpcomingWednesdays(n+4);
@@ -396,22 +409,42 @@ function openModal(name){
 }
 function closeModal(){ document.getElementById('modal-overlay').classList.remove('active'); closeChartTip(); }
 document.getElementById('modal-overlay').addEventListener('click', e=>{ if(e.target.id==='modal-overlay') closeModal(); });
+let scheduleTimer = null;
+function setScheduleTimer(on){
+  if(on && !scheduleTimer) scheduleTimer = setInterval(()=>renderSchedule(true), 45000);
+  if(!on && scheduleTimer){ clearInterval(scheduleTimer); scheduleTimer = null; }
+}
 function showView(name){
   closeChartTip();
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-'+name).classList.add('active');
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.view===name));
+  setScheduleTimer(name==='schedule'); // keeps the check-in board live during league play
   if(name==='schedule') renderSchedule();
   if(name==='join') renderJoinOptions();
 }
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click', ()=>showView(b.dataset.view)));
 document.getElementById('standings-search').addEventListener('input', e=>renderStandings(e.target.value));
 
-async function renderSchedule(){
+const POOL_CAPACITY = {A:9, B:8, C:7, D:7};
+const POOL_LETTERS = ['A','B','C','D'];
+const MIN_PLAYERS = 12;
+let PAD_STATE = {}; // remembers guest-padding checkbox taps across live refreshes
+
+// Always >= 2 pools: <=16 -> 2, <=21 -> 3, else 4. Extras go to earlier pools.
+function poolSplitSizes(n){
+  const k = n<=16 ? 2 : (n<=21 ? 3 : 4);
+  const base = Math.floor(n/k), extra = n%k;
+  return Array.from({length:k}, (_,i)=>base + (i<extra?1:0));
+}
+function isNoShowGuest(name){ return /^Guest[A-D]\d+$/i.test(name); }
+function isGuest(name){ return /^Guest[A-D]\d*$/i.test(name); }
+
+async function renderSchedule(quiet=false){
   const dateISO = getSessionDateISO();
   document.getElementById('schedule-sub').textContent = `Wed, ${fmtDate(dateISO)} · pools & results as entered by the organizer`;
   const content = document.getElementById('schedule-content');
-  content.innerHTML = '<div class="skel">Loading this week&#39;s session…</div>';
+  if(!quiet) content.innerHTML = '<div class="skel">Loading this week&#39;s session…</div>';
   const week = await fetchWeek(dateISO);
 
   if(!week.exists){
@@ -437,6 +470,7 @@ async function renderSchedule(){
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Signups are open until <strong>noon Pacific</strong> on match day. First ${CAP} in are confirmed — everyone else is on the waitlist.</p>
       <button class="btn small" onclick="showView('join')">Add a player</button>
     </div>`;
+    html += generateCard(dateISO, confirmed);
     html += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Confirmed (${confirmed.length}/${CAP})</h3>
       <ul class="roster-list">${confirmed.length ? confirmed.map((s,i)=>rosterRow(s,i+1,'confirmed')).join('') : '<li class="empty-row">No signups yet — be the first.</li>'}</ul>
     </div>`;
@@ -447,10 +481,15 @@ async function renderSchedule(){
     html += `<div class="card" style="background:var(--win-tint); border-color:#CFE6D8;">
       <p style="margin:0; font-size:13px; color:var(--win); font-weight:500;">Pools are set — results update here as scores are entered.</p>
     </div>`;
+    html += poolStatusCard(dateISO, week, confirmed, drawnPools);
+    html += `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
+      <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Tap <strong>Check in</strong> as players arrive. A no-show's pool spot goes to a Guest; if they turn up before the guest plays, checking them in puts them back.</p>
+      <ul class="roster-list">${confirmed.map((s,i)=>checkinRow(s,i+1,dateISO)).join('')}</ul>
+    </div>`;
     drawnPools.forEach(p=>{
       html += `<div class="card">
         <div class="pool-head"><h3>Pool ${p.label}</h3><span class="pool-status full">${p.players.length} playing</span></div>
-        <div class="pool-players">${p.players.map(pl=>`<span class="chip">${pl.name}</span>`).join('')}</div>
+        <div class="pool-players">${p.players.map(pl=>`<span class="chip${isGuest(pl.name)?' guest':''}">${pl.name}</span>`).join('')}</div>
         ${poolResults(p.players)}
       </div>`;
     });
@@ -458,11 +497,150 @@ async function renderSchedule(){
   content.innerHTML = html;
 }
 
+// Preview text + guest-padding checkboxes for however many eligible players
+// there are right now. Shared by the initial generate card and the
+// post-draw manage card, since a redraw re-seeds from scratch just like a
+// first draw does.
+function splitPreviewAndPadding(n){
+  const sizes = poolSplitSizes(n);
+  const maxSize = Math.max(...sizes);
+  const preview = sizes.map((sz,i)=>`Pool ${POOL_LETTERS[i]}: ${sz}`).join(' · ');
+  const padOptions = sizes.map((sz,i)=>{
+    const letter = POOL_LETTERS[i];
+    const canPad = sz + 1 <= POOL_CAPACITY[letter];
+    const balance = sz < maxSize;             // uneven split - a guest evens it out
+    const extraGame = sizes.length===2 && n<16; // small 2-pool night - a guest adds a game
+    if(!canPad || !(balance || extraGame)) return '';
+    const checked = letter in PAD_STATE ? PAD_STATE[letter] : balance;
+    return `<label><input type="checkbox" name="pad-guest" value="${letter}" ${checked?'checked':''}
+      onchange="PAD_STATE['${letter}']=this.checked">
+      Add Guest${letter} to Pool ${letter} (${sz} → ${sz+1} players${balance?', balances the pools':', extra game each'})</label>`;
+  }).join('');
+  return {sizes, preview, padOptions};
+}
+
+function generateCard(dateISO, confirmed){
+  const eligible = confirmed.filter(s=>!s.noShow);
+  const n = eligible.length;
+  let body;
+  if(n < MIN_PLAYERS){
+    body = `<p style="margin:0; font-size:13px; color:var(--text-soft);">${n} registered so far — league night is cancelled with fewer than ${MIN_PLAYERS} players, so pools can't be generated yet.</p>`;
+  } else {
+    const {sizes, preview, padOptions} = splitPreviewAndPadding(n);
+    body = `<p style="margin:0 0 4px; font-size:13px; color:var(--text-soft);">${n} registered → <strong>${sizes.length} pools</strong> by standings (${preview}).</p>
+      ${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
+      <button class="btn" id="gen-pools-btn" onclick="generatePoolsClick('${dateISO}', false)">Generate pools</button>
+      <p class="note" style="margin-top:8px;">Needs tonight's PIN — emailed to organizers at noon, or grab it from Organizer access below.</p>`;
+  }
+  return `<div class="card"><h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Generate pools <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>${body}</div>`;
+}
+
+// Once pools are drawn, no-shows and late joiners can leave the draw out of
+// balance or leave a checked-in player with no pool seat at all - offer a
+// redraw (with the same guest-padding options as the initial draw) any time
+// scores haven't started, and call out exactly why one might be needed.
+function poolStatusCard(dateISO, week, confirmed, drawnPools){
+  const eligible = confirmed.filter(s=>!s.noShow);
+  const crowded = drawnPools.filter(p=>p.players.filter(pl=>isNoShowGuest(pl.name)).length >= 2);
+  const seatedNames = new Set(drawnPools.flatMap(p=>p.players.map(pl=>pl.name)));
+  const unseated = eligible.filter(s=>!seatedNames.has(s.name));
+  const issues = [];
+  if(crowded.length) issues.push(`${crowded.map(p=>'Pool '+p.label).join(' & ')} ${crowded.length>1?'have':'has'} more than one guest`);
+  if(unseated.length) issues.push(`${unseated.map(s=>s.name).join(', ')} ${unseated.length>1?"are":"is"} checked in but not seated in a pool`);
+
+  if(week.hasScores){
+    if(!issues.length) return '';
+    return `<div class="redraw-banner"><p>${issues.join('; ')} — games have started, so pools can no longer be redrawn.</p></div>`;
+  }
+
+  const {sizes, preview, padOptions} = splitPreviewAndPadding(eligible.length);
+  const noteHtml = issues.length
+    ? `<p style="margin:0 0 10px; font-size:13px; color:var(--loss); font-weight:500;">${issues.join('; ')}. Redraw to fix this.</p>` : '';
+  return `<div class="card"${issues.length?' style="border-color:#E8C2B8;"':''}>
+    <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Manage pools <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>
+    ${noteHtml}
+    <p style="margin:0 0 4px; font-size:13px; color:var(--text-soft);">Redrawing re-seeds everyone checked-in-eligible by standings → <strong>${sizes.length} pools</strong> (${preview}). No-shows are excluded and any scores entered so far are cleared.</p>
+    ${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
+    <button class="btn" id="gen-pools-btn" onclick="generatePoolsClick('${dateISO}', true)">Redraw pools</button>
+  </div>`;
+}
+
+async function generatePoolsClick(dateISO, redraw){
+  if(redraw && !confirm('Redraw pools now? No-shows are left out and everyone else is re-seeded by standings.')) return;
+  let pin = localStorage.getItem('sw-pin-'+dateISO);
+  if(!pin){
+    pin = (prompt("Enter tonight's pool PIN:")||'').trim();
+    if(!pin) return;
+  }
+  const padGuests = Array.from(document.querySelectorAll('input[name="pad-guest"]:checked')).map(i=>i.value);
+  const btn = document.getElementById('gen-pools-btn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
+  const res = await postAction({action:'generatePools', date:dateISO, pin, padGuests, redraw});
+  if(!res.ok){
+    localStorage.removeItem('sw-pin-'+dateISO);
+    alert(res.error || 'Could not generate pools — please try again.');
+  } else {
+    localStorage.setItem('sw-pin-'+dateISO, pin);
+  }
+  renderSchedule();
+}
+
+function checkinRow(s, num, dateISO){
+  const esc = s.name.replace(/'/g,"\\'");
+  let status = '', actions = '';
+  if(s.checkedIn){
+    status = ' <span class="mine-badge ok">Checked in</span>';
+    actions = `<button class="btn small ghost" onclick="statusAction('clearstatus','${dateISO}','${esc}')">Undo</button>`;
+  } else if(s.noShow){
+    status = ' <span class="mine-badge ns">No show</span>';
+    actions = `<button class="btn small" onclick="statusAction('checkin','${dateISO}','${esc}')">Check in</button>`;
+  } else {
+    actions = `<button class="btn small" onclick="statusAction('checkin','${dateISO}','${esc}')">Check in</button>
+      <button class="btn small noshow" onclick="statusAction('noshow','${dateISO}','${esc}')">No show</button>`;
+  }
+  return `<li><span class="num">${num}</span><span class="rname">${s.name}${status}</span><span class="checkin-actions">${actions}</span></li>`;
+}
+
+async function statusAction(action, dateISO, name){
+  if(action==='noshow' && !confirm(`Mark ${name} as a no-show? Their pool spot goes to a Guest.`)) return;
+  const res = await postAction({action, date:dateISO, name});
+  if(!res.ok){
+    alert(res.error || 'Could not update — please try again.');
+  } else if(action==='checkin' && res.seated===false){
+    alert(`${name} is checked in, but pools were already redrawn without a spot for them — use "Redraw pools" below to seat them.`);
+  }
+  renderSchedule(true);
+}
+
+async function fetchEventPin(){
+  const inp = document.getElementById('admin-secret');
+  const secret = inp.value.trim() || localStorage.getItem('sw-admin-secret') || '';
+  const out = document.getElementById('admin-pin-out');
+  out.style.display = 'block';
+  if(!secret){ out.textContent = 'Enter the admin passphrase first.'; return; }
+  out.textContent = 'Checking…';
+  const dateISO = getSessionDateISO();
+  const res = await postAction({action:'getpin', date:dateISO, secret});
+  if(!res.ok){
+    localStorage.removeItem('sw-admin-secret');
+    out.textContent = res.error || 'Could not retrieve the PIN.';
+    return;
+  }
+  localStorage.setItem('sw-admin-secret', secret);
+  localStorage.setItem('sw-pin-'+dateISO, res.pin);
+  out.innerHTML = `PIN for Wed, ${fmtDate(dateISO)}: <strong class="num">${res.pin}</strong> — saved on this device, so Generate pools won't ask again.`;
+}
+
 function rosterRow(s, num, phase){
   return `<li>
     <span class="num">${phase==='waitlist' ? CAP+num : num}</span>
-    <span class="rname">${s.name}${s.checkedIn?' <span class="mine-badge">Checked in</span>':''}</span>
+    <span class="rname">${s.name}${statusBadge(s)}</span>
   </li>`;
+}
+function statusBadge(s){
+  if(s.checkedIn) return ' <span class="mine-badge ok">Checked in</span>';
+  if(s.noShow) return ' <span class="mine-badge ns">No show</span>';
+  return '';
 }
 function poolResults(players){
   if(!players.some(pl=>pl.score !== '')) return '';
@@ -514,7 +692,7 @@ async function removeSignup(dateISO, name){
 function joinRosterRow(s, num, phase, dateISO){
   return `<li>
     <span class="num">${phase==='waitlist' ? CAP+num : num}</span>
-    <span class="rname">${s.name}${s.checkedIn?' <span class="mine-badge">Checked in</span>':''}</span>
+    <span class="rname">${s.name}${statusBadge(s)}</span>
     <button type="button" class="remove-btn" title="Remove" aria-label="Remove ${s.name}" onclick="removeSignup('${dateISO}','${s.name.replace(/'/g,"\\'")}')">❌</button>
   </li>`;
 }
@@ -623,6 +801,7 @@ function resetJoinForm(){
   renderJoinOptions();
 }
 
+document.getElementById('admin-secret').value = localStorage.getItem('sw-admin-secret') || '';
 fetchRankings().then(players=>{ PLAYERS = players; renderStandings(); });
 renderSchedule();
 renderJoinOptions();
