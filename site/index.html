@@ -481,7 +481,7 @@ async function renderSchedule(quiet=false){
     html += `<div class="card" style="background:var(--win-tint); border-color:#CFE6D8;">
       <p style="margin:0; font-size:13px; color:var(--win); font-weight:500;">Pools are set — results update here as scores are entered.</p>
     </div>`;
-    html += redrawBanner(dateISO, week, drawnPools);
+    html += poolStatusCard(dateISO, week, confirmed, drawnPools);
     html += `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Tap <strong>Check in</strong> as players arrive. A no-show's pool spot goes to a Guest; if they turn up before the guest plays, checking them in puts them back.</p>
       <ul class="roster-list">${confirmed.map((s,i)=>checkinRow(s,i+1,dateISO)).join('')}</ul>
@@ -497,6 +497,28 @@ async function renderSchedule(quiet=false){
   content.innerHTML = html;
 }
 
+// Preview text + guest-padding checkboxes for however many eligible players
+// there are right now. Shared by the initial generate card and the
+// post-draw manage card, since a redraw re-seeds from scratch just like a
+// first draw does.
+function splitPreviewAndPadding(n){
+  const sizes = poolSplitSizes(n);
+  const maxSize = Math.max(...sizes);
+  const preview = sizes.map((sz,i)=>`Pool ${POOL_LETTERS[i]}: ${sz}`).join(' · ');
+  const padOptions = sizes.map((sz,i)=>{
+    const letter = POOL_LETTERS[i];
+    const canPad = sz + 1 <= POOL_CAPACITY[letter];
+    const balance = sz < maxSize;             // uneven split - a guest evens it out
+    const extraGame = sizes.length===2 && n<16; // small 2-pool night - a guest adds a game
+    if(!canPad || !(balance || extraGame)) return '';
+    const checked = letter in PAD_STATE ? PAD_STATE[letter] : balance;
+    return `<label><input type="checkbox" name="pad-guest" value="${letter}" ${checked?'checked':''}
+      onchange="PAD_STATE['${letter}']=this.checked">
+      Add Guest${letter} to Pool ${letter} (${sz} → ${sz+1} players${balance?', balances the pools':', extra game each'})</label>`;
+  }).join('');
+  return {sizes, preview, padOptions};
+}
+
 function generateCard(dateISO, confirmed){
   const eligible = confirmed.filter(s=>!s.noShow);
   const n = eligible.length;
@@ -504,20 +526,7 @@ function generateCard(dateISO, confirmed){
   if(n < MIN_PLAYERS){
     body = `<p style="margin:0; font-size:13px; color:var(--text-soft);">${n} registered so far — league night is cancelled with fewer than ${MIN_PLAYERS} players, so pools can't be generated yet.</p>`;
   } else {
-    const sizes = poolSplitSizes(n);
-    const maxSize = Math.max(...sizes);
-    const preview = sizes.map((sz,i)=>`Pool ${POOL_LETTERS[i]}: ${sz}`).join(' · ');
-    const padOptions = sizes.map((sz,i)=>{
-      const letter = POOL_LETTERS[i];
-      const canPad = sz + 1 <= POOL_CAPACITY[letter];
-      const balance = sz < maxSize;             // uneven split - a guest evens it out
-      const extraGame = sizes.length===2 && n<16; // small 2-pool night - a guest adds a game
-      if(!canPad || !(balance || extraGame)) return '';
-      const checked = letter in PAD_STATE ? PAD_STATE[letter] : balance;
-      return `<label><input type="checkbox" name="pad-guest" value="${letter}" ${checked?'checked':''}
-        onchange="PAD_STATE['${letter}']=this.checked">
-        Add Guest${letter} to Pool ${letter} (${sz} → ${sz+1} players${balance?', balances the pools':', extra game each'})</label>`;
-    }).join('');
+    const {sizes, preview, padOptions} = splitPreviewAndPadding(n);
     body = `<p style="margin:0 0 4px; font-size:13px; color:var(--text-soft);">${n} registered → <strong>${sizes.length} pools</strong> by standings (${preview}).</p>
       ${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
       <button class="btn" id="gen-pools-btn" onclick="generatePoolsClick('${dateISO}', false)">Generate pools</button>
@@ -526,16 +535,33 @@ function generateCard(dateISO, confirmed){
   return `<div class="card"><h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Generate pools <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>${body}</div>`;
 }
 
-function redrawBanner(dateISO, week, drawnPools){
+// Once pools are drawn, no-shows and late joiners can leave the draw out of
+// balance or leave a checked-in player with no pool seat at all - offer a
+// redraw (with the same guest-padding options as the initial draw) any time
+// scores haven't started, and call out exactly why one might be needed.
+function poolStatusCard(dateISO, week, confirmed, drawnPools){
+  const eligible = confirmed.filter(s=>!s.noShow);
   const crowded = drawnPools.filter(p=>p.players.filter(pl=>isNoShowGuest(pl.name)).length >= 2);
-  if(!crowded.length) return '';
-  const which = crowded.map(p=>'Pool '+p.label).join(' & ');
+  const seatedNames = new Set(drawnPools.flatMap(p=>p.players.map(pl=>pl.name)));
+  const unseated = eligible.filter(s=>!seatedNames.has(s.name));
+  const issues = [];
+  if(crowded.length) issues.push(`${crowded.map(p=>'Pool '+p.label).join(' & ')} ${crowded.length>1?'have':'has'} more than one guest`);
+  if(unseated.length) issues.push(`${unseated.map(s=>s.name).join(', ')} ${unseated.length>1?"are":"is"} checked in but not seated in a pool`);
+
   if(week.hasScores){
-    return `<div class="redraw-banner"><p>${which} now has multiple guests, but games have started — pools can no longer be redrawn.</p></div>`;
+    if(!issues.length) return '';
+    return `<div class="redraw-banner"><p>${issues.join('; ')} — games have started, so pools can no longer be redrawn.</p></div>`;
   }
-  return `<div class="redraw-banner">
-    <p>${which} has more than one guest — consider redrawing the pools before games start.</p>
-    <button class="btn" onclick="generatePoolsClick('${dateISO}', true)">Redraw pools</button>
+
+  const {sizes, preview, padOptions} = splitPreviewAndPadding(eligible.length);
+  const noteHtml = issues.length
+    ? `<p style="margin:0 0 10px; font-size:13px; color:var(--loss); font-weight:500;">${issues.join('; ')}. Redraw to fix this.</p>` : '';
+  return `<div class="card"${issues.length?' style="border-color:#E8C2B8;"':''}>
+    <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Manage pools <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>
+    ${noteHtml}
+    <p style="margin:0 0 4px; font-size:13px; color:var(--text-soft);">Redrawing re-seeds everyone checked-in-eligible by standings → <strong>${sizes.length} pools</strong> (${preview}). No-shows are excluded and any scores entered so far are cleared.</p>
+    ${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
+    <button class="btn" id="gen-pools-btn" onclick="generatePoolsClick('${dateISO}', true)">Redraw pools</button>
   </div>`;
 }
 
@@ -578,7 +604,11 @@ function checkinRow(s, num, dateISO){
 async function statusAction(action, dateISO, name){
   if(action==='noshow' && !confirm(`Mark ${name} as a no-show? Their pool spot goes to a Guest.`)) return;
   const res = await postAction({action, date:dateISO, name});
-  if(!res.ok) alert(res.error || 'Could not update — please try again.');
+  if(!res.ok){
+    alert(res.error || 'Could not update — please try again.');
+  } else if(action==='checkin' && res.seated===false){
+    alert(`${name} is checked in, but pools were already redrawn without a spot for them — use "Redraw pools" below to seat them.`);
+  }
   renderSchedule(true);
 }
 

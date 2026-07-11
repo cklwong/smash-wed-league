@@ -18,7 +18,7 @@
  *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error }
  *   POST { action:'getpin', date, secret }      -> { ok, pin }
  *   POST { action:'generatePools', date, pin, padGuests:['A',...], redraw } -> { ok, pools }
- *   POST { action:'checkin', date, name }       -> { ok } (restores a no-show's pool spot if their guest hasn't played)
+ *   POST { action:'checkin', date, name }       -> { ok, seated } (restores a no-show's pool spot if their guest hasn't played; seated:false means a redraw is needed to seat them)
  *   POST { action:'noshow', date, name }        -> { ok } (marks 'ns' and swaps their pool spot for GuestX1, GuestX2, ...)
  *   POST { action:'clearstatus', date, name }   -> { ok } (undo a mis-tapped check-in / no-show)
  */
@@ -490,7 +490,11 @@ function setCheckin(dateISO, name) {
   var target = findSignup(parseSignups(data), name);
   if (!target) return { ok: false, error: 'Signup not found for ' + name };
 
-  if (target.noShow) {
+  // seated:false tells the frontend this player has no pool spot and a
+  // redraw is needed to place them - e.g. their guest mapping was wiped by
+  // an intervening redraw (which excludes no-shows and clears NOSHOW_GUEST_COL).
+  var seated = true;
+  if (target.noShow && poolsAreDrawn(data)) {
     // Late arrival: give their pool spot back only if the replacement guest
     // hasn't played yet - once a guest game is in, they sit out tonight.
     var guestLabel = ((data[target.row - 1] || [])[NOSHOW_GUEST_COL - 1] || '').toString().trim();
@@ -501,12 +505,16 @@ function setCheckin(dateISO, name) {
           return { ok: false, error: guestLabel + ' has already played — ' + target.name + ' cannot rejoin tonight.' };
         }
         sheet.getRange(slot.row, SLOT_COL).setValue(target.name);
+      } else {
+        seated = false;
       }
       sheet.getRange(target.row, NOSHOW_GUEST_COL).clearContent();
+    } else {
+      seated = false;
     }
   }
   sheet.getRange(target.row, 2).setValue('y');
-  return { ok: true };
+  return { ok: true, seated: seated };
 }
 
 function setNoShow(dateISO, name) {
