@@ -45,6 +45,12 @@
   main{max-width:920px; margin:0 auto; padding:24px 20px 60px;}
   .view{display:none;}
   .view.active{display:block;}
+  .subnav{display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--border);}
+  .subnav button{background:none; border:none; color:var(--text-soft); font-family:'Inter',sans-serif; font-size:13px; font-weight:500; padding:8px 14px; cursor:pointer; white-space:nowrap; border-bottom:2px solid transparent;}
+  .subnav button.active{color:var(--ink); border-bottom:2px solid var(--amber);}
+  .subnav button:hover{color:var(--ink);}
+  .subview{display:none;}
+  .subview.active{display:block;}
   .page-head{margin-bottom:20px;}
   .page-head h2{font-size:20px; margin:0 0 4px; color:var(--ink);}
   .page-head p{margin:0; color:var(--text-soft); font-size:14px;}
@@ -144,7 +150,14 @@
   .score-entry{display:flex; align-items:center; gap:6px; flex-shrink:0;}
   .score-entry input{width:58px; padding:8px 4px; border:1px solid var(--border); border-radius:8px; font-family:'IBM Plex Mono',monospace; font-size:14px; text-align:center; background:#fff;}
   .next-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:10px 0 4px;}
-  .next-row select{flex:1; min-width:130px; padding:9px 10px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px; background:#fff;}
+  .match-combo{position:relative; flex:1; min-width:220px;}
+  .match-combo-input{width:100%; padding:9px 10px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px; background:#fff;}
+  .match-combo-list{display:none; position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:10; max-height:220px; overflow-y:auto; background:#fff; border:1px solid var(--border); border-radius:8px; box-shadow:0 6px 16px rgba(0,0,0,.12);}
+  .match-combo-list.open{display:block;}
+  .match-opt{padding:8px 12px; font-size:14px; cursor:pointer;}
+  .match-opt:hover{background:var(--line);}
+  .match-opt.sel{background:var(--amber-tint); color:var(--amber-deep); font-weight:500;}
+  .match-combo-empty{padding:8px 12px; font-size:13px; color:var(--text-mute);}
   .guest-who{margin-top:8px;}
   .guest-who input{width:100%; padding:9px 10px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px;}
   .game-row{display:flex; align-items:center; justify-content:flex-start; gap:8px; padding:7px 0; border-bottom:1px solid var(--border); font-size:13px; flex-wrap:wrap;}
@@ -214,7 +227,21 @@
       <h2>This week</h2>
       <p id="schedule-sub">Loading session…</p>
     </div>
-    <div id="schedule-content"><div class="skel">Loading this week's session…</div></div>
+    <div id="schedule-content">
+      <div class="skel" id="schedule-skel">Loading this week's session…</div>
+      <div id="schedule-banner"></div>
+      <div id="schedule-predraw" style="display:none;"></div>
+      <div id="schedule-postdraw" style="display:none;">
+        <div class="subnav" id="schedule-subnav">
+          <button data-subview="checkin" class="active">Check-in</button>
+          <button data-subview="live">Live</button>
+          <button data-subview="pools">Pools</button>
+        </div>
+        <div id="schedule-checkin" class="subview active"></div>
+        <div id="schedule-live" class="subview"></div>
+        <div id="schedule-pools" class="subview"></div>
+      </div>
+    </div>
   </section>
 
   <section id="view-join" class="view">
@@ -278,6 +305,7 @@
       </div>
       <p class="note" id="admin-pin-out" style="display:none;"></p>
     </div>
+    <div id="admin-pools-card"></div>
     <div class="card" style="max-width:440px; display:none;" id="admin-mock-card">
       <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Developer sandbox</h3>
       <p class="note" style="margin:0 0 8px;">Experiment with the match desk using local sample data — no spreadsheet required, nothing here touches the real roster.</p>
@@ -483,17 +511,41 @@ function poolSplitSizes(n){
 function isNoShowGuest(name){ return /^Guest[A-D]\d+$/i.test(name); }
 function isGuest(name){ return /^Guest[A-D]\d*$/i.test(name); }
 
+let scheduleSubview = 'checkin'; // remembers which sub-tab is showing across background refreshes
+function showScheduleSubview(name){
+  scheduleSubview = name;
+  document.querySelectorAll('#schedule-postdraw .subview').forEach(v=>v.classList.toggle('active', v.id==='schedule-'+name));
+  document.querySelectorAll('#schedule-subnav button').forEach(b=>b.classList.toggle('active', b.dataset.subview===name));
+}
+document.getElementById('schedule-subnav').addEventListener('click', e=>{
+  const btn = e.target.closest('button[data-subview]');
+  if(btn) showScheduleSubview(btn.dataset.subview);
+});
+
+let scheduleRenderToken = 0;
 async function renderSchedule(quiet=false, force=false){
   const dateISO = getSessionDateISO();
   document.getElementById('schedule-sub').textContent = `Wed, ${fmtDate(dateISO)} · pools & results as entered by the organizer`;
   const content = document.getElementById('schedule-content');
-  if(!quiet) content.innerHTML = '<div class="skel">Loading this week&#39;s session…</div>';
+  const skel = document.getElementById('schedule-skel');
+  if(!quiet) skel.style.display = 'block';
+  const myToken = ++scheduleRenderToken;
   const week = await fetchWeek(dateISO);
+  // Overlapping calls can race (e.g. an action's forced refresh landing while
+  // the 45s poll is also in flight) - if a newer call has started since this
+  // one began, abandon this one rather than let it paint stale data over
+  // the newer call's result, or clobber its NEXT_MATCHES/NEXT_SELECTED state.
+  if(myToken !== scheduleRenderToken) return;
 
   if(!week.exists){
     // On a background refresh a fetch hiccup reports exists:false - keep the
     // current board (and any half-typed scores) rather than blanking it.
-    if(!quiet) content.innerHTML = `<div class="card"><p style="margin:0; font-size:13px; color:var(--text-soft);">No sheet found yet for Wed, ${fmtDate(dateISO)}.</p></div>`;
+    if(!quiet){
+      skel.style.display = 'none';
+      document.getElementById('schedule-banner').innerHTML = `<div class="card"><p style="margin:0; font-size:13px; color:var(--text-soft);">No sheet found yet for Wed, ${fmtDate(dateISO)}.</p></div>`;
+      document.getElementById('schedule-predraw').style.display = 'none';
+      document.getElementById('schedule-postdraw').style.display = 'none';
+    }
     return;
   }
 
@@ -503,7 +555,13 @@ async function renderSchedule(quiet=false, force=false){
   const waitlist = week.signups.slice(CAP);
   const drawnPools = week.pools.filter(p=>p.drawn);
 
-  let html = `<div class="session-banner">
+  // The 45s background refresh must not clobber scores or guest names being
+  // typed; a forced refresh (after an action) restores in-progress values.
+  // Checked before touching WEEK_MODEL/NEXT_MATCHES below, so an aborted
+  // refresh can't leave that state out of sync with what's still on screen.
+  if(quiet && !force && scheduleInputsBusy(content)) return;
+
+  const bannerHtml = `<div class="session-banner">
     <div><div class="date">Wed, ${fmtDate(dateISO)}</div>
     <div class="meta">Signups close noon Pacific match day</div></div>
     <div style="display:flex; gap:8px;">
@@ -512,16 +570,16 @@ async function renderSchedule(quiet=false, force=false){
     </div>
   </div>`;
 
+  let predrawHtml = '', liveHtml = '', checkinHtml = '', poolsHtml = '';
   if(drawnPools.length === 0){
-    html += `<div class="card my-panel">
+    predrawHtml = `<div class="card my-panel">
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Signups are open until <strong>noon Pacific</strong> on match day. First ${CAP} in are confirmed — everyone else is on the waitlist.</p>
       <button class="btn small" onclick="showView('join')">Add a player</button>
     </div>`;
-    html += generateCard(dateISO, confirmed);
-    html += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Confirmed (${confirmed.length}/${CAP})</h3>
+    predrawHtml += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Confirmed (${confirmed.length}/${CAP})</h3>
       <ul class="roster-list">${confirmed.length ? confirmed.map((s,i)=>rosterRow(s,i+1,'confirmed')).join('') : '<li class="empty-row">No signups yet — be the first.</li>'}</ul>
     </div>`;
-    html += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Waitlist</h3>
+    predrawHtml += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Waitlist</h3>
       <ul class="roster-list">${waitlist.length ? waitlist.map((s,i)=>rosterRow(s,i+1,'waitlist')).join('') : '<li class="empty-row">Nobody waiting right now.</li>'}</ul>
     </div>`;
   } else {
@@ -529,26 +587,35 @@ async function renderSchedule(quiet=false, force=false){
     WEEK_MODEL = model;
     GAME_INDEX = {};
     const avail = availablePlayers(model);
-    html += onCourtCard(model);
-    html += upNextCard(model, avail);
-    html += benchCard(model, avail);
-    html += poolStatusCard(dateISO, week, confirmed, drawnPools);
-    html += `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
+    liveHtml = onCourtCard(model) + upNextCard(model, avail) + benchCard(model, avail);
+    checkinHtml = `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Tap <strong>Check in</strong> as players arrive. A no-show's pool spot goes to a Guest; if they turn up before the guest plays, checking them in puts them back.</p>
       <ul class="roster-list">${confirmed.map((s,i)=>checkinRow(s,i+1,dateISO)).join('')}</ul>
     </div>`;
-    model.pools.forEach(mp=>{ html += poolLiveCard(mp, model); });
+    model.pools.forEach(mp=>{ poolsHtml += poolLiveCard(mp, model); });
   }
 
-  // The 45s background refresh must not clobber scores or guest names being
-  // typed; a forced refresh (after an action) restores in-progress values.
-  if(quiet && !force && scheduleInputsBusy(content)) return;
+  // The match-search combobox always has a non-empty, programmatically-set
+  // value (it's not free text pending submission like a score), so it's
+  // excluded here - otherwise every re-render would stomp its fresh value
+  // with whatever match was showing before.
   const snap = {};
-  content.querySelectorAll('input[id]').forEach(el=>{ if(el.value !== '') snap[el.id] = el.value; });
-  content.innerHTML = html;
+  content.querySelectorAll('input[id]').forEach(el=>{
+    if(el.value !== '' && !el.classList.contains('match-combo-input')) snap[el.id] = el.value;
+  });
+  skel.style.display = 'none';
+  document.getElementById('schedule-banner').innerHTML = bannerHtml;
+  document.getElementById('schedule-predraw').innerHTML = predrawHtml;
+  document.getElementById('schedule-predraw').style.display = drawnPools.length === 0 ? 'block' : 'none';
+  document.getElementById('schedule-postdraw').style.display = drawnPools.length === 0 ? 'none' : 'block';
+  document.getElementById('schedule-live').innerHTML = liveHtml;
+  document.getElementById('schedule-checkin').innerHTML = checkinHtml;
+  document.getElementById('schedule-pools').innerHTML = poolsHtml;
+  showScheduleSubview(scheduleSubview);
   for(const id in snap){ const el = document.getElementById(id); if(el) el.value = snap[id]; }
-  content.querySelectorAll('select[id^="next-a-"]').forEach(el=>{
-    nextSelChanged(Number(el.id.slice('next-a-'.length)));
+  Object.keys(NEXT_MATCHES).forEach(k=>{
+    const poolIdx = Number(k);
+    updateGuestInputs(poolIdx, NEXT_MATCHES[poolIdx][NEXT_SELECTED[poolIdx]]);
   });
   tickLiveTimers();
 }
@@ -639,6 +706,7 @@ async function generatePoolsClick(dateISO, redraw){
     localStorage.setItem('sw-pin-'+dateISO, pin);
   }
   renderSchedule();
+  renderAdminPoolsCard();
 }
 
 function checkinRow(s, num, dateISO){
@@ -666,6 +734,7 @@ async function statusAction(action, dateISO, name){
     alert(`${name} is checked in, but pools were already redrawn without a spot for them — use "Redraw pools" below to seat them.`);
   }
   renderSchedule(true);
+  renderAdminPoolsCard();
 }
 
 function renderAdmin(){
@@ -675,6 +744,22 @@ function renderAdmin(){
   out.style.display = 'none'; out.textContent = '';
   // A cached passphrase signs the organizer back in automatically on revisit.
   if(localStorage.getItem('sw-admin-secret')) fetchEventPin();
+  renderAdminPoolsCard();
+}
+
+// Generate/redraw pools lives here (not on This week) since it's an
+// organizer-only action; it fetches its own copy of the week so it works
+// whether or not This week has been opened yet.
+async function renderAdminPoolsCard(){
+  const dateISO = getSessionDateISO();
+  const week = await fetchWeek(dateISO);
+  const el = document.getElementById('admin-pools-card');
+  if(!week.exists){ el.innerHTML = ''; return; }
+  const confirmed = week.signups.slice(0, CAP);
+  const drawnPools = week.pools.filter(p=>p.drawn);
+  el.innerHTML = drawnPools.length === 0
+    ? generateCard(dateISO, confirmed)
+    : poolStatusCard(dateISO, week, confirmed, drawnPools);
 }
 
 async function fetchEventPin(){
@@ -804,35 +889,9 @@ function availablePlayers(model){
   return out;
 }
 
-function shuffled(arr){
-  const out = arr.slice();
-  for(let i=out.length-1;i>0;i--){
-    const r = Math.floor(Math.random()*(i+1));
-    [out[i],out[r]] = [out[r],out[i]];
-  }
-  return out;
-}
-
-// One suggestion per pool, so several courts can be called at once. Before
-// any match has started tonight, each pool's first suggestion is random;
-// after that, longest-waiting players go first. Guest games are only
-// suggested when no guest-free pairing exists in that pool - though the desk
-// can still call one manually at any time.
-function suggestForPool(model, avail, poolIdx){
-  const cands = avail.filter(c=>c.pool===poolIdx);
-  const pickFrom = (list)=>{
-    for(const p1 of list) for(const p2 of list){
-      if(p1===p2) continue;
-      if(!model.pools[poolIdx].playedSet.has(pairId(p1.i,p2.i))) return [p1,p2];
-    }
-    return null;
-  };
-  const ordered = model.matches.length === 0 ? shuffled(cands) : cands.slice().sort((a,b)=>a.since-b.since);
-  return pickFrom(ordered.filter(c=>!c.guest)) || pickFrom(ordered);
-}
 
 function onCourtCard(model){
-  const liveM = model.matches.filter(m=>!m.finishedAt);
+  const liveM = model.matches.filter(m=>!m.finishedAt).sort((a,b)=>a.pool.localeCompare(b.pool));
   if(!liveM.length) return '';
   const rows = liveM.map(m=>`
     <div class="court-row">
@@ -848,44 +907,134 @@ function onCourtCard(model){
   return `<div class="card my-panel"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">On court now</h3>${rows}</div>`;
 }
 
+// All not-yet-played pairs among this pool's available players, sorted by
+// longest-waiting player first, then by that match's longest-waiting
+// opponent. Guests have no meaningful wait time, so guest-involving pairs
+// always sort after every non-guest pairing.
+function pendingMatchesForPool(model, avail, poolIdx){
+  const cands = avail.filter(c=>c.pool===poolIdx);
+  const played = model.pools[poolIdx].playedSet;
+  const pairs = [];
+  for(let x=0; x<cands.length; x++) for(let y=x+1; y<cands.length; y++){
+    const p1 = cands[x], p2 = cands[y];
+    if(played.has(pairId(p1.i,p2.i))) continue;
+    // pair[0] is whichever of the two has waited longer (smaller since).
+    pairs.push(p1.since <= p2.since ? [p1,p2] : [p2,p1]);
+  }
+  pairs.sort((m1,m2)=>{
+    const g1 = m1[0].guest||m1[1].guest ? 1 : 0, g2 = m2[0].guest||m2[1].guest ? 1 : 0;
+    return g1-g2 || (m1[0].since-m2[0].since) || (m1[1].since-m2[1].since);
+  });
+  return pairs;
+}
+function matchOptLabel(pair){
+  return `${pair[0].name}${pair[0].guest?' (guest seat)':''} vs ${pair[1].name}${pair[1].guest?' (guest seat)':''}`;
+}
+
+let NEXT_MATCHES = {};    // poolIdx -> pending [candA, candB] pairs, this render
+let NEXT_SELECTED = {};   // poolIdx -> selected index into NEXT_MATCHES[poolIdx], sticky across re-renders
+
 function upNextCard(model, avail){
   const head = '<h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Up next</h3>';
   if(!model.hasLive){
     return `<div class="card">${head}<p style="margin:0; font-size:13px; color:var(--text-soft);">The match desk needs the updated backend — paste the new Code.gs into Apps Script and deploy a new version.</p></div>`;
   }
-  const why = model.matches.length ? 'longest waiting' : 'random first match';
   // Pool first (A, B, C, ...), then within each pool longest-waiting first;
   // guests have no meaningful wait time, so they always sort last.
   const poolsSorted = model.pools.slice().sort((a,b)=>a.label.localeCompare(b.label));
+  NEXT_MATCHES = {};
+  let any = false;
   const rows = poolsSorted.map(mp=>{
-    const cands = avail.filter(c=>c.pool===mp.idx)
-      .sort((a,b)=> (a.guest - b.guest) || (a.since - b.since));
-    const sug = suggestForPool(model, avail, mp.idx);
-    if(!sug){
+    const cands = avail.filter(c=>c.pool===mp.idx);
+    const pairs = pendingMatchesForPool(model, avail, mp.idx);
+    NEXT_MATCHES[mp.idx] = pairs;
+    if(!pairs.length){
       if(!cands.length) return '';
+      any = true;
       const msg = model.matches.some(m=>!m.finishedAt && m.pool===mp.label)
         ? 'everyone left to play is already on court'
         : 'no pairing left to call — all games are done or unavailable';
       return `<div class="next-row"><span class="pool-tag">Pool ${mp.label}</span><span class="game-note">${msg}</span></div>`;
     }
-    const opts = (sel)=> cands.map(c=>
-      `<option value="${c.i}" ${sel && sel.i===c.i ? 'selected':''}>${c.name}${c.guest?' (guest seat)':''}</option>`).join('');
+    any = true;
+    if(!(mp.idx in NEXT_SELECTED) || NEXT_SELECTED[mp.idx] >= pairs.length) NEXT_SELECTED[mp.idx] = 0;
+    const selIdx = NEXT_SELECTED[mp.idx];
+    const optionsHtml = pairs.map((pair,k)=>
+      `<div class="match-opt${k===selIdx?' sel':''}" data-idx="${k}" data-search="${escAttr((pair[0].name+' '+pair[1].name).toLowerCase())}" onclick="matchComboPick(${mp.idx}, ${k})">${matchOptLabel(pair)}</div>`
+    ).join('');
     return `<div class="next-row" data-pool="${mp.idx}">
       <span class="pool-tag">Pool ${mp.label}</span>
-      <select id="next-a-${mp.idx}" onchange="nextSelChanged(${mp.idx})">${opts(sug[0])}</select>
-      <span class="game-note">vs</span>
-      <select id="next-b-${mp.idx}" onchange="nextSelChanged(${mp.idx})">${opts(sug[1])}</select>
+      <div class="match-combo" id="match-combo-${mp.idx}">
+        <input type="text" class="match-combo-input" id="match-search-${mp.idx}" autocomplete="off" placeholder="Search players…"
+          value="${escAttr(matchOptLabel(pairs[selIdx]))}"
+          onfocus="matchComboOpen(${mp.idx})" oninput="matchComboFilter(${mp.idx})">
+        <div class="match-combo-list" id="match-combo-list-${mp.idx}">${optionsHtml}</div>
+      </div>
       <button class="btn small" id="start-match-btn-${mp.idx}" onclick="startMatchClick(${mp.idx})">Start</button>
     </div>
     <div class="guest-who" id="guest-who-a-${mp.idx}" style="display:none;"><input id="guest-name-a-${mp.idx}"></div>
-    <div class="guest-who" id="guest-who-b-${mp.idx}" style="display:none;"><input id="guest-name-b-${mp.idx}"></div>
-    <p class="note" id="next-hint-${mp.idx}" style="display:none; color:var(--loss);"></p>`;
+    <div class="guest-who" id="guest-who-b-${mp.idx}" style="display:none;"><input id="guest-name-b-${mp.idx}"></div>`;
   }).join('');
-  if(!rows) return `<div class="card">${head}<p style="margin:0; font-size:13px; color:var(--text-soft);">No games left to call anywhere — all possible pairings are done or unavailable.</p></div>`;
+  if(!any) return `<div class="card">${head}<p style="margin:0; font-size:13px; color:var(--text-soft);">No games left to call anywhere — all possible pairings are done or unavailable.</p></div>`;
   return `<div class="card">${head}
-    <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">One suggestion per pool (${why}) — change any dropdown to call a different game.</p>
+    <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">Type a player's name to filter, or pick straight from the list — one match per pool.</p>
     ${rows}
   </div>`;
+}
+
+function closeAllMatchCombos(){
+  document.querySelectorAll('.match-combo-list.open').forEach(l=>l.classList.remove('open'));
+}
+document.addEventListener('click', e=>{ if(!e.target.closest('.match-combo')) closeAllMatchCombos(); });
+
+function matchComboOpen(poolIdx){
+  closeAllMatchCombos();
+  const list = document.getElementById('match-combo-list-'+poolIdx);
+  if(list) list.classList.add('open');
+}
+function matchComboFilter(poolIdx){
+  const input = document.getElementById('match-search-'+poolIdx);
+  const list = document.getElementById('match-combo-list-'+poolIdx);
+  if(!input || !list) return;
+  list.classList.add('open');
+  const q = input.value.trim().toLowerCase();
+  let shown = 0;
+  list.querySelectorAll('.match-opt').forEach(opt=>{
+    const match = !q || opt.dataset.search.includes(q);
+    opt.style.display = match ? 'block' : 'none';
+    if(match) shown++;
+  });
+  let empty = list.querySelector('.match-combo-empty');
+  if(!shown){
+    if(!empty){ empty = document.createElement('div'); empty.className = 'match-combo-empty'; list.appendChild(empty); }
+    empty.textContent = 'No pending match for that name.';
+  } else if(empty){
+    empty.remove();
+  }
+}
+function updateGuestInputs(poolIdx, pair){
+  ['a','b'].forEach((side,i)=>{
+    const c = pair && pair[i];
+    const wrap = document.getElementById('guest-who-'+side+'-'+poolIdx);
+    if(!wrap) return;
+    const show = c && c.guest;
+    wrap.style.display = show ? 'block' : 'none';
+    if(show) wrap.querySelector('input').placeholder = `Who is playing as ${c.name}?`;
+  });
+}
+function matchComboPick(poolIdx, idx){
+  NEXT_SELECTED[poolIdx] = idx;
+  const pair = (NEXT_MATCHES[poolIdx]||[])[idx];
+  if(!pair) return;
+  const input = document.getElementById('match-search-'+poolIdx);
+  if(input) input.value = matchOptLabel(pair);
+  const list = document.getElementById('match-combo-list-'+poolIdx);
+  if(list) list.querySelectorAll('.match-opt').forEach(opt=>{
+    opt.classList.toggle('sel', Number(opt.dataset.idx)===idx);
+    opt.style.display = 'block';
+  });
+  closeAllMatchCombos();
+  updateGuestInputs(poolIdx, pair);
 }
 
 function benchCard(model, avail){
@@ -957,7 +1106,7 @@ function poolLiveCard(mp, model){
   return `<div class="card">
     <div class="pool-head"><h3>Pool ${mp.label}</h3><span class="pool-status full">${mp.names.length} players · ${done}/${mp.totalPairs} games · ${unplayed} unplayed${bonus?' · +1 rank pt':''}</span></div>
     <table class="standings">
-      <thead><tr><th style="width:30px;">#</th><th>Player</th><th class="num-col">W–L</th><th class="num-col">Pts ±</th><th class="num-col">Rank pts</th><th class="num-col">Left</th></tr></thead>
+      <thead><tr><th style="width:30px;">#</th><th>Player</th><th class="num-col" style="width:56px;">W–L</th><th class="num-col" style="width:64px;">Pts ±</th><th class="num-col" style="width:76px;">Rank pts</th><th class="num-col" style="width:52px;">Left</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     ${collapseSection(mp.label, 'played', 'Played', gameRows, games.length)}
@@ -1026,7 +1175,12 @@ function scheduleInputsBusy(content){
   const typed = el => el.type==='number' || el.type==='text';
   const ae = document.activeElement;
   if(ae && content.contains(ae) && (ae.tagName==='SELECT' || (ae.tagName==='INPUT' && typed(ae)))) return true;
-  return Array.from(content.querySelectorAll('input')).some(el=>typed(el) && el.value!=='');
+  // The match-search combobox is excluded from this fallback check - it
+  // always holds non-empty, programmatically-set text, so treating it like
+  // a half-typed score would block every future refresh once any pool has
+  // an "Up next" match to call.
+  return Array.from(content.querySelectorAll('input')).some(el=>
+    typed(el) && !el.classList.contains('match-combo-input') && el.value!=='');
 }
 
 function tickLiveTimers(){
@@ -1041,41 +1195,13 @@ function tickLiveTimers(){
 }
 setInterval(tickLiveTimers, 1000);
 
-function selCand(poolIdx, side){
-  const el = document.getElementById('next-'+side+'-'+poolIdx);
-  if(!el || el.value==='' || !WEEK_MODEL) return null;
-  const mp = WEEK_MODEL.pools[poolIdx];
-  if(!mp) return null;
-  const i = Number(el.value);
-  return {pool:poolIdx, i, name: mp.names[i]};
-}
-
-function nextSelChanged(poolIdx){
-  const a = selCand(poolIdx,'a'), b = selCand(poolIdx,'b');
-  [['a',a],['b',b]].forEach(([side,c])=>{
-    const wrap = document.getElementById('guest-who-'+side+'-'+poolIdx);
-    if(!wrap) return;
-    const show = c && isGuest(c.name);
-    wrap.style.display = show ? 'block' : 'none';
-    if(show) wrap.querySelector('input').placeholder = `Who is playing as ${c.name}?`;
-  });
-  let msg = '';
-  if(a && b){
-    if(a.i === b.i) msg = 'Pick two different players.';
-    else if(WEEK_MODEL.pools[poolIdx].playedSet.has(pairId(a.i,b.i))) msg = 'They already played each other tonight.';
-  }
-  const hint = document.getElementById('next-hint-'+poolIdx);
-  if(hint){ hint.style.display = msg ? 'block' : 'none'; hint.textContent = msg; }
-  const btn = document.getElementById('start-match-btn-'+poolIdx);
-  if(btn) btn.disabled = !!msg || !a || !b;
-}
-
 async function startMatchClick(poolIdx){
-  const a = selCand(poolIdx,'a'), b = selCand(poolIdx,'b');
-  if(!a || !b) return;
+  const pair = (NEXT_MATCHES[poolIdx]||[])[NEXT_SELECTED[poolIdx]];
+  if(!pair) return;
+  const [a,b] = pair;
   const guestNames = {};
   [['a',a],['b',b]].forEach(([side,c])=>{
-    if(!isGuest(c.name)) return;
+    if(!c.guest) return;
     const inp = document.getElementById('guest-name-'+side+'-'+poolIdx);
     if(inp && inp.value.trim()) guestNames[c.name] = inp.value.trim();
     if(inp) inp.value = '';
