@@ -325,6 +325,58 @@
     };
   }
 
+  // ---- Past weeks: canned, fully-scored sessions for the Past weeks tab ----
+  // (Mirrors what finalized weeks look like: every pair in every drawn pool
+  // has both mirrored grid cells filled.)
+  function pastWednesdays(n) {
+    const base = (typeof getSessionDateISO === 'function') ? getSessionDateISO() : new Date().toISOString().slice(0, 10);
+    const out = [];
+    for (let i = 1; i <= n; i++) {
+      const d = new Date(base + 'T12:00:00Z');
+      d.setUTCDate(d.getUTCDate() - 7 * i);
+      out.push(d.toISOString().slice(0, 10));
+    }
+    return out; // most recent first, like the real backend's weeks list
+  }
+
+  let PAST_WEEKS = null;
+  function pastWeeks() {
+    if (PAST_WEEKS) return PAST_WEEKS;
+    PAST_WEEKS = {};
+    const prand = mulberry32(42);
+    pastWednesdays(2).forEach((dateISO, wi) => {
+      const count = wi === 0 ? 18 : 14; // one 3-pool week, one 2-pool week
+      const names = NAMES.slice(0, count);
+      const sizes = splitSizes(count);
+      const pools = [];
+      let pos = 0;
+      sizes.forEach((size, pi) => {
+        const members = names.slice(pos, pos + size);
+        pos += size;
+        const grid = Array.from({ length: size }, () => Array(size).fill(''));
+        for (let i = 0; i < size; i++) for (let j = i + 1; j < size; j++) {
+          const iWins = prand() < 0.5 + (j - i) * 0.06; // better seeds win a bit more often
+          const loser = 10 + Math.floor(prand() * 10);
+          grid[i][j] = iWins ? 21 : loser;
+          grid[j][i] = iWins ? loser : 21;
+        }
+        pools.push({
+          label: LETTERS[pi], drawn: true,
+          players: members.map((n) => ({ name: n, gw: 0, gl: 0, ptsWL: '', score: '', rank: '', rankPts: '' })),
+          grid
+        });
+      });
+      PAST_WEEKS[dateISO] = {
+        date: dateISO, exists: true, hasScores: true,
+        signups: names.map((n) => ({ name: n, checkedIn: true, noShow: false })),
+        pools,
+        live: { matches: [], checkins: {} },
+        now: Date.now()
+      };
+    });
+    return PAST_WEEKS;
+  }
+
   function handlePost(body) {
     switch (body.action) {
       case 'join': return join(body.name, body.contact);
@@ -350,8 +402,11 @@
       if (!isPost) {
         const qs = String(url).split('?')[1] || '';
         const action = new URLSearchParams(qs).get('action');
-        if (action === 'rankings') return jsonResponse({ players: RANKINGS });
-        if (action === 'week') return jsonResponse(getWeek());
+        if (action === 'rankings') return jsonResponse({ players: RANKINGS, weeks: Object.keys(pastWeeks()) });
+        if (action === 'week') {
+          const date = new URLSearchParams(qs).get('date');
+          return jsonResponse(pastWeeks()[date] || getWeek());
+        }
         return jsonResponse({ error: 'mock: unknown GET action ' + action });
       }
       const body = JSON.parse((opts && opts.body) || '{}');

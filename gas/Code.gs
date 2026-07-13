@@ -8,11 +8,17 @@
  *        ADMIN_EMAILS  - comma-separated organizer emails for the weekly PIN email
  *        ADMIN_SECRET  - passphrase organizers type on the site to retrieve an event PIN
  *   2. Run setupTriggers() once (authorizes MailApp and installs the Wednesday
- *      noon trigger that emails the event PIN). sendWeeklyPin() can also be run
- *      manually to (re)send the current week's PIN.
+ *      noon trigger that emails the event PIN, plus the nightly auto-finalize
+ *      check). sendWeeklyPin() can also be run manually to (re)send the
+ *      current week's PIN.
+ *
+ * When a week's pool play completes (every game scored), the week is
+ * finalized automatically: rank points are written into the Rankings sheet
+ * as a new "M/D/YY R" + "M/D/YY RP" column pair and long-term absences are
+ * marked (see the finalization section at the bottom of this file).
  *
  * Endpoints (after deploying as a Web App):
- *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score}]}] }
+ *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score}]}], weeks: ['YYYY-MM-DD', ...] }
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools }
  *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error }
  *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error }
@@ -257,7 +263,13 @@ function getRankings() {
     });
   }
   players.sort(function (a, b) { return a.rank - b.rank; });
-  return { players: players };
+  // The RP headers are exactly the finalized weeks - the site's Past weeks
+  // list. Header order = most recent first.
+  var weeks = [];
+  for (var w = 0; w < dateLabels.length; w++) {
+    if (dateLabels[w]) weeks.push(dateLabels[w]);
+  }
+  return { players: players, weeks: weeks };
 }
 
 function addJoin(dateISO, name, contact) {
@@ -417,13 +429,19 @@ function sendWeeklyPin() {
     'It can also be retrieved any time from the organizer panel with the admin passphrase.');
 }
 
-// Run once from the editor: installs the Wednesday-noon PIN email trigger.
+// Run once from the editor: installs the Wednesday-noon PIN email trigger and
+// the nightly auto-finalize check (for scores typed straight into the sheet).
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
-    if (t.getHandlerFunction() === 'sendWeeklyPin') ScriptApp.deleteTrigger(t);
+    var fn = t.getHandlerFunction();
+    if (fn === 'sendWeeklyPin' || fn === 'autoFinalizeDaily') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('sendWeeklyPin')
     .timeBased().onWeekDay(ScriptApp.WeekDay.WEDNESDAY).atHour(12)
+    .inTimezone('America/Los_Angeles')
+    .create();
+  ScriptApp.newTrigger('autoFinalizeDaily')
+    .timeBased().everyDays(1).atHour(23)
     .inTimezone('America/Los_Angeles')
     .create();
 }
@@ -431,17 +449,24 @@ function setupTriggers() {
 // ---- Pool generation ----
 
 // Signups are often typed as short names ("Ellyn") while Rankings holds full
-// names ("Ellyn Park"): fall back to a unique-prefix match before treating a
-// player as unranked (9999 = seeded last, in signup order).
-function rankFor(rankedPlayers, name) {
+// names ("Ellyn Park"): exact match first, then fall back to a unique-prefix
+// match. `keys` are lowercased, trimmed full names; returns an index or -1.
+function matchNameIndex(keys, name) {
   var key = (name || '').trim().toLowerCase();
-  var prefixHit = null, prefixHits = 0;
-  for (var i = 0; i < rankedPlayers.length; i++) {
-    var rname = rankedPlayers[i].name.toLowerCase();
-    if (rname === key) return rankedPlayers[i].rank;
-    if (rname.indexOf(key + ' ') === 0) { prefixHit = rankedPlayers[i]; prefixHits++; }
+  var prefixHit = -1, prefixHits = 0;
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i] === key) return i;
+    if (keys[i].indexOf(key + ' ') === 0) { prefixHit = i; prefixHits++; }
   }
-  return prefixHits === 1 ? prefixHit.rank : 9999;
+  return prefixHits === 1 ? prefixHit : -1;
+}
+
+// A player's standings rank, or 9999 (= seeded last, in signup order) when
+// they can't be matched in Rankings.
+function rankFor(rankedPlayers, name) {
+  var keys = rankedPlayers.map(function (p) { return p.name.toLowerCase(); });
+  var idx = matchNameIndex(keys, name);
+  return idx === -1 ? 9999 : rankedPlayers[idx].rank;
 }
 
 // Always >= 2 pools: <=16 -> 2, <=21 -> 3, else 4. Even sizes, extras to earlier pools.
@@ -741,7 +766,7 @@ function recordScore(dateISO, matchId, scoreA, scoreB) {
   var v = validateScores(scoreA, scoreB);
   if (!v.ok) return v;
 
-  return updateLiveState(dateISO, function (state) {
+  var result = updateLiveState(dateISO, function (state) {
     var match = null;
     for (var i = 0; i < state.matches.length; i++) {
       if (state.matches[i].id === matchId) { match = state.matches[i]; break; }
@@ -756,6 +781,9 @@ function recordScore(dateISO, matchId, scoreA, scoreB) {
     if (w.infoOnly) match.infoScore = [v.a, v.b];
     return { ok: true };
   });
+  // If that was the last game, this week's rank points go to Rankings now.
+  if (result && result.ok) maybeFinalizeWeek(dateISO);
+  return result;
 }
 
 function editScore(dateISO, a, b, scoreA, scoreB, matchId) {
@@ -775,6 +803,9 @@ function editScore(dateISO, a, b, scoreA, scoreB, matchId) {
     if (slotA.letter !== slotB.letter) return { ok: false, error: 'Those players are in different pools.' };
     sheet.getRange(slotA.row, GRID_FIRST_COL + slotB.index).setValue(v.a);
     sheet.getRange(slotB.row, GRID_FIRST_COL + slotA.index).setValue(v.b);
+    // An edit can complete the week (or change already-finalized results) -
+    // refresh Rankings either way.
+    maybeFinalizeWeek(dateISO);
     return { ok: true };
   }
 
@@ -809,4 +840,271 @@ function cancelMatch(dateISO, matchId) {
     }
     return { ok: false, error: 'Match not found — it may already be cancelled.' };
   });
+}
+
+// ---- Weekly finalization: completed pool results -> Rankings sheet ----
+//
+// Once a week's round-robin is fully scored (no games left), the week's rank
+// points are written into the Rankings sheet as a new "M/D/YY R" + "M/D/YY RP"
+// column pair inserted at H (newest week first - same shape the organizer used
+// to maintain by hand). Standings then recalc through the sheet's own
+// Rank/Avg formulas. Runs after every recorded/edited score and from a
+// nightly trigger (for scores typed straight into the sheet).
+
+var RANKINGS_FIRST_WEEK_COL = 8;   // column H - the newest week pair lives here
+var RANKINGS_NAME_COL = 4;         // column D
+var RANKINGS_RANK_COL = 5;         // column E (formula)
+var RANKINGS_AVG_COL = 6;          // column F (formula)
+var RANKINGS_FIRST_DATA_ROW = 3;   // rows 1-2 are the label + header rows
+var RANKINGS_LAST_DATA_ROW = 150;  // the sheet's own formulas stop at row 150
+var ABSENCE_LABEL = '1mo absence';
+
+// Rank points use the site's rule: games won, +1 in the top pool(s) -
+// 2 pools -> no bonus, 3 pools -> Pool A, 4 pools -> Pools A & B. (The weekly
+// tab's own "Rank Pts" formula column follows an older rule - +1 for every
+// pool except the last - and is deliberately ignored.)
+function rankPtsBonus(poolIdx, drawnPoolCount) {
+  return poolIdx < drawnPoolCount - 2 ? 1 : 0;
+}
+
+// Complete = every pair in every drawn pool has both mirrored grid cells
+// filled. Guest-vs-guest games never touch the grid and are excluded;
+// real-vs-guest games do land there (as 1-0).
+function weekIsComplete(week) {
+  var drawn = week.pools.filter(function (p) { return p.drawn; });
+  if (!drawn.length) return false;
+  for (var pi = 0; pi < drawn.length; pi++) {
+    var p = drawn[pi];
+    for (var i = 0; i < p.players.length; i++) {
+      for (var j = i + 1; j < p.players.length; j++) {
+        if (isGuestLabel(p.players[i].name) && isGuestLabel(p.players[j].name)) continue;
+        var a = (p.grid[i] || [])[j], b = (p.grid[j] || [])[i];
+        if (typeof a !== 'number' || typeof b !== 'number') return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Per real player: the "A1"-style label from the tab's Rank formula column,
+// and rank points from its GW column plus the site-rule bonus.
+function computeWeekResults(week) {
+  var drawn = week.pools.filter(function (p) { return p.drawn; });
+  var results = [];
+  drawn.forEach(function (p, pi) {
+    var bonus = rankPtsBonus(pi, drawn.length);
+    p.players.forEach(function (pl) {
+      if (isGuestLabel(pl.name)) return;
+      results.push({
+        name: pl.name,
+        r: p.label + pl.rank,
+        rp: Number(pl.gw) + bonus
+      });
+    });
+  });
+  return results;
+}
+
+// Called after every recorded/edited score and by the nightly trigger; a
+// finalize failure must never break the score write that triggered it.
+function maybeFinalizeWeek(dateISO) {
+  try {
+    return finalizeWeek(dateISO);
+  } catch (err) {
+    Logger.log('maybeFinalizeWeek(' + dateISO + ') failed: ' + err);
+    return { ok: false, error: String(err) };
+  }
+}
+
+function finalizeWeek(dateISO) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    return doFinalizeWeek(dateISO);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function doFinalizeWeek(dateISO) {
+  SpreadsheetApp.flush(); // a score was possibly just written; recalc GW/Rank before reading
+  var week = getWeek(dateISO);
+  if (!week.exists) return { ok: false, error: 'No tab exists for ' + dateISO };
+  if (!week.hasScores || !weekIsComplete(week)) return { ok: false, pending: true };
+
+  var results = computeWeekResults(week);
+  if (!results.length) return { ok: false, error: 'No pool players found for ' + dateISO };
+
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
+  if (!sheet) return { ok: false, error: 'Rankings sheet not found' };
+
+  // Locate this week's column pair; first finalize inserts it at H.
+  // Re-finalizes (after a score edit) reuse it and just overwrite values.
+  var rHeaderWanted = tabNameForDate(dateISO) + ' R';
+  var header = sheet.getRange(2, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var rCol = -1; // 1-based
+  for (var c = 0; c < header.length; c++) {
+    if ((header[c] || '').toString().trim() === rHeaderWanted) { rCol = c + 1; break; }
+  }
+  var inserted = false;
+  if (rCol === -1) {
+    sheet.insertColumnsBefore(RANKINGS_FIRST_WEEK_COL, 2);
+    rCol = RANKINGS_FIRST_WEEK_COL;
+    sheet.getRange(2, rCol).setValue(rHeaderWanted);
+    sheet.getRange(2, rCol + 1).setValue(tabNameForDate(dateISO) + ' RP');
+    // The row-1 "Enter Player Results here" label shifted right with the insert.
+    var shiftedLabel = sheet.getRange(1, rCol + 2).getValue();
+    if (shiftedLabel) {
+      sheet.getRange(1, rCol).setValue(shiftedLabel);
+      sheet.getRange(1, rCol + 2).clearContent();
+    }
+    inserted = true;
+  }
+
+  var data = sheet.getDataRange().getValues();
+  var names = []; // { row (1-based), key } for every named player row
+  var lastNameRow = RANKINGS_FIRST_DATA_ROW - 1;
+  for (var r = RANKINGS_FIRST_DATA_ROW - 1; r < data.length && r < RANKINGS_LAST_DATA_ROW; r++) {
+    var nm = (data[r][RANKINGS_NAME_COL - 1] || '').toString().trim();
+    if (!nm) continue;
+    names.push({ row: r + 1, key: nm.toLowerCase() });
+    lastNameRow = r + 1;
+  }
+
+  var keys = names.map(function (n) { return n.key; });
+  var added = [], skipped = [];
+  var playedRows = {}; // 1-based row -> true; feeds the absence passes
+  results.forEach(function (res) {
+    var idx = matchNameIndex(keys, res.name);
+    var row;
+    if (idx >= 0) {
+      row = names[idx].row;
+    } else {
+      row = appendRankingsPlayer(sheet, res.name, lastNameRow);
+      if (!row) { skipped.push(res.name); return; } // row-150 cap reached
+      lastNameRow = row;
+      names.push({ row: row, key: res.name.trim().toLowerCase() });
+      keys.push(res.name.trim().toLowerCase());
+      added.push(res.name);
+    }
+    sheet.getRange(row, rCol).setValue(res.r);
+    sheet.getRange(row, rCol + 1).setValue(res.rp);
+    playedRows[row] = true;
+  });
+
+  // Inserting the week pair shifted the hardcoded $I,$K,$M,$O,$Q,$S refs in
+  // every existing Avg formula - rewrite the whole column to the canonical
+  // best-4-of-the-6-newest-weeks form.
+  if (inserted) {
+    var namedRows = {};
+    names.forEach(function (n) { namedRows[n.row] = true; });
+    var formulas = [];
+    for (var fr = RANKINGS_FIRST_DATA_ROW; fr <= lastNameRow; fr++) {
+      formulas.push([namedRows[fr] ? avgFormulaForRow(fr) : '']);
+    }
+    if (formulas.length) {
+      sheet.getRange(RANKINGS_FIRST_DATA_ROW, RANKINGS_AVG_COL, formulas.length, 1).setFormulas(formulas);
+    }
+  }
+
+  applyAbsencePasses(sheet, rCol, playedRows, names);
+
+  return { ok: true, finalized: true, date: dateISO, updated: results.length - skipped.length, added: added, skipped: skipped };
+}
+
+// New players go on the row after the last named one, with the Rank/Avg
+// formulas the sheet only prefills through existing player rows.
+function appendRankingsPlayer(sheet, name, lastNameRow) {
+  var row = Math.max(lastNameRow + 1, RANKINGS_FIRST_DATA_ROW);
+  if (row > RANKINGS_LAST_DATA_ROW) return 0;
+  sheet.getRange(row, RANKINGS_NAME_COL).setValue(name.trim());
+  sheet.getRange(row, RANKINGS_RANK_COL).setFormula('=RANK.EQ(F' + row + ', $F$3:$F$150, FALSE)');
+  sheet.getRange(row, RANKINGS_AVG_COL).setFormula(avgFormulaForRow(row));
+  return row;
+}
+
+// The Avg column hardcodes the six newest RP columns; "best 4 of the last
+// 6 weeks played" (blanks don't count, an absence 0 does).
+function avgFormulaForRow(row) {
+  var cells = ['$I', '$K', '$M', '$O', '$Q', '$S'].map(function (col) { return col + row; }).join(',');
+  return '=IFERROR(AVERAGE(LARGE({' + cells + '}, SEQUENCE(MIN(4, COUNT(' + cells + ')),1))),0)';
+}
+
+// Long-term absence: a player's 4th consecutive missed week is marked
+// "1mo absence" with 0 rank points, so the 0 enters their best-4-of-6 average
+// and consistent attendees move past them. Once they've attended 2 weeks
+// again, the artificial 0 is erased (the text stays, as the organizer always
+// kept it). While an absence 0 still sits inside the 6-week average window no
+// new one is added - reproducing the organizer's manual cadence for very long
+// absences. Both passes are idempotent, so re-finalizing after an edit is safe.
+function applyAbsencePasses(sheet, rCol, playedRows, names) {
+  SpreadsheetApp.flush();
+  var data = sheet.getDataRange().getValues();
+  var header = data[1] || [];
+  var weekCols = []; // every week's R column, 0-based, sheet order = newest first
+  for (var c = 0; c < header.length; c++) {
+    if (/ R$/.test((header[c] || '').toString()) && headerToISODate((header[c] || '').toString())) {
+      weekCols.push(c);
+    }
+  }
+  var cur = weekCols.indexOf(rCol - 1);
+  if (cur === -1) return;
+
+  function attended(rowVals, wc) {
+    return /^[A-D]\d+$/.test((rowVals[wc] || '').toString().trim());
+  }
+  // An absence marker whose 0 is still dragging the average.
+  function absenceZero(rowVals, wc) {
+    var label = (rowVals[wc] || '').toString().trim();
+    var rp = rowVals[wc + 1];
+    return !!label && !attended(rowVals, wc) && rp !== '' && Number(rp) === 0;
+  }
+
+  names.forEach(function (n) {
+    var rowVals = data[n.row - 1] || [];
+
+    if (playedRows[n.row]) {
+      // Comeback: 2 attended weeks since a marker erase that marker's 0.
+      // Columns before index k are newer than the marker (this week included,
+      // since its R value is already written and re-read above).
+      for (var k = cur + 1; k < weekCols.length; k++) {
+        if (!absenceZero(rowVals, weekCols[k])) continue;
+        var backWeeks = 0;
+        for (var a = 0; a < k; a++) {
+          if (attended(rowVals, weekCols[a])) backWeeks++;
+        }
+        if (backWeeks >= 2) sheet.getRange(n.row, weekCols[k] + 2).clearContent();
+      }
+      return;
+    }
+
+    // Absent this week: mark the 4th consecutive miss.
+    if ((rowVals[weekCols[cur]] || '').toString().trim()) return; // organizer already labelled it
+    if (cur + 3 >= weekCols.length) return; // not enough history yet
+    for (var p = 1; p <= 3; p++) {
+      if (attended(rowVals, weekCols[cur + p])) return; // streak broken
+    }
+    var playedEver = weekCols.some(function (wc) { return attended(rowVals, wc); });
+    if (!playedEver) return; // never mark a row that never played
+    for (var w = 0; w < 6 && w < weekCols.length; w++) {
+      if (absenceZero(rowVals, weekCols[w])) return; // a 0 already drags this average
+    }
+    sheet.getRange(n.row, weekCols[cur] + 1).setValue(ABSENCE_LABEL);
+    sheet.getRange(n.row, weekCols[cur] + 2).setValue(0);
+  });
+}
+
+// Nightly-trigger fallback so weeks whose last scores were typed straight
+// into the sheet still finalize. Only the most recent Wednesday, and only
+// within 3 days of it - never back-fills older weeks.
+function autoFinalizeDaily() {
+  var tz = 'America/Los_Angeles';
+  var now = new Date();
+  for (var i = 0; i <= 3; i++) {
+    var d = new Date(now.getTime() - i * 86400000);
+    if (Utilities.formatDate(d, tz, 'u') === '3') {
+      maybeFinalizeWeek(Utilities.formatDate(d, tz, 'yyyy-MM-dd'));
+      return;
+    }
+  }
 }

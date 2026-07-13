@@ -106,7 +106,8 @@
   .stat .value{font-family:'Oswald'; font-size:26px; color:var(--ink);}
   form .field{margin-bottom:14px;}
   form label{display:block; font-size:13px; font-weight:500; margin-bottom:5px; color:var(--text);}
-  form input, form select{width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px; background:#fff;}
+  form input, form select, .week-select{width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:8px; font-family:'Inter'; font-size:14px; background:#fff;}
+  .week-select{max-width:260px; margin-bottom:14px;}
   .radio-row{display:flex; gap:8px; flex-wrap:wrap;}
   .radio-row label{border:1px solid var(--border); border-radius:8px; padding:8px 12px; font-weight:400; font-size:13px; cursor:pointer; display:flex; align-items:center; gap:6px; margin:0;}
   .radio-row input{width:auto;}
@@ -200,6 +201,7 @@
     <nav>
       <button data-view="standings" class="active">Standings</button>
       <button data-view="schedule">This week</button>
+      <button data-view="history">Past weeks</button>
       <button data-view="join">Join</button>
       <button data-view="admin">Admin</button>
     </nav>
@@ -242,6 +244,15 @@
         <div id="schedule-pools" class="subview"></div>
       </div>
     </div>
+  </section>
+
+  <section id="view-history" class="view">
+    <div class="page-head">
+      <h2>Past weeks</h2>
+      <p>Final pool results from completed sessions.</p>
+    </div>
+    <select id="history-week" class="week-select" aria-label="Pick a week"></select>
+    <div id="history-content"></div>
   </section>
 
   <section id="view-join" class="view">
@@ -337,14 +348,15 @@
 <script>
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzBdibEu1hw4dri1-cfT_ql406Sc5pvBCU_u1Z2L5dEJDr9Imsw0kePRiTMgX4Uv8C8ag/exec';
 let PLAYERS = [];
+let WEEKS = []; // finalized week dates (ISO), most recent first
 const CAP = 24;
 
 async function fetchRankings(){
   try{
     const r = await fetch(GAS_URL+'?action=rankings');
     const j = await r.json();
-    return j.players || [];
-  }catch(e){ return []; }
+    return {players: j.players || [], weeks: j.weeks || []};
+  }catch(e){ return {players:[], weeks:[]}; }
 }
 async function fetchWeek(dateISO){
   try{
@@ -490,6 +502,7 @@ function showView(name){
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active', b.dataset.view===name));
   setScheduleTimer(name==='schedule'); // keeps the check-in board live during league play
   if(name==='schedule') renderSchedule();
+  if(name==='history') renderHistory();
   if(name==='join') renderJoinOptions();
   if(name==='admin') renderAdmin();
 }
@@ -1124,6 +1137,81 @@ function collapseSection(poolLabel, key, title, rowsHtml, count){
   </details>`;
 }
 
+// ---- Past weeks (completed pool results) ----
+const WEEK_CACHE = {};
+let historyToken = 0;
+
+function fmtDateFull(iso){
+  return new Date(iso+'T12:00:00Z').toLocaleDateString('en-US',{timeZone:'UTC',month:'short',day:'numeric',year:'numeric'});
+}
+
+function renderHistory(){
+  const sel = document.getElementById('history-week');
+  const content = document.getElementById('history-content');
+  if(!WEEKS.length){
+    sel.style.display = 'none';
+    content.innerHTML = '<div class="card"><p style="margin:0; font-size:14px; color:var(--text-soft);">No completed weeks yet — results show up here once a week\'s games are all played.</p></div>';
+    return;
+  }
+  sel.style.display = '';
+  const prev = sel.value;
+  sel.innerHTML = WEEKS.map(d=>`<option value="${d}">Wed, ${fmtDateFull(d)}</option>`).join('');
+  sel.value = (prev && WEEKS.includes(prev)) ? prev : WEEKS[0];
+  loadHistoryWeek(sel.value);
+}
+document.getElementById('history-week').addEventListener('change', e=>loadHistoryWeek(e.target.value));
+
+async function loadHistoryWeek(dateISO){
+  const content = document.getElementById('history-content');
+  const myToken = ++historyToken;
+  if(!WEEK_CACHE[dateISO]){
+    content.innerHTML = '<div class="skel">Loading results…</div>';
+    WEEK_CACHE[dateISO] = await fetchWeek(dateISO);
+  }
+  if(myToken !== historyToken) return; // a newer selection is in flight
+  const week = WEEK_CACHE[dateISO];
+  const model = week.exists ? buildLiveModel(week) : {pools:[]};
+  if(!model.pools.length){
+    content.innerHTML = '<div class="card"><p style="margin:0; font-size:14px; color:var(--text-soft);">No pool results found for this week.</p></div>';
+    return;
+  }
+  content.innerHTML = model.pools.map(mp=>poolResultsCard(mp, model)).join('');
+}
+
+// Read-only summary of a past week's pool: final order, W-L, points +/- and
+// rank points - same ordering and bonus rule as the live card.
+function poolResultsCard(mp, model){
+  const bonus = mp.idx < model.pools.length - 2 ? 1 : 0;
+  const order = mp.names.map((_,i)=>i).sort((x,y)=>{
+    const s = mp.stats;
+    return ((s[y].gw-s[y].gl)-(s[x].gw-s[x].gl))
+        || ((s[y].pf-s[y].pa)-(s[x].pf-s[x].pa))
+        || (x-y);
+  });
+  const rows = order.map((i,pos)=>{
+    const s = mp.stats[i], name = mp.names[i];
+    const diff = s.pf-s.pa;
+    return `<tr>
+      <td><span class="num" style="color:var(--text-mute);">${pos+1}</span></td>
+      <td class="p-name">${name}${isGuest(name)?' <span class="mine-badge">guest</span>':''}</td>
+      <td class="num-col num">${s.gw}–${s.gl}</td>
+      <td class="num-col num">${diff>0?'+':''}${diff}</td>
+      <td class="num-col num">${s.played ? s.gw+bonus : '–'}</td>
+    </tr>`;
+  }).join('');
+  const played = mp.pairs.filter(g=>g.complete);
+  const gameRows = played.map(g=>
+    `<div class="game-row"><span class="vs">${mp.names[g.i]} <strong class="num">${g.a}–${g.b}</strong> ${mp.names[g.j]}</span></div>`).join('');
+  return `<div class="card">
+    <div class="pool-head"><h3>Pool ${mp.label}</h3><span class="pool-status full">${mp.names.length} players · ${played.length}/${mp.totalPairs} games${bonus?' · +1 rank pt':''}</span></div>
+    <table class="standings">
+      <thead><tr><th style="width:30px;">#</th><th>Player</th><th class="num-col" style="width:56px;">W–L</th><th class="num-col" style="width:64px;">Pts ±</th><th class="num-col" style="width:76px;">Rank pts</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${collapseSection('hist-'+mp.label, 'played', 'Games', gameRows, played.length)}
+  </div>`;
+}
+
 function findFinishedMatch(model, poolLabel, nameA, nameB){
   const want = [playerKey(nameA), playerKey(nameB)].sort().join('|');
   let best = null;
@@ -1421,7 +1509,7 @@ function resetJoinForm(){
 localStorage.removeItem('sw-admin-secret');
 Object.keys(localStorage).filter(k=>k.startsWith('sw-pin-')).forEach(k=>localStorage.removeItem(k));
 
-fetchRankings().then(players=>{ PLAYERS = players; renderStandings(); });
+fetchRankings().then(({players, weeks})=>{ PLAYERS = players; WEEKS = weeks; renderStandings(); });
 renderSchedule();
 renderJoinOptions();
 </script>
