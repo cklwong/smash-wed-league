@@ -589,9 +589,13 @@ async function renderSchedule(quiet=false, force=false){
     const avail = availablePlayers(model);
     liveHtml = onCourtCard(model) + upNextCard(model, avail) + benchCard(model, avail);
     checkinHtml = poolStatusCard(dateISO, week, confirmed, drawnPools);
+    // Alphabetical is easier to scan at the door, but the join-order number
+    // (who signed up first / first off the waitlist) still needs to show,
+    // so it's captured before the sort rather than derived from position.
+    const checkinList = confirmed.map((s,i)=>({s, joinNum:i+1})).sort((a,b)=>a.s.name.localeCompare(b.s.name));
     checkinHtml += `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Tap <strong>Check in</strong> as players arrive. A no-show's pool spot goes to a Guest; if they turn up before the guest plays, checking them in puts them back.</p>
-      <ul class="roster-list">${confirmed.map((s,i)=>checkinRow(s,i+1,dateISO)).join('')}</ul>
+      <ul class="roster-list">${checkinList.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO)).join('')}</ul>
     </div>`;
     model.pools.forEach(mp=>{ poolsHtml += poolLiveCard(mp, model); });
   }
