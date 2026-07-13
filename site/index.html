@@ -900,7 +900,7 @@ function shuffled(arr){
 
 
 function onCourtCard(model){
-  const liveM = model.matches.filter(m=>!m.finishedAt);
+  const liveM = model.matches.filter(m=>!m.finishedAt).sort((a,b)=>a.pool.localeCompare(b.pool));
   if(!liveM.length) return '';
   const rows = liveM.map(m=>`
     <div class="court-row">
