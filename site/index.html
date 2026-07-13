@@ -1106,7 +1106,7 @@ function poolLiveCard(mp, model){
   return `<div class="card">
     <div class="pool-head"><h3>Pool ${mp.label}</h3><span class="pool-status full">${mp.names.length} players · ${done}/${mp.totalPairs} games · ${unplayed} unplayed${bonus?' · +1 rank pt':''}</span></div>
     <table class="standings">
-      <thead><tr><th style="width:30px;">#</th><th>Player</th><th class="num-col">W–L</th><th class="num-col">Pts ±</th><th class="num-col">Rank pts</th><th class="num-col">Left</th></tr></thead>
+      <thead><tr><th style="width:30px;">#</th><th>Player</th><th class="num-col" style="width:56px;">W–L</th><th class="num-col" style="width:64px;">Pts ±</th><th class="num-col" style="width:76px;">Rank pts</th><th class="num-col" style="width:52px;">Left</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     ${collapseSection(mp.label, 'played', 'Played', gameRows, games.length)}
