@@ -690,14 +690,20 @@ function poolStatusCard(dateISO, week, confirmed, drawnPools){
 
 async function generatePoolsClick(dateISO, redraw){
   if(redraw && !confirm('Redraw pools now? No-shows are left out and everyone else is re-seeded by standings.')) return;
-  const pin = (prompt("Enter tonight's pool PIN:")||'').trim();
-  if(!pin) return;
+  let pin = sessionStorage.getItem('sw-pin-'+dateISO);
+  if(!pin){
+    pin = (prompt("Enter tonight's pool PIN:")||'').trim();
+    if(!pin) return;
+  }
   const padGuests = Array.from(document.querySelectorAll('input[name="pad-guest"]:checked')).map(i=>i.value);
   const btn = document.getElementById('gen-pools-btn');
   if(btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
   const res = await postAction({action:'generatePools', date:dateISO, pin, padGuests, redraw});
   if(!res.ok){
+    sessionStorage.removeItem('sw-pin-'+dateISO);
     alert(res.error || 'Could not generate pools — please try again.');
+  } else {
+    sessionStorage.setItem('sw-pin-'+dateISO, pin);
   }
   renderSchedule();
   renderAdminPoolsCard();
@@ -732,15 +738,17 @@ async function statusAction(action, dateISO, name){
 }
 
 function renderAdmin(){
-  document.getElementById('admin-secret').value = '';
+  document.getElementById('admin-secret').value = sessionStorage.getItem('sw-admin-secret') || '';
   document.getElementById('admin-mock-card').style.display = 'none';
   const out = document.getElementById('admin-pin-out');
   out.style.display = 'none'; out.textContent = '';
+  // A passphrase cached for this browser tab signs the organizer back in automatically.
+  if(sessionStorage.getItem('sw-admin-secret')) fetchEventPin();
 }
 
 async function fetchEventPin(){
   const inp = document.getElementById('admin-secret');
-  const secret = inp.value.trim();
+  const secret = inp.value.trim() || sessionStorage.getItem('sw-admin-secret') || '';
   const out = document.getElementById('admin-pin-out');
   out.style.display = 'block';
   document.getElementById('admin-mock-card').style.display = 'none';
@@ -749,10 +757,13 @@ async function fetchEventPin(){
   const dateISO = getSessionDateISO();
   const res = await postAction({action:'getpin', date:dateISO, secret});
   if(!res.ok){
+    sessionStorage.removeItem('sw-admin-secret');
     out.textContent = res.error || 'Could not retrieve the PIN.';
     return;
   }
-  out.innerHTML = `Signed in. PIN for Wed, ${fmtDate(dateISO)}: <strong class="num">${res.pin}</strong>`;
+  sessionStorage.setItem('sw-admin-secret', secret);
+  sessionStorage.setItem('sw-pin-'+dateISO, res.pin);
+  out.innerHTML = `Signed in. PIN for Wed, ${fmtDate(dateISO)}: <strong class="num">${res.pin}</strong> — remembered for this browser tab only.`;
   document.getElementById('admin-mock-card').style.display = 'block';
 }
 
@@ -1392,7 +1403,8 @@ function resetJoinForm(){
   renderJoinOptions();
 }
 
-// no longer persisted; purge any admin secret / event PIN cached by an older version
+// admin secret / event PIN now live in sessionStorage only; purge any values
+// an older version left in localStorage so they don't persist across devices/days
 localStorage.removeItem('sw-admin-secret');
 Object.keys(localStorage).filter(k=>k.startsWith('sw-pin-')).forEach(k=>localStorage.removeItem(k));
 
