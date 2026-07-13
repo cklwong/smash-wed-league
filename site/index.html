@@ -889,15 +889,6 @@ function availablePlayers(model){
   return out;
 }
 
-function shuffled(arr){
-  const out = arr.slice();
-  for(let i=out.length-1;i>0;i--){
-    const r = Math.floor(Math.random()*(i+1));
-    [out[i],out[r]] = [out[r],out[i]];
-  }
-  return out;
-}
-
 
 function onCourtCard(model){
   const liveM = model.matches.filter(m=>!m.finishedAt).sort((a,b)=>a.pool.localeCompare(b.pool));
@@ -916,26 +907,24 @@ function onCourtCard(model){
   return `<div class="card my-panel"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">On court now</h3>${rows}</div>`;
 }
 
-// All not-yet-played pairs among this pool's available players: non-guest
-// pairs before guest pairs, and within each group by whoever's waited
-// longest (or shuffled, before any match has been played tonight).
+// All not-yet-played pairs among this pool's available players, sorted by
+// longest-waiting player first, then by that match's longest-waiting
+// opponent. Guests have no meaningful wait time, so guest-involving pairs
+// always sort after every non-guest pairing.
 function pendingMatchesForPool(model, avail, poolIdx){
   const cands = avail.filter(c=>c.pool===poolIdx);
-  const ordered = model.matches.length === 0 ? shuffled(cands) : cands.slice().sort((a,b)=>a.since-b.since);
-  const seen = new Set();
+  const played = model.pools[poolIdx].playedSet;
   const pairs = [];
-  const addPairs = (list)=>{
-    for(const p1 of list) for(const p2 of list){
-      if(p1===p2) continue;
-      if(model.pools[poolIdx].playedSet.has(pairId(p1.i,p2.i))) continue;
-      const key = pairId(p1.i,p2.i);
-      if(seen.has(key)) continue;
-      seen.add(key);
-      pairs.push([p1,p2]);
-    }
-  };
-  addPairs(ordered.filter(c=>!c.guest));
-  addPairs(ordered); // adds anything still unseen - i.e. pairs involving a guest
+  for(let x=0; x<cands.length; x++) for(let y=x+1; y<cands.length; y++){
+    const p1 = cands[x], p2 = cands[y];
+    if(played.has(pairId(p1.i,p2.i))) continue;
+    // pair[0] is whichever of the two has waited longer (smaller since).
+    pairs.push(p1.since <= p2.since ? [p1,p2] : [p2,p1]);
+  }
+  pairs.sort((m1,m2)=>{
+    const g1 = m1[0].guest||m1[1].guest ? 1 : 0, g2 = m2[0].guest||m2[1].guest ? 1 : 0;
+    return g1-g2 || (m1[0].since-m2[0].since) || (m1[1].since-m2[1].since);
+  });
   return pairs;
 }
 function matchOptLabel(pair){
