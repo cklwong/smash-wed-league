@@ -714,19 +714,29 @@ function checkinRow(s, num, dateISO){
   let status = '', actions = '';
   if(s.checkedIn){
     status = ' <span class="mine-badge ok">Checked in</span>';
-    actions = `<button class="btn small ghost" onclick="statusAction('clearstatus','${dateISO}','${esc}')">Undo</button>`;
+    actions = `<button class="btn small ghost" onclick="statusAction(this,'clearstatus','${dateISO}','${esc}')">Undo</button>`;
   } else if(s.noShow){
     status = ' <span class="mine-badge ns">No show</span>';
-    actions = `<button class="btn small" onclick="statusAction('checkin','${dateISO}','${esc}')">Check in</button>`;
+    actions = `<button class="btn small" onclick="statusAction(this,'checkin','${dateISO}','${esc}')">Check in</button>`;
   } else {
-    actions = `<button class="btn small" onclick="statusAction('checkin','${dateISO}','${esc}')">Check in</button>
-      <button class="btn small noshow" onclick="statusAction('noshow','${dateISO}','${esc}')">No show</button>`;
+    actions = `<button class="btn small" onclick="statusAction(this,'checkin','${dateISO}','${esc}')">Check in</button>
+      <button class="btn small noshow" onclick="statusAction(this,'noshow','${dateISO}','${esc}')">No show</button>`;
   }
   return `<li><span class="num">${num}</span><span class="rname">${s.name}${status}</span><span class="checkin-actions">${actions}</span></li>`;
 }
 
-async function statusAction(action, dateISO, name){
+// Flip the tapped row's badge/buttons immediately rather than waiting on the
+// round trip to Apps Script (which can take a couple seconds) - the
+// renderSchedule(true) call below still fetches the authoritative state
+// afterward, so a failed request or a seat conflict self-corrects right away.
+async function statusAction(btnEl, action, dateISO, name){
   if(action==='noshow' && !confirm(`Mark ${name} as a no-show? Their pool spot goes to a Guest.`)) return;
+  const li = btnEl.closest('li');
+  if(li){
+    const num = li.querySelector('.num')?.textContent || '';
+    const optimistic = {name, checkedIn: action==='checkin', noShow: action==='noshow'};
+    li.outerHTML = checkinRow(optimistic, num, dateISO);
+  }
   const res = await postAction({action, date:dateISO, name});
   if(!res.ok){
     alert(res.error || 'Could not update — please try again.');
