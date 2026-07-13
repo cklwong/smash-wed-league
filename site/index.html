@@ -623,20 +623,14 @@ function poolStatusCard(dateISO, week, confirmed, drawnPools){
 
 async function generatePoolsClick(dateISO, redraw){
   if(redraw && !confirm('Redraw pools now? No-shows are left out and everyone else is re-seeded by standings.')) return;
-  let pin = localStorage.getItem('sw-pin-'+dateISO);
-  if(!pin){
-    pin = (prompt("Enter tonight's pool PIN:")||'').trim();
-    if(!pin) return;
-  }
+  const pin = (prompt("Enter tonight's pool PIN:")||'').trim();
+  if(!pin) return;
   const padGuests = Array.from(document.querySelectorAll('input[name="pad-guest"]:checked')).map(i=>i.value);
   const btn = document.getElementById('gen-pools-btn');
   if(btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
   const res = await postAction({action:'generatePools', date:dateISO, pin, padGuests, redraw});
   if(!res.ok){
-    localStorage.removeItem('sw-pin-'+dateISO);
     alert(res.error || 'Could not generate pools — please try again.');
-  } else {
-    localStorage.setItem('sw-pin-'+dateISO, pin);
   }
   renderSchedule();
 }
@@ -669,17 +663,15 @@ async function statusAction(action, dateISO, name){
 }
 
 function renderAdmin(){
-  document.getElementById('admin-secret').value = localStorage.getItem('sw-admin-secret') || '';
+  document.getElementById('admin-secret').value = '';
   document.getElementById('admin-mock-card').style.display = 'none';
   const out = document.getElementById('admin-pin-out');
   out.style.display = 'none'; out.textContent = '';
-  // A cached passphrase signs the organizer back in automatically on revisit.
-  if(localStorage.getItem('sw-admin-secret')) fetchEventPin();
 }
 
 async function fetchEventPin(){
   const inp = document.getElementById('admin-secret');
-  const secret = inp.value.trim() || localStorage.getItem('sw-admin-secret') || '';
+  const secret = inp.value.trim();
   const out = document.getElementById('admin-pin-out');
   out.style.display = 'block';
   document.getElementById('admin-mock-card').style.display = 'none';
@@ -688,13 +680,10 @@ async function fetchEventPin(){
   const dateISO = getSessionDateISO();
   const res = await postAction({action:'getpin', date:dateISO, secret});
   if(!res.ok){
-    localStorage.removeItem('sw-admin-secret');
     out.textContent = res.error || 'Could not retrieve the PIN.';
     return;
   }
-  localStorage.setItem('sw-admin-secret', secret);
-  localStorage.setItem('sw-pin-'+dateISO, res.pin);
-  out.innerHTML = `Signed in. PIN for Wed, ${fmtDate(dateISO)}: <strong class="num">${res.pin}</strong> — saved on this device, so Generate pools won't ask again.`;
+  out.innerHTML = `Signed in. PIN for Wed, ${fmtDate(dateISO)}: <strong class="num">${res.pin}</strong>`;
   document.getElementById('admin-mock-card').style.display = 'block';
 }
 
@@ -1292,6 +1281,10 @@ function resetJoinForm(){
   document.getElementById('join-confirm').classList.remove('active');
   renderJoinOptions();
 }
+
+// no longer persisted; purge any admin secret / event PIN cached by an older version
+localStorage.removeItem('sw-admin-secret');
+Object.keys(localStorage).filter(k=>k.startsWith('sw-pin-')).forEach(k=>localStorage.removeItem(k));
 
 fetchRankings().then(players=>{ PLAYERS = players; renderStandings(); });
 renderSchedule();
