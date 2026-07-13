@@ -305,7 +305,6 @@
       </div>
       <p class="note" id="admin-pin-out" style="display:none;"></p>
     </div>
-    <div id="admin-pools-card"></div>
     <div class="card" style="max-width:440px; display:none;" id="admin-mock-card">
       <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Developer sandbox</h3>
       <p class="note" style="margin:0 0 8px;">Experiment with the match desk using local sample data — no spreadsheet required, nothing here touches the real roster.</p>
@@ -576,6 +575,7 @@ async function renderSchedule(quiet=false, force=false){
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Signups are open until <strong>noon Pacific</strong> on match day. First ${CAP} in are confirmed — everyone else is on the waitlist.</p>
       <button class="btn small" onclick="showView('join')">Add a player</button>
     </div>`;
+    predrawHtml += generateCard(dateISO, confirmed);
     predrawHtml += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Confirmed (${confirmed.length}/${CAP})</h3>
       <ul class="roster-list">${confirmed.length ? confirmed.map((s,i)=>rosterRow(s,i+1,'confirmed')).join('') : '<li class="empty-row">No signups yet — be the first.</li>'}</ul>
     </div>`;
@@ -588,7 +588,8 @@ async function renderSchedule(quiet=false, force=false){
     GAME_INDEX = {};
     const avail = availablePlayers(model);
     liveHtml = onCourtCard(model) + upNextCard(model, avail) + benchCard(model, avail);
-    checkinHtml = `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
+    checkinHtml = poolStatusCard(dateISO, week, confirmed, drawnPools);
+    checkinHtml += `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Tap <strong>Check in</strong> as players arrive. A no-show's pool spot goes to a Guest; if they turn up before the guest plays, checking them in puts them back.</p>
       <ul class="roster-list">${confirmed.map((s,i)=>checkinRow(s,i+1,dateISO)).join('')}</ul>
     </div>`;
@@ -653,7 +654,7 @@ function generateCard(dateISO, confirmed){
     body = `<p style="margin:0 0 4px; font-size:13px; color:var(--text-soft);">${n} registered → <strong>${sizes.length} pools</strong> by standings (${preview}).</p>
       ${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
       <button class="btn" id="gen-pools-btn" onclick="generatePoolsClick('${dateISO}', false)">Generate pools</button>
-      <p class="note" style="margin-top:8px;">Needs tonight's PIN — emailed to organizers at noon, or grab it from Organizer access below.</p>`;
+      <p class="note" style="margin-top:8px;">Needs tonight's PIN — emailed to organizers at noon, or grab it from the Admin tab.</p>`;
   }
   return `<div class="card"><h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Generate pools <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>${body}</div>`;
 }
@@ -706,7 +707,6 @@ async function generatePoolsClick(dateISO, redraw){
     sessionStorage.setItem('sw-pin-'+dateISO, pin);
   }
   renderSchedule();
-  renderAdminPoolsCard();
 }
 
 function checkinRow(s, num, dateISO){
@@ -731,10 +731,9 @@ async function statusAction(action, dateISO, name){
   if(!res.ok){
     alert(res.error || 'Could not update — please try again.');
   } else if(action==='checkin' && res.seated===false){
-    alert(`${name} is checked in, but pools were already redrawn without a spot for them — use "Redraw pools" below to seat them.`);
+    alert(`${name} is checked in, but pools were already redrawn without a spot for them — use "Redraw pools" above to seat them.`);
   }
   renderSchedule(true);
-  renderAdminPoolsCard();
 }
 
 function renderAdmin(){
