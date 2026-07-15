@@ -397,6 +397,10 @@ function pacificNoonTimestamp(dateISO){
   return guess;
 }
 function getSessionDateISO(){
+  // Dev/demo override: ?date=YYYY-MM-DD points the whole site at that week's
+  // tab instead of the current session. Absent in production links.
+  const devDate = new URLSearchParams(location.search).get('date');
+  if(devDate && /^\d{4}-\d{2}-\d{2}$/.test(devDate)) return devDate;
   const now = new Date();
   const p = partsInTZ(now,'America/Los_Angeles');
   const wd = new Date(Date.UTC(+p.year,+p.month-1,+p.day)).getUTCDay();
@@ -535,6 +539,7 @@ document.getElementById('schedule-subnav').addEventListener('click', e=>{
 });
 
 let scheduleRenderToken = 0;
+let LAST_WEEK = null; // last painted week payload; optimistic actions mutate it and repaint
 async function renderSchedule(quiet=false, force=false){
   const dateISO = getSessionDateISO();
   document.getElementById('schedule-sub').textContent = `Wed, ${fmtDate(dateISO)} · pools & results as entered by the organizer`;
@@ -561,17 +566,28 @@ async function renderSchedule(quiet=false, force=false){
     return;
   }
 
-  WEEK_DATE = dateISO;
-  if(week.now) SERVER_OFFSET = week.now - Date.now();
-  const confirmed = week.signups.slice(0, CAP);
-  const waitlist = week.signups.slice(CAP);
-  const drawnPools = week.pools.filter(p=>p.drawn);
-
   // The 45s background refresh must not clobber scores or guest names being
   // typed; a forced refresh (after an action) restores in-progress values.
   // Checked before touching WEEK_MODEL/NEXT_MATCHES below, so an aborted
   // refresh can't leave that state out of sync with what's still on screen.
   if(quiet && !force && scheduleInputsBusy(content)) return;
+
+  WEEK_DATE = dateISO;
+  if(week.now) SERVER_OFFSET = week.now - Date.now();
+  LAST_WEEK = week;
+  paintSchedule(week, dateISO);
+}
+
+// Pure repaint of an already-fetched week - no network. Optimistic action
+// handlers call this directly with a locally patched LAST_WEEK so the board
+// updates instantly instead of waiting out two backend round-trips.
+function paintSchedule(week, dateISO){
+  dateISO = dateISO || week.date;
+  const content = document.getElementById('schedule-content');
+  const skel = document.getElementById('schedule-skel');
+  const confirmed = week.signups.slice(0, CAP);
+  const waitlist = week.signups.slice(CAP);
+  const drawnPools = week.pools.filter(p=>p.drawn);
 
   const bannerHtml = `<div class="session-banner">
     <div><div class="date">Wed, ${fmtDate(dateISO)}</div>
@@ -1280,6 +1296,11 @@ function tickLiveTimers(){
 }
 setInterval(tickLiveTimers, 1000);
 
+function newMatchId(){
+  return (crypto && crypto.randomUUID) ? crypto.randomUUID()
+    : 'm-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
+}
+
 async function startMatchClick(poolIdx){
   const pair = (NEXT_MATCHES[poolIdx]||[])[NEXT_SELECTED[poolIdx]];
   if(!pair) return;
@@ -1293,8 +1314,19 @@ async function startMatchClick(poolIdx){
   });
   const btn = document.getElementById('start-match-btn-'+poolIdx);
   if(btn){ btn.disabled = true; btn.textContent = 'Starting…'; }
-  const res = await postAction({action:'startMatch', date:WEEK_DATE, a:a.name, b:b.name, guestNames});
+  // The id is minted here so the match can go straight onto the board with a
+  // working Record/Cancel before the backend round-trip finishes; the backend
+  // stores the same id.
+  const id = newMatchId();
+  if(LAST_WEEK && LAST_WEEK.live && WEEK_MODEL && WEEK_MODEL.pools[poolIdx]){
+    const m = {id, pool: WEEK_MODEL.pools[poolIdx].label, a: a.name, b: b.name, startedAt: Date.now()+SERVER_OFFSET};
+    if(Object.keys(guestNames).length) m.guestNames = guestNames;
+    LAST_WEEK.live.matches.push(m);
+    paintSchedule(LAST_WEEK);
+  }
+  const res = await postAction({action:'startMatch', id, date:WEEK_DATE, a:a.name, b:b.name, guestNames});
   if(!res.ok) alert(res.error || 'Could not start the match — please try again.');
+  // Reconcile with the server (or roll the optimistic card back on error).
   renderSchedule(true, true);
 }
 
@@ -1307,19 +1339,49 @@ function checkScores(a, b){
   return {a:na, b:nb};
 }
 
+// Applies a just-recorded score to the cached week the same way the backend
+// writes it to the sheet (writePairScore): real scores in the grid, 1-0 for a
+// real-vs-guest game, nothing for guest-vs-guest (played state comes from the
+// match log). Repaints instantly; the follow-up re-fetch reconciles.
+function applyScoreLocally(match, a, b){
+  match.finishedAt = Date.now()+SERVER_OFFSET;
+  const gA = isGuest(match.a), gB = isGuest(match.b);
+  if(gA && gB){ match.infoScore = [a, b]; return; }
+  let recA = a, recB = b;
+  if(gA){ recA = 0; recB = 1; }
+  if(gB){ recA = 1; recB = 0; }
+  const p = LAST_WEEK.pools.find(pp=>pp.drawn && pp.label===match.pool);
+  if(!p) return;
+  const i = p.players.findIndex(pl=>playerKey(pl.name)===playerKey(match.a));
+  const j = p.players.findIndex(pl=>playerKey(pl.name)===playerKey(match.b));
+  if(i<0 || j<0 || !p.grid[i] || !p.grid[j]) return;
+  p.grid[i][j] = recA;
+  p.grid[j][i] = recB;
+}
+
 async function recordScoreClick(matchId){
   const ia = document.getElementById('score-'+matchId+'-a');
   const ib = document.getElementById('score-'+matchId+'-b');
   const v = checkScores(ia ? ia.value : '', ib ? ib.value : '');
   if(v.error){ alert(v.error); return; }
+  if(ia) ia.value=''; if(ib) ib.value='';
+  const cached = LAST_WEEK && LAST_WEEK.live && (LAST_WEEK.live.matches||[]).find(m=>m.id===matchId);
+  if(cached && !cached.finishedAt){
+    applyScoreLocally(cached, v.a, v.b);
+    paintSchedule(LAST_WEEK);
+  }
   const res = await postAction({action:'recordScore', date:WEEK_DATE, matchId, scoreA:v.a, scoreB:v.b});
   if(!res.ok) alert(res.error || 'Could not record the score — please try again.');
-  else { if(ia) ia.value=''; if(ib) ib.value=''; }
+  // Reconcile with the server (or roll the optimistic result back on error).
   renderSchedule(true, true);
 }
 
 async function cancelMatchClick(matchId){
   if(!confirm('Cancel this match? No score will be recorded.')) return;
+  if(LAST_WEEK && LAST_WEEK.live && LAST_WEEK.live.matches){
+    const idx = LAST_WEEK.live.matches.findIndex(m=>m.id===matchId && !m.finishedAt);
+    if(idx >= 0){ LAST_WEEK.live.matches.splice(idx, 1); paintSchedule(LAST_WEEK); }
+  }
   const res = await postAction({action:'cancelMatch', date:WEEK_DATE, matchId});
   if(!res.ok) alert(res.error || 'Could not cancel — please try again.');
   renderSchedule(true, true);
