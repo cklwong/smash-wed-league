@@ -1150,6 +1150,9 @@ function applyAbsencePasses(sheet, rCol, playedRows, names) {
     // Absent this week: mark the 4th consecutive miss.
     if ((rowVals[weekCols[cur]] || '').toString().trim()) return; // organizer already labelled it
     if (cur + 3 >= weekCols.length) return; // not enough history yet
+    // The most recent week already carries the label - don't stack another
+    // one on top, just leave this week blank until they return.
+    if (cur + 1 < weekCols.length && (rowVals[weekCols[cur + 1]] || '').toString().trim() === ABSENCE_LABEL) return;
     for (var p = 1; p <= 3; p++) {
       if (attended(rowVals, weekCols[cur + p])) return; // streak broken
     }
