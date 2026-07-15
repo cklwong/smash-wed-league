@@ -89,6 +89,20 @@
     return null;
   }
   function filled(v) { return v !== '' && v !== null && v !== undefined; }
+  // In-progress marker startMatch writes into a game's top-right grid cell
+  // (mirrors isInProgressMarker in gas/Code.gs) - never a score.
+  function isMarker(v) { return typeof v === 'string' && v.trim().toLowerCase() === 'p'; }
+  function isScore(v) { return filled(v) && !isMarker(v); }
+  // The one cell that carries a pair's marker: row of the lower index.
+  function markerCell(slotA, slotB) {
+    const top = slotA.i < slotB.i ? slotA : slotB;
+    const other = top === slotA ? slotB : slotA;
+    return { L: top.L, r: top.i, c: other.i };
+  }
+  function clearMarker(slotA, slotB) {
+    const m = markerCell(slotA, slotB);
+    if (isMarker(STATE.grids[m.L][m.r][m.c])) STATE.grids[m.L][m.r][m.c] = '';
+  }
   function slotHasScores(L, i) {
     const n = STATE.pools[L].length;
     for (let c = 0; c < n; c++) if (filled(STATE.grids[L][i][c])) return true;
@@ -96,7 +110,7 @@
     return false;
   }
   function hasAnyScoresAnywhere() {
-    return Object.keys(STATE.grids).some((L) => STATE.grids[L].some((row) => row.some(filled)));
+    return Object.keys(STATE.grids).some((L) => STATE.grids[L].some((row) => row.some(isScore)));
   }
 
   function generatePools(padGuests, redraw) {
@@ -230,7 +244,10 @@
     if (!b) return { ok: false, error: nameB + ' no longer holds a pool seat.' };
     if (a.L !== b.L) return { ok: false, error: 'Those players are in different pools.' };
     const guestA = isGuestLabel(nameA), guestB = isGuestLabel(nameB);
-    if (guestA && guestB) return { ok: true, infoOnly: true };
+    if (guestA && guestB) {
+      clearMarker(a, b); // no score lands in the grid, so the marker must go
+      return { ok: true, infoOnly: true };
+    }
     let recA = scoreA, recB = scoreB;
     if (guestA) { recA = 0; recB = 1; }
     if (guestB) { recA = 1; recB = 0; }
@@ -239,20 +256,23 @@
     return { ok: true, infoOnly: guestA || guestB };
   }
 
-  function startMatch(a, b, guestNames) {
+  function startMatch(a, b, guestNames, clientId) {
     if (!STATE.drawn) return { ok: false, error: 'Pools have not been drawn yet.' };
     const slotA = findSlot(a), slotB = findSlot(b);
     if (!slotA) return { ok: false, error: (a || '?') + ' does not hold a pool seat.' };
     if (!slotB) return { ok: false, error: (b || '?') + ' does not hold a pool seat.' };
     if (slotA.L !== slotB.L) return { ok: false, error: 'Those players are in different pools.' };
     if (slotA.i === slotB.i) return { ok: false, error: 'Pick two different players.' };
-    if (filled(STATE.grids[slotA.L][slotA.i][slotB.i]) || filled(STATE.grids[slotB.L][slotB.i][slotA.i])) {
+    if (isScore(STATE.grids[slotA.L][slotA.i][slotB.i]) || isScore(STATE.grids[slotB.L][slotB.i][slotA.i])) {
       return { ok: false, error: 'That game already has a score.' };
     }
     const busy = STATE.live.matches.find((m) => !m.finishedAt && (key(m.a) === key(a) || key(m.a) === key(b) || key(m.b) === key(a) || key(m.b) === key(b)));
     if (busy) return { ok: false, error: busy.a + ' vs ' + busy.b + ' is still on court — record or cancel it first.' };
 
-    const match = { id: uid(), pool: slotA.L, a: STATE.pools[slotA.L][slotA.i], b: STATE.pools[slotB.L][slotB.i], startedAt: Date.now() };
+    const id = (typeof clientId === 'string' && clientId.length > 0 && clientId.length <= 64) ? clientId : uid();
+    const match = { id, pool: slotA.L, a: STATE.pools[slotA.L][slotA.i], b: STATE.pools[slotB.L][slotB.i], startedAt: Date.now() };
+    const mc = markerCell(slotA, slotB);
+    STATE.grids[mc.L][mc.r][mc.c] = 'p'; // in-progress marker, cleared/overwritten on record or cancel
     const gn = {};
     [match.a, match.b].forEach((n) => { if (isGuestLabel(n) && guestNames && guestNames[n]) gn[n] = String(guestNames[n]).trim().slice(0, 40); });
     if (Object.keys(gn).length) match.guestNames = gn;
@@ -302,6 +322,9 @@
     const i = STATE.live.matches.findIndex((m) => m.id === matchId);
     if (i < 0) return { ok: false, error: 'Match not found — it may already be cancelled.' };
     if (STATE.live.matches[i].finishedAt) return { ok: false, error: 'That match already finished — use Edit instead.' };
+    const m = STATE.live.matches[i];
+    const slotA = findSlot(m.a), slotB = findSlot(m.b);
+    if (slotA && slotB && slotA.L === slotB.L) clearMarker(slotA, slotB);
     STATE.live.matches.splice(i, 1);
     return { ok: true };
   }
@@ -311,7 +334,8 @@
       ? Object.keys(STATE.pools).map((L) => ({
           label: L, drawn: true,
           players: STATE.pools[L].map((n) => ({ name: n, gw: 0, gl: 0, ptsWL: '', score: '', rank: '', rankPts: '' })),
-          grid: STATE.grids[L]
+          // Like gas/Code.gs getWeek: the payload's grid contract is number | ''
+          grid: STATE.grids[L].map((row) => row.map((v) => (isMarker(v) ? '' : v)))
         }))
       : [];
     return {
@@ -386,7 +410,7 @@
       case 'checkin': return checkin(body.name);
       case 'noshow': return noshow(body.name);
       case 'clearstatus': return clearstatus(body.name);
-      case 'startMatch': return startMatch(body.a, body.b, body.guestNames);
+      case 'startMatch': return startMatch(body.a, body.b, body.guestNames, body.id);
       case 'recordScore': return recordScore(body.matchId, body.scoreA, body.scoreB);
       case 'editScore': return editScore(body.a, body.b, body.scoreA, body.scoreB, body.matchId);
       case 'cancelMatch': return cancelMatch(body.matchId);
@@ -394,7 +418,10 @@
     }
   }
 
-  const jsonResponse = (obj) => ({ ok: true, json: async () => obj });
+  // Deep-copy every response like a real HTTP round-trip would: the app
+  // mutates its cached week (optimistic updates), and handing out live
+  // references would let those mutations bleed into this mock's state.
+  const jsonResponse = (obj) => ({ ok: true, json: async () => JSON.parse(JSON.stringify(obj)) });
 
   window.fetch = async function (url, opts) {
     try {
@@ -424,6 +451,8 @@
       + 'font:600 12px/1 -apple-system,sans-serif;text-align:center;padding:6px;letter-spacing:.03em;';
     document.body.appendChild(badge);
   });
+
+  window.__MOCK_STATE = STATE; // console access to the sandbox "sheet" (e.g. inspect grids for the 'p' marker)
 
   console.log('%c[mock-backend] active — network calls to Apps Script are intercepted.', 'color:#2F7D52;font-weight:bold');
   console.log('[mock-backend] seed: 24 confirmed + 2 waitlisted, pools not drawn yet. Any PIN works for Generate pools.');

@@ -76,7 +76,7 @@ function doPost(e) {
     else if (body.action === 'checkin') result = setCheckin(body.date, body.name);
     else if (body.action === 'noshow') result = setNoShow(body.date, body.name);
     else if (body.action === 'clearstatus') result = clearStatus(body.date, body.name);
-    else if (body.action === 'startMatch') result = startMatch(body.date, body.a, body.b, body.guestNames);
+    else if (body.action === 'startMatch') result = startMatch(body.date, body.a, body.b, body.guestNames, body.id);
     else if (body.action === 'recordScore') result = recordScore(body.date, body.matchId, body.scoreA, body.scoreB);
     else if (body.action === 'editScore') result = editScore(body.date, body.a, body.b, body.scoreA, body.scoreB, body.matchId);
     else if (body.action === 'cancelMatch') result = cancelMatch(body.date, body.matchId);
@@ -127,18 +127,18 @@ function parseSignups(data) {
   return signups;
 }
 
-function getWeek(dateISO) {
-  var sheet = getWeekSheet(dateISO);
-  if (!sheet) return { date: dateISO, exists: false, hasScores: false, signups: [], pools: [] };
-  var data = sheet.getDataRange().getValues();
-  var signups = parseSignups(data).map(function (s) {
-    return { name: s.name, checkedIn: s.checkedIn, noShow: s.noShow };
-  });
+// A started-but-unfinished game holds this marker in its top-right grid cell
+// (written by startMatch) so the sheet's conditional formatting can highlight
+// games in progress. It is never a score - every reader must ignore it.
+function isInProgressMarker(v) {
+  return typeof v === 'string' && v.trim().toLowerCase() === 'p';
+}
 
-  // Each pool's header ("Pool A", "Pool B", ...) sits on whatever row follows the
-  // previous pool's block, not all on row 1 - so we scan every row for it. Each row
-  // also repeats "Pool X" later as the heading for a trailing Rank/Rank Pts summary
-  // block; only the first occurrence per letter (per row scanned) is the real one.
+// Each pool's header ("Pool A", "Pool B", ...) sits on whatever row follows the
+// previous pool's block, not all on row 1 - so we scan every row for it. Each row
+// also repeats "Pool X" later as the heading for a trailing Rank/Rank Pts summary
+// block; only the first occurrence per letter (per row scanned) is the real one.
+function parsePools(data) {
   var seenLabels = {};
   var pools = [];
   for (var r2 = 0; r2 < data.length; r2++) {
@@ -170,7 +170,7 @@ function getWeek(dateISO) {
           var line = [];
           for (var gc = 0; gc < lay.size; gc++) {
             var gv = grow[GRID_FIRST_COL - 1 + gc];
-            line.push(gv === undefined || gv === null ? '' : gv);
+            line.push(gv === undefined || gv === null || isInProgressMarker(gv) ? '' : gv);
           }
           grid.push(line);
         }
@@ -191,7 +191,17 @@ function getWeek(dateISO) {
       pools.push({ label: m[1], drawn: drawn, players: players, grid: grid });
     }
   }
+  return pools;
+}
 
+function getWeek(dateISO) {
+  var sheet = getWeekSheet(dateISO);
+  if (!sheet) return { date: dateISO, exists: false, hasScores: false, signups: [], pools: [] };
+  var data = sheet.getDataRange().getValues();
+  var signups = parseSignups(data).map(function (s) {
+    return { name: s.name, checkedIn: s.checkedIn, noShow: s.noShow };
+  });
+  var pools = parsePools(data);
   var live = getLiveState(dateISO);
   return {
     date: dateISO, exists: true, hasScores: anyScoresEntered(data),
@@ -209,7 +219,7 @@ function anyScoresEntered(data) {
       var row = data[lay.firstSlotRow - 1 + r] || [];
       for (var c = 0; c < lay.size; c++) {
         var v = row[GRID_FIRST_COL - 1 + c];
-        if (v !== '' && v !== null && v !== undefined) return true;
+        if (v !== '' && v !== null && v !== undefined && !isInProgressMarker(v)) return true;
       }
     }
   }
@@ -690,7 +700,31 @@ function findUnfinishedFor(state, name) {
 
 function gridCellFilled(data, slotA, slotB) {
   var v = (data[slotA.row - 1] || [])[GRID_FIRST_COL - 1 + slotB.index];
-  return v !== '' && v !== null && v !== undefined;
+  // A leftover in-progress marker is not a score - it must never block a
+  // (re)start the way a real result does.
+  return v !== '' && v !== null && v !== undefined && !isInProgressMarker(v);
+}
+
+// The single grid cell that carries a pair's in-progress marker: the
+// top-right-triangle cell (row of the lower-indexed slot, column of the other).
+function markerRange(sheet, slotA, slotB) {
+  var top = slotA.index < slotB.index ? slotA : slotB;
+  var other = top === slotA ? slotB : slotA;
+  return sheet.getRange(top.row, GRID_FIRST_COL + other.index);
+}
+
+// Clears the pair's marker cell iff it still holds the marker (never a score).
+// Best-effort: cleanup must never break the action that triggered it.
+function clearMarkerIfPresent(sheet, data, nameA, nameB) {
+  try {
+    var slotA = findSlotByValue(data, nameA);
+    var slotB = findSlotByValue(data, nameB);
+    if (!slotA || !slotB || slotA.letter !== slotB.letter) return;
+    var range = markerRange(sheet, slotA, slotB);
+    if (isInProgressMarker(range.getValue())) range.setValue('');
+  } catch (err) {
+    Logger.log('clearMarkerIfPresent failed: ' + err);
+  }
 }
 
 function validateScores(scoreA, scoreB) {
@@ -702,7 +736,7 @@ function validateScores(scoreA, scoreB) {
   return { ok: true, a: a, b: b };
 }
 
-function startMatch(dateISO, a, b, guestNames) {
+function startMatch(dateISO, a, b, guestNames, clientId) {
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var data = sheet.getDataRange().getValues();
@@ -725,11 +759,16 @@ function startMatch(dateISO, a, b, guestNames) {
     }
   });
 
-  return updateLiveState(dateISO, function (state) {
+  // The site generates the id so it can show the match (with working
+  // Record/Cancel buttons) before this call returns.
+  var id = (typeof clientId === 'string' && clientId.length > 0 && clientId.length <= 64)
+    ? clientId : Utilities.getUuid();
+
+  var result = updateLiveState(dateISO, function (state) {
     var busy = findUnfinishedFor(state, nameA) || findUnfinishedFor(state, nameB);
     if (busy) return { ok: false, error: busy.a + ' vs ' + busy.b + ' is still on court — record or cancel it first.' };
     var match = {
-      id: Utilities.getUuid(),
+      id: id,
       pool: slotA.letter,
       a: nameA,
       b: nameB,
@@ -739,6 +778,15 @@ function startMatch(dateISO, a, b, guestNames) {
     state.matches.push(match);
     return { ok: true, match: match };
   });
+
+  // Mark the game as in progress on the sheet itself, so the tab's
+  // conditional formatting can highlight it. recordScore/editScore overwrite
+  // the marker with a score; cancelMatch and guest-vs-guest records clear it.
+  if (result && result.ok) {
+    try { markerRange(sheet, slotA, slotB).setValue('p'); }
+    catch (err) { Logger.log('startMatch marker write failed: ' + err); }
+  }
+  return result;
 }
 
 // Writes a finished game into the grid. Guest games are recorded as a minimal
@@ -751,12 +799,21 @@ function writePairScore(sheet, data, nameA, nameB, scoreA, scoreB) {
   if (!slotB) return { ok: false, error: nameB + ' no longer holds a pool seat.' };
   if (slotA.letter !== slotB.letter) return { ok: false, error: 'Those players are in different pools.' };
   var guestA = isGuestLabel(nameA), guestB = isGuestLabel(nameB);
-  if (guestA && guestB) return { ok: true, infoOnly: true };
+  if (guestA && guestB) {
+    // No score lands in the grid, so the start marker must go explicitly.
+    var mr = markerRange(sheet, slotA, slotB);
+    if (isInProgressMarker(mr.getValue())) mr.setValue('');
+    return { ok: true, infoOnly: true };
+  }
   var recA = scoreA, recB = scoreB;
   if (guestA) { recA = 0; recB = 1; }
   if (guestB) { recA = 1; recB = 0; }
   sheet.getRange(slotA.row, GRID_FIRST_COL + slotB.index).setValue(recA);
   sheet.getRange(slotB.row, GRID_FIRST_COL + slotA.index).setValue(recB);
+  // Mirror the write into the caller's in-memory snapshot so it can check
+  // week completeness without a second full-sheet read.
+  if (data[slotA.row - 1]) data[slotA.row - 1][GRID_FIRST_COL - 1 + slotB.index] = recA;
+  if (data[slotB.row - 1]) data[slotB.row - 1][GRID_FIRST_COL - 1 + slotA.index] = recB;
   return { ok: true, infoOnly: guestA || guestB };
 }
 
@@ -779,10 +836,14 @@ function recordScore(dateISO, matchId, scoreA, scoreB) {
     if (!w.ok) return w;
     match.finishedAt = Date.now(); // starts both players' waiting timers
     if (w.infoOnly) match.infoScore = [v.a, v.b];
-    return { ok: true };
+    // writePairScore patched `data` with the new scores, so completeness can
+    // be judged here without the flush + full re-read finalizeWeek does.
+    var complete = weekIsComplete({ pools: parsePools(data) });
+    return { ok: true, complete: complete };
   });
-  // If that was the last game, this week's rank points go to Rankings now.
-  if (result && result.ok) maybeFinalizeWeek(dateISO);
+  // Only the week's last game pays the finalize cost (flush + re-read);
+  // the nightly trigger still catches anything this check misses.
+  if (result && result.ok && result.complete) maybeFinalizeWeek(dateISO);
   return result;
 }
 
@@ -830,16 +891,24 @@ function editScore(dateISO, a, b, scoreA, scoreB, matchId) {
 }
 
 function cancelMatch(dateISO, matchId) {
-  return updateLiveState(dateISO, function (state) {
+  var cancelled = null;
+  var result = updateLiveState(dateISO, function (state) {
     for (var i = 0; i < state.matches.length; i++) {
       var m = state.matches[i];
       if (m.id !== matchId) continue;
       if (m.finishedAt) return { ok: false, error: 'That match already finished — use Edit instead.' };
+      cancelled = m;
       state.matches.splice(i, 1);
       return { ok: true };
     }
     return { ok: false, error: 'Match not found — it may already be cancelled.' };
   });
+  // Remove the game's in-progress marker from the grid (never a real score).
+  if (result && result.ok && cancelled) {
+    var sheet = getWeekSheet(dateISO);
+    if (sheet) clearMarkerIfPresent(sheet, sheet.getDataRange().getValues(), cancelled.a, cancelled.b);
+  }
+  return result;
 }
 
 // ---- Weekly finalization: completed pool results -> Rankings sheet ----
