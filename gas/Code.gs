@@ -151,22 +151,25 @@ function parsePools(data) {
       if (!m || seenLabels[m[1]]) continue;
       seenLabels[m[1]] = true;
 
-      // The header block is always exactly lay.size slot columns, even when
-      // a drawn pool seats fewer than its max (unused trailing slots are
-      // blank) - so the summary block (GW...) must be located by fixed
-      // geometry, not by scanning for the first blank header cell, which
-      // lands short whenever the pool isn't filled to capacity.
-      var lay = POOL_LAYOUT[m[1]];
+      // Trailing seats past a pool's actual player count are blank - skip
+      // over them without stopping the scan; only the literal "GW" header
+      // marks the true end of the seat-header block (whatever its real
+      // width is - POOL_LAYOUT.size isn't a reliable stand-in for that, so
+      // don't use it here, only for the grid dimensions below).
       var members = [];
-      for (var s = 0; s < lay.size; s++) {
-        var h = (headerRow[c + 1 + s] || '').toString().trim();
+      var cc = c + 1;
+      while (cc < headerRow.length) {
+        var h = (headerRow[cc] || '').toString().trim();
+        if (h === 'GW') break;
         if (h) members.push(h);
+        cc++;
       }
-      var summaryCol = c + 1 + lay.size; // GW column index
+      var summaryCol = cc; // GW column index
       var drawn = members.length > 0 && !/^[A-D]\d+$/.test(members[0]);
 
       // Raw score grid (numbers or ''), so the site can compute live standings
       // and per-game results without depending on the sheet's formula columns.
+      var lay = POOL_LAYOUT[m[1]];
       var grid = [];
       if (drawn) {
         for (var gr = 0; gr < lay.size; gr++) {
@@ -180,7 +183,8 @@ function parsePools(data) {
         }
       }
 
-      // Summary block is 5 columns: GW, GL, Pts W-L, Rank, Rank Pts.
+      // Summary block is 6 columns: GW, GL, Pts W-L, Score (tie-break helper,
+      // unused here), Rank, Rank Pts.
       var players = members.map(function (memberName, i) {
         var prow = data[r2 + 1 + i] || [];
         return {
@@ -188,8 +192,8 @@ function parsePools(data) {
           gw: prow[summaryCol] || 0,
           gl: prow[summaryCol + 1] || 0,
           ptsWL: prow[summaryCol + 2] || '',
-          rank: prow[summaryCol + 3] || '',
-          rankPts: prow[summaryCol + 4] || ''
+          rank: prow[summaryCol + 4] || '',
+          rankPts: prow[summaryCol + 5] || ''
         };
       });
       pools.push({ label: m[1], drawn: drawn, players: players, grid: grid });
@@ -981,6 +985,20 @@ function computeWeekResults(week) {
       });
     });
   });
+  return results;
+}
+
+// Read-only sanity check: logs exactly what finalizeWeek would compute and
+// write for a date, without touching the Rankings sheet at all. Run this
+// from the editor and inspect the log before trusting a real finalize run,
+// especially right after changing parsePools - a parsing bug here writes
+// silently-wrong data straight into the season's standings.
+function dryRunFinalize(dateISO) {
+  var week = getWeek(dateISO);
+  if (!week.exists) { Logger.log('No tab exists for ' + dateISO); return; }
+  Logger.log('hasScores=' + week.hasScores + ' complete=' + weekIsComplete(week));
+  var results = computeWeekResults(week);
+  Logger.log(JSON.stringify(results, null, 2));
   return results;
 }
 
