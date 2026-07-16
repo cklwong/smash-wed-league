@@ -31,6 +31,7 @@
  *   POST { action:'recordScore', date, matchId, scoreA, scoreB } -> { ok } (writes the score grid and stops the match; guest games count 1-0 for the real player, actual score kept as info)
  *   POST { action:'editScore', date, a, b, scoreA, scoreB, matchId } -> { ok } (fixes a finished game's score; guest games only update the info score)
  *   POST { action:'cancelMatch', date, matchId }-> { ok } (removes a mis-started, unfinished match)
+ *   POST { action:'finalizeRankings', date, secret } -> { ok, finalized, updated, added, skipped } (admin passphrase; re-runs finalize for a fully-scored week, overwriting its Rankings column pair)
  */
 
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
@@ -80,6 +81,7 @@ function doPost(e) {
     else if (body.action === 'recordScore') result = recordScore(body.date, body.matchId, body.scoreA, body.scoreB);
     else if (body.action === 'editScore') result = editScore(body.date, body.a, body.b, body.scoreA, body.scoreB, body.matchId);
     else if (body.action === 'cancelMatch') result = cancelMatch(body.date, body.matchId);
+    else if (body.action === 'finalizeRankings') result = forceFinalizeWeek(body.date, body.secret);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
@@ -408,10 +410,16 @@ function checkPin(dateISO, pin) {
   return { ok: true };
 }
 
-function getPin(dateISO, secret) {
+function checkAdminSecret(secret) {
   var expected = PropertiesService.getScriptProperties().getProperty('ADMIN_SECRET');
   if (!expected) return { ok: false, error: 'ADMIN_SECRET script property is not set — set it in Apps Script project settings.' };
   if (String(secret || '') !== expected) return { ok: false, error: 'Wrong passphrase.' };
+  return { ok: true };
+}
+
+function getPin(dateISO, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
   if (!dateISO) return { ok: false, error: 'Missing date.' };
   return { ok: true, pin: ensurePin(dateISO) };
 }
@@ -985,6 +993,21 @@ function maybeFinalizeWeek(dateISO) {
     Logger.log('maybeFinalizeWeek(' + dateISO + ') failed: ' + err);
     return { ok: false, error: String(err) };
   }
+}
+
+// Admin-triggered re-finalize from the site (Past weeks page), for when a
+// week's Rankings columns need overwriting - e.g. after a finalize-logic
+// bug is fixed. Same finalizeWeek every other caller uses, just gated on
+// the admin passphrase instead of running automatically off a score write.
+function forceFinalizeWeek(dateISO, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  if (!dateISO) return { ok: false, error: 'Missing date.' };
+  var result = maybeFinalizeWeek(dateISO);
+  if (result && result.pending) {
+    return { ok: false, error: "This week isn't fully scored yet — every pool game needs a result before it can finalize." };
+  }
+  return result;
 }
 
 function finalizeWeek(dateISO) {

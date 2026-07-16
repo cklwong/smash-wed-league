@@ -414,6 +414,7 @@
       case 'recordScore': return recordScore(body.matchId, body.scoreA, body.scoreB);
       case 'editScore': return editScore(body.a, body.b, body.scoreA, body.scoreB, body.matchId);
       case 'cancelMatch': return cancelMatch(body.matchId);
+      case 'finalizeRankings': return { ok: true, finalized: true, date: body.date, updated: RANKINGS.length, added: [], skipped: [] }; // dev sandbox: any passphrase works
       default: return { ok: false, error: 'mock: unhandled action ' + body.action };
     }
   }

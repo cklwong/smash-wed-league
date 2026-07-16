@@ -1191,7 +1191,42 @@ async function loadHistoryWeek(dateISO){
     content.innerHTML = '<div class="card"><p style="margin:0; font-size:14px; color:var(--text-soft);">No pool results found for this week.</p></div>';
     return;
   }
-  content.innerHTML = model.pools.map(mp=>poolResultsCard(mp, model)).join('');
+  content.innerHTML = model.pools.map(mp=>poolResultsCard(mp, model)).join('') + finalizeRankingsCard(dateISO);
+}
+
+function finalizeRankingsCard(dateISO){
+  return `<div class="card">
+    <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Finalize rankings <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>
+    <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">Re-writes this week's rank/points column in the Rankings sheet from these pool results. Use this if standings look wrong for this week.</p>
+    <button class="btn" id="finalize-rankings-btn" onclick="finalizeRankingsClick('${dateISO}')">Finalize rankings</button>
+    <p class="note" id="finalize-rankings-out" style="display:none; margin-top:8px;"></p>
+  </div>`;
+}
+
+async function finalizeRankingsClick(dateISO){
+  if(!confirm(`Re-finalize Wed, ${fmtDate(dateISO)}? This overwrites that week's Rankings column for every player.`)) return;
+  let secret = sessionStorage.getItem('sw-admin-secret');
+  if(!secret){
+    secret = (prompt('Enter the admin passphrase:')||'').trim();
+    if(!secret) return;
+  }
+  const btn = document.getElementById('finalize-rankings-btn');
+  const out = document.getElementById('finalize-rankings-out');
+  if(btn){ btn.disabled = true; btn.textContent = 'Finalizing…'; }
+  const res = await postAction({action:'finalizeRankings', date:dateISO, secret});
+  if(btn){ btn.disabled = false; btn.textContent = 'Finalize rankings'; }
+  out.style.display = 'block';
+  if(!res.ok){
+    if(res.error === 'Wrong passphrase.') sessionStorage.removeItem('sw-admin-secret');
+    out.textContent = res.error || 'Could not finalize — please try again.';
+    return;
+  }
+  sessionStorage.setItem('sw-admin-secret', secret);
+  let msg = `Done — updated ${res.updated||0} player${res.updated===1?'':'s'}.`;
+  if(res.added && res.added.length) msg += ` Added ${res.added.join(', ')} as new.`;
+  if(res.skipped && res.skipped.length) msg += ` Could not add: ${res.skipped.join(', ')} (Rankings sheet is full).`;
+  out.textContent = msg;
+  fetchRankings().then(({players, weeks})=>{ PLAYERS = players; WEEKS = weeks; });
 }
 
 // Read-only summary of a past week's pool: final order, W-L, points +/- and
