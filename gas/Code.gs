@@ -25,13 +25,13 @@
  *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error }
  *   POST { action:'getpin', date, secret }      -> { ok, pin }
  *   POST { action:'generatePools', date, pin, padGuests:['A',...], redraw } -> { ok, pools }
- *   POST { action:'checkin', date, name }       -> { ok, seated } (restores a no-show's pool spot if their guest hasn't played; seated:false means a redraw is needed to seat them)
- *   POST { action:'noshow', date, name }        -> { ok } (marks 'ns' and swaps their pool spot for GuestX1, GuestX2, ...)
- *   POST { action:'clearstatus', date, name }   -> { ok } (undo a mis-tapped check-in / no-show)
- *   POST { action:'startMatch', date, a, b, guestNames } -> { ok, match } (puts a same-pool unplayed pair on court; guestNames maps a guest seat label to who's playing as it tonight)
- *   POST { action:'recordScore', date, matchId, scoreA, scoreB } -> { ok } (writes the score grid and stops the match; guest games count 1-0 for the real player, actual score kept as info)
- *   POST { action:'editScore', date, a, b, scoreA, scoreB, matchId } -> { ok } (fixes a finished game's score; guest games only update the info score)
- *   POST { action:'cancelMatch', date, matchId }-> { ok } (removes a mis-started, unfinished match)
+ *   POST { action:'checkin', date, name, secret }       -> { ok, seated } (admin passphrase; restores a no-show's pool spot if their guest hasn't played; seated:false means a redraw is needed to seat them)
+ *   POST { action:'noshow', date, name, secret }        -> { ok } (admin passphrase; marks 'ns' and swaps their pool spot for GuestX1, GuestX2, ...)
+ *   POST { action:'clearstatus', date, name, secret }   -> { ok } (admin passphrase; undo a mis-tapped check-in / no-show)
+ *   POST { action:'startMatch', date, a, b, guestNames, secret } -> { ok, match } (admin passphrase; puts a same-pool unplayed pair on court; guestNames maps a guest seat label to who's playing as it tonight)
+ *   POST { action:'recordScore', date, matchId, scoreA, scoreB, secret } -> { ok } (admin passphrase; writes the score grid and stops the match; guest games count 1-0 for the real player, actual score kept as info)
+ *   POST { action:'editScore', date, a, b, scoreA, scoreB, matchId, secret } -> { ok } (admin passphrase; fixes a finished game's score; guest games only update the info score)
+ *   POST { action:'cancelMatch', date, matchId, secret }-> { ok } (admin passphrase; removes a mis-started, unfinished match)
  *   POST { action:'finalizeRankings', date, secret } -> { ok, finalized, updated, added, skipped } (admin passphrase; re-runs finalize for a fully-scored week, overwriting its Rankings column pair)
  */
 
@@ -76,13 +76,13 @@ function doPost(e) {
     else if (body.action === 'leave') result = removeJoin(body.date, body.name);
     else if (body.action === 'getpin') result = getPin(body.date, body.secret);
     else if (body.action === 'generatePools') result = generatePools(body.date, body.pin, body.padGuests, body.redraw);
-    else if (body.action === 'checkin') result = setCheckin(body.date, body.name);
-    else if (body.action === 'noshow') result = setNoShow(body.date, body.name);
-    else if (body.action === 'clearstatus') result = clearStatus(body.date, body.name);
-    else if (body.action === 'startMatch') result = startMatch(body.date, body.a, body.b, body.guestNames, body.id);
-    else if (body.action === 'recordScore') result = recordScore(body.date, body.matchId, body.scoreA, body.scoreB);
-    else if (body.action === 'editScore') result = editScore(body.date, body.a, body.b, body.scoreA, body.scoreB, body.matchId);
-    else if (body.action === 'cancelMatch') result = cancelMatch(body.date, body.matchId);
+    else if (body.action === 'checkin') result = setCheckin(body.date, body.name, body.secret);
+    else if (body.action === 'noshow') result = setNoShow(body.date, body.name, body.secret);
+    else if (body.action === 'clearstatus') result = clearStatus(body.date, body.name, body.secret);
+    else if (body.action === 'startMatch') result = startMatch(body.date, body.a, body.b, body.guestNames, body.id, body.secret);
+    else if (body.action === 'recordScore') result = recordScore(body.date, body.matchId, body.scoreA, body.scoreB, body.secret);
+    else if (body.action === 'editScore') result = editScore(body.date, body.a, body.b, body.scoreA, body.scoreB, body.matchId, body.secret);
+    else if (body.action === 'cancelMatch') result = cancelMatch(body.date, body.matchId, body.secret);
     else if (body.action === 'finalizeRankings') result = forceFinalizeWeek(body.date, body.secret);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
@@ -630,9 +630,11 @@ function generatePools(dateISO, pin, padGuests, redraw) {
   return { ok: true, pools: pools };
 }
 
-// ---- Check-in / no-show (open to everyone) ----
+// ---- Check-in / no-show (admin only) ----
 
-function setCheckin(dateISO, name) {
+function setCheckin(dateISO, name, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var data = sheet.getDataRange().getValues();
@@ -671,7 +673,9 @@ function setCheckin(dateISO, name) {
   return { ok: true, seated: seated };
 }
 
-function setNoShow(dateISO, name) {
+function setNoShow(dateISO, name, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var data = sheet.getDataRange().getValues();
@@ -701,7 +705,9 @@ function setNoShow(dateISO, name) {
   return { ok: true };
 }
 
-function clearStatus(dateISO, name) {
+function clearStatus(dateISO, name, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var data = sheet.getDataRange().getValues();
@@ -729,7 +735,7 @@ function clearStatus(dateISO, name) {
   return { ok: true };
 }
 
-// ---- Live match desk (open to everyone, like check-in) ----
+// ---- Live match desk (admin only) ----
 //
 // The score grid stays the source of truth for results; what the grid can't
 // hold - who's on court right now, when each game started/finished (feeds the
@@ -813,7 +819,9 @@ function validateScores(scoreA, scoreB) {
   return { ok: true, a: a, b: b };
 }
 
-function startMatch(dateISO, a, b, guestNames, clientId) {
+function startMatch(dateISO, a, b, guestNames, clientId, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var data = sheet.getDataRange().getValues();
@@ -894,7 +902,9 @@ function writePairScore(sheet, data, nameA, nameB, scoreA, scoreB) {
   return { ok: true, infoOnly: guestA || guestB };
 }
 
-function recordScore(dateISO, matchId, scoreA, scoreB) {
+function recordScore(dateISO, matchId, scoreA, scoreB, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var v = validateScores(scoreA, scoreB);
@@ -924,7 +934,9 @@ function recordScore(dateISO, matchId, scoreA, scoreB) {
   return result;
 }
 
-function editScore(dateISO, a, b, scoreA, scoreB, matchId) {
+function editScore(dateISO, a, b, scoreA, scoreB, matchId, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var v = validateScores(scoreA, scoreB);
@@ -967,7 +979,9 @@ function editScore(dateISO, a, b, scoreA, scoreB, matchId) {
   });
 }
 
-function cancelMatch(dateISO, matchId) {
+function cancelMatch(dateISO, matchId, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
   var cancelled = null;
   var result = updateLiveState(dateISO, function (state) {
     for (var i = 0; i < state.matches.length; i++) {

@@ -652,6 +652,7 @@ function paintSchedule(week, dateISO){
   const confirmed = week.signups.slice(0, CAP);
   const waitlist = week.signups.slice(CAP);
   const drawnPools = week.pools.filter(p=>p.drawn);
+  const admin = isAdmin();
 
   const bannerHtml = `<div class="session-banner">
     <div><div class="date">Wed, ${fmtDate(dateISO)}</div>
@@ -660,7 +661,10 @@ function paintSchedule(week, dateISO){
       <div class="cap-pill"><div class="n">${confirmed.length}/${CAP}</div><div class="l">Confirmed</div></div>
       <div class="cap-pill"><div class="n">${waitlist.length}</div><div class="l">Waitlist</div></div>
     </div>
-  </div>`;
+  </div>` + (admin ? '' : `<div class="cta-line">
+    <span>Viewing only — sign in on the Admin tab to manage check-in, matches, and pools.</span>
+    <button class="btn small ghost" onclick="showView('admin')">Admin sign-in</button>
+  </div>`);
 
   let predrawHtml = '', liveHtml = '', checkinHtml = '', poolsHtml = '';
   if(drawnPools.length === 0){
@@ -668,7 +672,7 @@ function paintSchedule(week, dateISO){
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Signups are open until <strong>noon Pacific</strong> on match day. First ${CAP} in are confirmed — everyone else is on the waitlist.</p>
       <button class="btn small" onclick="showView('join')">Add/remove a player</button>
     </div>`;
-    predrawHtml += generateCard(dateISO, confirmed);
+    predrawHtml += generateCard(dateISO, confirmed, admin);
     predrawHtml += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Confirmed (${confirmed.length}/${CAP})</h3>
       <ul class="roster-list">${confirmed.length ? confirmed.map((s,i)=>rosterRow(s,i+1,'confirmed')).join('') : '<li class="empty-row">No signups yet — be the first.</li>'}</ul>
     </div>`;
@@ -680,17 +684,19 @@ function paintSchedule(week, dateISO){
     WEEK_MODEL = model;
     GAME_INDEX = {};
     const avail = availablePlayers(model);
-    liveHtml = onCourtCard(model) + upNextCard(model, avail) + benchCard(model, avail);
-    checkinHtml = poolStatusCard(dateISO, week, confirmed, drawnPools);
+    liveHtml = onCourtCard(model, admin) + upNextCard(model, avail, admin) + benchCard(model, avail);
+    checkinHtml = poolStatusCard(dateISO, week, confirmed, drawnPools, admin);
     // Alphabetical is easier to scan at the door, but the join-order number
     // (who signed up first / first off the waitlist) still needs to show,
     // so it's captured before the sort rather than derived from position.
     const checkinList = confirmed.map((s,i)=>({s, joinNum:i+1})).sort((a,b)=>a.s.name.localeCompare(b.s.name));
     checkinHtml += `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
-      <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Tap <strong>Check in</strong> as players arrive. A no-show's pool spot goes to a Guest; if they turn up before the guest plays, checking them in puts them back.</p>
-      <ul class="roster-list">${checkinList.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO)).join('')}</ul>
+      <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">${admin
+        ? 'Tap <strong>Check in</strong> as players arrive. A no-show\'s pool spot goes to a Guest; if they turn up before the guest plays, checking them in puts them back.'
+        : 'Sign in on the Admin tab to check players in or mark no-shows.'}</p>
+      <ul class="roster-list">${checkinList.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO,admin)).join('')}</ul>
     </div>`;
-    model.pools.forEach(mp=>{ poolsHtml += poolLiveCard(mp, model); });
+    model.pools.forEach(mp=>{ poolsHtml += poolLiveCard(mp, model, admin); });
   }
 
   // The match-search combobox always has a non-empty, programmatically-set
@@ -740,7 +746,7 @@ function splitPreviewAndPadding(n){
   return {sizes, preview, padOptions};
 }
 
-function generateCard(dateISO, confirmed){
+function generateCard(dateISO, confirmed, admin){
   const eligible = confirmed.filter(s=>!s.noShow);
   const n = eligible.length;
   let body;
@@ -749,9 +755,10 @@ function generateCard(dateISO, confirmed){
   } else {
     const {sizes, preview, padOptions} = splitPreviewAndPadding(n);
     body = `<p style="margin:0 0 4px; font-size:13px; color:var(--text-soft);">${n} registered → <strong>${sizes.length} pools</strong> by standings (${preview}).</p>
-      ${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
+      ${admin ? `${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
       <button class="btn" id="gen-pools-btn" onclick="generatePoolsClick('${dateISO}', false)">Generate pools</button>
-      <p class="note" style="margin-top:8px;">Needs tonight's PIN — emailed to organizers at noon, or grab it from the Admin tab.</p>`;
+      <p class="note" style="margin-top:8px;">Needs tonight's PIN — emailed to organizers at noon, or grab it from the Admin tab.</p>`
+      : `<p class="note" style="margin-top:8px;">Sign in on the Admin tab to generate pools.</p>`}`;
   }
   return `<div class="card"><h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Generate pools <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>${body}</div>`;
 }
@@ -760,7 +767,7 @@ function generateCard(dateISO, confirmed){
 // balance or leave a checked-in player with no pool seat at all - offer a
 // redraw (with the same guest-padding options as the initial draw) any time
 // scores haven't started, and call out exactly why one might be needed.
-function poolStatusCard(dateISO, week, confirmed, drawnPools){
+function poolStatusCard(dateISO, week, confirmed, drawnPools, admin){
   const eligible = confirmed.filter(s=>!s.noShow);
   const crowded = drawnPools.filter(p=>p.players.filter(pl=>isNoShowGuest(pl.name)).length >= 2);
   const seatedNames = new Set(drawnPools.flatMap(p=>p.players.map(pl=>pl.name)));
@@ -773,16 +780,20 @@ function poolStatusCard(dateISO, week, confirmed, drawnPools){
     if(!issues.length) return '';
     return `<div class="redraw-banner"><p>${issues.join('; ')} — games have started, so pools can no longer be redrawn.</p></div>`;
   }
+  if(!admin && !issues.length) return '';
 
   const {sizes, preview, padOptions} = splitPreviewAndPadding(eligible.length);
   const noteHtml = issues.length
-    ? `<p style="margin:0 0 10px; font-size:13px; color:var(--loss); font-weight:500;">${issues.join('; ')}. Redraw to fix this.</p>` : '';
+    ? `<p style="margin:0 0 10px; font-size:13px; color:var(--loss); font-weight:500;">${issues.join('; ')}${admin ? '. Redraw to fix this.' : ' — sign in on the Admin tab to redraw.'}</p>` : '';
+  const actionHtml = admin
+    ? `<p style="margin:0 0 4px; font-size:13px; color:var(--text-soft);">Redrawing re-seeds everyone checked-in-eligible by standings → <strong>${sizes.length} pools</strong> (${preview}). No-shows are excluded and any scores entered so far are cleared.</p>
+    ${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
+    <button class="btn" id="gen-pools-btn" onclick="generatePoolsClick('${dateISO}', true)">Redraw pools</button>`
+    : '';
   return `<div class="card"${issues.length?' style="border-color:#E8C2B8;"':''}>
     <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Manage pools <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>
     ${noteHtml}
-    <p style="margin:0 0 4px; font-size:13px; color:var(--text-soft);">Redrawing re-seeds everyone checked-in-eligible by standings → <strong>${sizes.length} pools</strong> (${preview}). No-shows are excluded and any scores entered so far are cleared.</p>
-    ${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
-    <button class="btn" id="gen-pools-btn" onclick="generatePoolsClick('${dateISO}', true)">Redraw pools</button>
+    ${actionHtml}
   </div>`;
 }
 
@@ -806,16 +817,16 @@ async function generatePoolsClick(dateISO, redraw){
   renderSchedule();
 }
 
-function checkinRow(s, num, dateISO){
+function checkinRow(s, num, dateISO, admin){
   const esc = s.name.replace(/'/g,"\\'");
   let status = '', actions = '';
   if(s.checkedIn){
     status = ' <span class="mine-badge ok">Checked in</span>';
-    actions = `<button class="btn small ghost" onclick="statusAction(this,'clearstatus','${dateISO}','${esc}')">Undo</button>`;
+    if(admin) actions = `<button class="btn small ghost" onclick="statusAction(this,'clearstatus','${dateISO}','${esc}')">Undo</button>`;
   } else if(s.noShow){
     status = ' <span class="mine-badge ns">No show</span>';
-    actions = `<button class="btn small" onclick="statusAction(this,'checkin','${dateISO}','${esc}')">Check in</button>`;
-  } else {
+    if(admin) actions = `<button class="btn small" onclick="statusAction(this,'checkin','${dateISO}','${esc}')">Check in</button>`;
+  } else if(admin){
     actions = `<button class="btn small" onclick="statusAction(this,'checkin','${dateISO}','${esc}')">Check in</button>
       <button class="btn small noshow" onclick="statusAction(this,'noshow','${dateISO}','${esc}')">No show</button>`;
   }
@@ -832,9 +843,9 @@ async function statusAction(btnEl, action, dateISO, name){
   if(li){
     const num = li.querySelector('.num')?.textContent || '';
     const optimistic = {name, checkedIn: action==='checkin', noShow: action==='noshow'};
-    li.outerHTML = checkinRow(optimistic, num, dateISO);
+    li.outerHTML = checkinRow(optimistic, num, dateISO, true);
   }
-  const res = await postAction({action, date:dateISO, name});
+  const res = await postAction({action, date:dateISO, name, secret:adminSecret()});
   if(!res.ok){
     alert(res.error || 'Could not update — please try again.');
   } else if(action==='checkin' && res.seated===false){
@@ -842,6 +853,9 @@ async function statusAction(btnEl, action, dateISO, name){
   }
   renderSchedule(true);
 }
+
+function adminSecret(){ return sessionStorage.getItem('sw-admin-secret') || ''; }
+function isAdmin(){ return !!adminSecret(); }
 
 function renderAdmin(){
   document.getElementById('admin-secret').value = sessionStorage.getItem('sw-admin-secret') || '';
@@ -980,19 +994,19 @@ function availablePlayers(model){
 }
 
 
-function onCourtCard(model){
+function onCourtCard(model, admin){
   const liveM = model.matches.filter(m=>!m.finishedAt).sort((a,b)=>a.pool.localeCompare(b.pool));
   if(!liveM.length) return '';
   const rows = liveM.map(m=>`
     <div class="court-row">
       <div class="who"><span class="pool-tag">Pool ${m.pool}</span> ${matchDisp(m,m.a)} vs ${matchDisp(m,m.b)} <span class="elapsed num" data-since="${m.startedAt}">0:00</span></div>
-      <div class="score-entry">
+      ${admin ? `<div class="score-entry">
         <input type="number" inputmode="numeric" min="0" id="score-${m.id}-a" placeholder="${escAttr(firstName(m.a))}">
         <span>–</span>
         <input type="number" inputmode="numeric" min="0" id="score-${m.id}-b" placeholder="${escAttr(firstName(m.b))}">
         <button class="btn small" onclick="recordScoreClick('${m.id}')">Record</button>
         <button class="btn small ghost" title="Cancel this match" onclick="cancelMatchClick('${m.id}')">✕</button>
-      </div>
+      </div>` : ''}
     </div>`).join('');
   return `<div class="card my-panel"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">On court now</h3>${rows}</div>`;
 }
@@ -1024,7 +1038,7 @@ function matchOptLabel(pair){
 let NEXT_MATCHES = {};    // poolIdx -> pending [candA, candB] pairs, this render
 let NEXT_SELECTED = {};   // poolIdx -> selected index into NEXT_MATCHES[poolIdx], sticky across re-renders
 
-function upNextCard(model, avail){
+function upNextCard(model, avail, admin){
   const head = '<h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Up next</h3>';
   if(!model.hasLive){
     return `<div class="card">${head}<p style="margin:0; font-size:13px; color:var(--text-soft);">The match desk needs the updated backend — paste the new Code.gs into Apps Script and deploy a new version.</p></div>`;
@@ -1047,6 +1061,9 @@ function upNextCard(model, avail){
       return `<div class="next-row"><span class="pool-tag">Pool ${mp.label}</span><span class="game-note">${msg}</span></div>`;
     }
     any = true;
+    if(!admin){
+      return `<div class="next-row"><span class="pool-tag">Pool ${mp.label}</span><span>${matchOptLabel(pairs[0])}</span></div>`;
+    }
     if(!(mp.idx in NEXT_SELECTED) || NEXT_SELECTED[mp.idx] >= pairs.length) NEXT_SELECTED[mp.idx] = 0;
     const selIdx = NEXT_SELECTED[mp.idx];
     const optionsHtml = pairs.map((pair,k)=>
@@ -1067,7 +1084,7 @@ function upNextCard(model, avail){
   }).join('');
   if(!any) return `<div class="card">${head}<p style="margin:0; font-size:13px; color:var(--text-soft);">No games left to call anywhere — all possible pairings are done or unavailable.</p></div>`;
   return `<div class="card">${head}
-    <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">Type a player's name to filter, or pick straight from the list — one match per pool.</p>
+    ${admin ? '<p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">Type a player\'s name to filter, or pick straight from the list — one match per pool.</p>' : ''}
     ${rows}
   </div>`;
 }
@@ -1140,7 +1157,7 @@ function benchCard(model, avail){
     <ul class="roster-list">${rows}</ul></div>`;
 }
 
-function poolLiveCard(mp, model){
+function poolLiveCard(mp, model, admin){
   // Ranking-point bonus: 3 pools -> Pool A, 4 pools -> Pools A & B.
   const bonus = mp.idx < model.pools.length - 2 ? 1 : 0;
   // Games left = pool round-robin size minus pairs already called (playedSet
@@ -1178,7 +1195,7 @@ function poolLiveCard(mp, model){
       games.push({infoOnly:true, complete:true, m, nameI:m.a, nameJ:m.b});
     }
   });
-  const gameRows = games.map(g=>gameRowHtml(mp, g)).join('');
+  const gameRows = games.map(g=>gameRowHtml(mp, g, admin)).join('');
   const done = mp.playedSet.size;
 
   // Pending = every pair not yet called (no score, even partial) - includes
@@ -1338,7 +1355,7 @@ function findFinishedMatch(model, poolLabel, nameA, nameB){
   return best;
 }
 
-function gameRowHtml(mp, g){
+function gameRowHtml(mp, g, admin){
   const guestGame = isGuest(g.nameI) || isGuest(g.nameJ);
   const dispI = g.m ? matchDisp(g.m, g.nameI) : g.nameI;
   const dispJ = g.m ? matchDisp(g.m, g.nameJ) : g.nameJ;
@@ -1357,7 +1374,7 @@ function gameRowHtml(mp, g){
   }
   // A sheet-entered guest game has no info score to correct, and its 1-0 grid
   // default isn't editable by design - so no Edit button for those.
-  const canEdit = !guestGame || (g.m && g.m.infoScore);
+  const canEdit = admin && (!guestGame || (g.m && g.m.infoScore));
   const rowId = g.infoOnly ? 'game-m-'+g.m.id : `game-${mp.idx}-${g.i}-${g.j}`;
   GAME_INDEX[rowId] = {poolIdx:mp.idx, nameI:g.nameI, nameJ:g.nameJ, dispI, dispJ,
                        scoreI, scoreJ, matchId: (guestGame && g.m) ? g.m.id : ''};
@@ -1423,7 +1440,7 @@ async function startMatchClick(poolIdx){
     LAST_WEEK.live.matches.push(m);
     paintSchedule(LAST_WEEK);
   }
-  const res = await postAction({action:'startMatch', id, date:WEEK_DATE, a:a.name, b:b.name, guestNames});
+  const res = await postAction({action:'startMatch', id, date:WEEK_DATE, a:a.name, b:b.name, guestNames, secret:adminSecret()});
   if(!res.ok) alert(res.error || 'Could not start the match — please try again.');
   // Reconcile with the server (or roll the optimistic card back on error).
   renderSchedule(true, true);
@@ -1469,7 +1486,7 @@ async function recordScoreClick(matchId){
     applyScoreLocally(cached, v.a, v.b);
     paintSchedule(LAST_WEEK);
   }
-  const res = await postAction({action:'recordScore', date:WEEK_DATE, matchId, scoreA:v.a, scoreB:v.b});
+  const res = await postAction({action:'recordScore', date:WEEK_DATE, matchId, scoreA:v.a, scoreB:v.b, secret:adminSecret()});
   if(!res.ok) alert(res.error || 'Could not record the score — please try again.');
   // Reconcile with the server (or roll the optimistic result back on error).
   renderSchedule(true, true);
@@ -1481,7 +1498,7 @@ async function cancelMatchClick(matchId){
     const idx = LAST_WEEK.live.matches.findIndex(m=>m.id===matchId && !m.finishedAt);
     if(idx >= 0){ LAST_WEEK.live.matches.splice(idx, 1); paintSchedule(LAST_WEEK); }
   }
-  const res = await postAction({action:'cancelMatch', date:WEEK_DATE, matchId});
+  const res = await postAction({action:'cancelMatch', date:WEEK_DATE, matchId, secret:adminSecret()});
   if(!res.ok) alert(res.error || 'Could not cancel — please try again.');
   renderSchedule(true, true);
 }
@@ -1507,7 +1524,7 @@ async function saveGameEdit(rowId){
   const ib = document.getElementById('edit-'+rowId+'-b');
   const v = checkScores(ia ? ia.value : '', ib ? ib.value : '');
   if(v.error){ alert(v.error); return; }
-  const res = await postAction({action:'editScore', date:WEEK_DATE, a:g.nameI, b:g.nameJ, scoreA:v.a, scoreB:v.b, matchId:g.matchId});
+  const res = await postAction({action:'editScore', date:WEEK_DATE, a:g.nameI, b:g.nameJ, scoreA:v.a, scoreB:v.b, matchId:g.matchId, secret:adminSecret()});
   if(!res.ok) alert(res.error || 'Could not save the correction — please try again.');
   else { if(ia) ia.value=''; if(ib) ib.value=''; }
   renderSchedule(true, true);
