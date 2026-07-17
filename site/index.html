@@ -666,7 +666,7 @@ function paintSchedule(week, dateISO){
   if(drawnPools.length === 0){
     predrawHtml = `<div class="card my-panel">
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Signups are open until <strong>noon Pacific</strong> on match day. First ${CAP} in are confirmed — everyone else is on the waitlist.</p>
-      <button class="btn small" onclick="showView('join')">Add a player</button>
+      <button class="btn small" onclick="showView('join')">Add/remove a player</button>
     </div>`;
     predrawHtml += generateCard(dateISO, confirmed);
     predrawHtml += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Confirmed (${confirmed.length}/${CAP})</h3>
