@@ -404,7 +404,7 @@
 
   // Mirrors getHeadToHead() in gas/Code.gs: scans every drawn pool grid this
   // player appears in (canned past weeks, plus tonight's live pools once
-  // scores exist) and tallies a season-long record per opponent.
+  // scores exist) and tallies a season-long record + individual games per opponent.
   function headToHead(name) {
     const k = key(name);
     const totals = {};
@@ -422,14 +422,17 @@
           const a = p.grid[idx][j], b = p.grid[j][idx];
           if (typeof a !== 'number' || typeof b !== 'number') continue;
           const oppKey = key(opp.name);
-          if (!totals[oppKey]) totals[oppKey] = { name: opp.name.trim(), wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 };
-          totals[oppKey].pointsFor += a;
-          totals[oppKey].pointsAgainst += b;
-          if (a > b) totals[oppKey].wins++; else totals[oppKey].losses++;
+          if (!totals[oppKey]) totals[oppKey] = { name: opp.name.trim(), wins: 0, losses: 0, matches: [] };
+          const won = a > b;
+          if (won) totals[oppKey].wins++; else totals[oppKey].losses++;
+          totals[oppKey].matches.push({ date: week.date, scoreFor: a, scoreAgainst: b, won });
         }
       });
     });
-    const opponents = Object.values(totals).sort((x, y) => (y.wins + y.losses) - (x.wins + x.losses) || x.name.localeCompare(y.name));
+    const opponents = Object.values(totals).map((o) => {
+      o.matches.sort((m1, m2) => (m2.date < m1.date ? -1 : m2.date > m1.date ? 1 : 0)); // most-recent-first
+      return o;
+    }).sort((x, y) => (y.wins + y.losses) - (x.wins + x.losses) || x.name.localeCompare(y.name));
     return { opponents };
   }
 

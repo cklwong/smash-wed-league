@@ -20,7 +20,7 @@
  * Endpoints (after deploying as a Web App):
  *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score, pool}]}], weeks: ['YYYY-MM-DD', ...] } (pool is a "A6"-style pool+rank label for that week)
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools }
- *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, pointsFor, pointsAgainst}, ...] } (season-long record vs every opponent NAME has shared a pool with)
+ *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}, ...]}, ...] } (season-long record + every individual game vs each opponent NAME has shared a pool with; matches are most-recent-first)
  *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error }
  *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error }
  *   POST { action:'getpin', date, secret }      -> { ok, pin }
@@ -315,7 +315,7 @@ function getHeadToHead(name) {
     }
   }
 
-  var totals = {}; // lowercased opponent name -> {name, wins, losses, pointsFor, pointsAgainst}
+  var totals = {}; // lowercased opponent name -> {name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}]}
   weeks.forEach(function (dateISO) {
     var sheet = getWeekSheet(dateISO);
     if (!sheet) return;
@@ -334,15 +334,19 @@ function getHeadToHead(name) {
         var a = p.grid[idx][j], b = p.grid[j][idx];
         if (typeof a !== 'number' || typeof b !== 'number') continue; // unplayed pair
         var oppName = opp.name.trim(), oppKey = oppName.toLowerCase();
-        if (!totals[oppKey]) totals[oppKey] = { name: oppName, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0 };
-        totals[oppKey].pointsFor += a;
-        totals[oppKey].pointsAgainst += b;
-        if (a > b) totals[oppKey].wins++; else totals[oppKey].losses++;
+        if (!totals[oppKey]) totals[oppKey] = { name: oppName, wins: 0, losses: 0, matches: [] };
+        var won = a > b;
+        if (won) totals[oppKey].wins++; else totals[oppKey].losses++;
+        totals[oppKey].matches.push({ date: dateISO, scoreFor: a, scoreAgainst: b, won: won });
       }
     });
   });
 
-  var opponents = Object.keys(totals).map(function (k) { return totals[k]; });
+  var opponents = Object.keys(totals).map(function (k) {
+    var o = totals[k];
+    o.matches.sort(function (m1, m2) { return m2.date < m1.date ? -1 : (m2.date > m1.date ? 1 : 0); }); // most-recent-first
+    return o;
+  });
   opponents.sort(function (a, b) {
     return (b.wins + b.losses) - (a.wins + a.losses) || a.name.localeCompare(b.name);
   });

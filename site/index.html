@@ -109,10 +109,16 @@
   .week-pill{display:flex; flex-direction:column; align-items:center; gap:2px; border:1.5px solid var(--border); border-radius:6px; padding:5px 8px; min-width:44px;}
   .week-pill .wp-pool{font-family:'IBM Plex Mono',monospace; font-weight:500; font-size:13px; color:var(--ink);}
   .week-pill .wp-date{font-size:10px; color:var(--text-mute);}
-  .h2h-row{display:flex; align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border); font-size:14px;}
-  .h2h-row:last-child{border-bottom:none;}
+  .h2h-opp{padding:8px 0; border-bottom:1px solid var(--border);}
+  .h2h-opp:last-child{border-bottom:none;}
+  .h2h-row{display:flex; align-items:center; justify-content:space-between; font-size:14px;}
   .h2h-name{flex:1;}
   .h2h-record{font-family:'IBM Plex Mono',monospace; font-weight:500; color:var(--ink); white-space:nowrap;}
+  .h2h-matches{display:flex; flex-direction:column; gap:3px; margin-top:6px;}
+  .h2h-match{display:flex; align-items:center; justify-content:space-between; font-size:12px; color:var(--text-mute); padding-left:2px;}
+  .h2h-match-result{font-family:'IBM Plex Mono',monospace; font-weight:500;}
+  .h2h-match-result.win{color:var(--win);}
+  .h2h-match-result.loss{color:var(--loss);}
   .stat .value{font-family:'Oswald'; font-size:26px; color:var(--ink);}
   form .field{margin-bottom:14px;}
   form label{display:block; font-size:13px; font-weight:500; margin-bottom:5px; color:var(--text);}
@@ -510,7 +516,13 @@ function renderH2H(filter=''){
   const f = filter.trim().toLowerCase();
   const rows = modalH2H.opponents.filter(o=>o.name.toLowerCase().includes(f));
   body.innerHTML = rows.length
-    ? rows.map(o=>`<div class="h2h-row"><span class="h2h-name">${o.name}</span><span class="h2h-record">${o.wins}-${o.losses}</span></div>`).join('')
+    ? rows.map(o=>`
+      <div class="h2h-opp">
+        <div class="h2h-row"><span class="h2h-name">${o.name}</span><span class="h2h-record">${o.wins}-${o.losses}</span></div>
+        <div class="h2h-matches">${o.matches.map(m=>`
+          <div class="h2h-match"><span>${m.date?fmtDate(m.date):''}</span><span class="h2h-match-result ${m.won?'win':'loss'}">${m.won?'W':'L'} ${m.scoreFor}–${m.scoreAgainst}</span></div>
+        `).join('')}</div>
+      </div>`).join('')
     : '<p style="font-size:13px;color:var(--text-mute); margin:0;">No opponent matches that search.</p>';
 }
 document.getElementById('modal-h2h-search').addEventListener('input', e=>renderH2H(e.target.value));
