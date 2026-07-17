@@ -76,14 +76,15 @@ function doPost(e) {
     if (body.action === 'join') result = addJoin(body.date, body.name, body.contact);
     else if (body.action === 'leave') result = removeJoin(body.date, body.name);
     else if (body.action === 'getpin') result = getPin(body.date, body.secret);
-    else if (body.action === 'generatePools') result = generatePools(body.date, body.pin, body.padGuests, body.redraw);
-    else if (body.action === 'checkin') result = setCheckin(body.date, body.name, body.secret);
-    else if (body.action === 'noshow') result = setNoShow(body.date, body.name, body.secret);
-    else if (body.action === 'clearstatus') result = clearStatus(body.date, body.name, body.secret);
-    else if (body.action === 'startMatch') result = startMatch(body.date, body.a, body.b, body.guestNames, body.id, body.secret);
-    else if (body.action === 'recordScore') result = recordScore(body.date, body.matchId, body.scoreA, body.scoreB, body.secret);
-    else if (body.action === 'editScore') result = editScore(body.date, body.a, body.b, body.scoreA, body.scoreB, body.matchId, body.secret);
-    else if (body.action === 'cancelMatch') result = cancelMatch(body.date, body.matchId, body.secret);
+    else if (body.action === 'verifyPin') result = checkPin(body.date, body.pin);
+    else if (body.action === 'generatePools') result = generatePools(body.date, body.pin, body.padGuests, body.redraw, body.secret);
+    else if (body.action === 'checkin') result = setCheckin(body.date, body.name, body.secret, body.pin);
+    else if (body.action === 'noshow') result = setNoShow(body.date, body.name, body.secret, body.pin);
+    else if (body.action === 'clearstatus') result = clearStatus(body.date, body.name, body.secret, body.pin);
+    else if (body.action === 'startMatch') result = startMatch(body.date, body.a, body.b, body.guestNames, body.id, body.secret, body.pin);
+    else if (body.action === 'recordScore') result = recordScore(body.date, body.matchId, body.scoreA, body.scoreB, body.secret, body.pin);
+    else if (body.action === 'editScore') result = editScore(body.date, body.a, body.b, body.scoreA, body.scoreB, body.matchId, body.secret, body.pin);
+    else if (body.action === 'cancelMatch') result = cancelMatch(body.date, body.matchId, body.secret, body.pin);
     else if (body.action === 'finalizeRankings') result = forceFinalizeWeek(body.date, body.secret);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
@@ -500,6 +501,18 @@ function checkAdminSecret(secret) {
   return { ok: true };
 }
 
+// Run-night actions accept either the admin passphrase or tonight's event PIN,
+// so helpers who only have the PIN can check players in, run matches, and
+// manage pools without needing the organizer passphrase.
+function checkRunAuth(dateISO, secret, pin) {
+  if (secret) {
+    var s = checkAdminSecret(secret);
+    if (s.ok || !pin) return s;
+  }
+  if (pin) return checkPin(dateISO, pin);
+  return { ok: false, error: 'Sign in required.' };
+}
+
 function getPin(dateISO, secret) {
   var auth = checkAdminSecret(secret);
   if (!auth.ok) return auth;
@@ -581,11 +594,11 @@ function poolSplitSizes(n) {
   return sizes;
 }
 
-function generatePools(dateISO, pin, padGuests, redraw) {
+function generatePools(dateISO, pin, padGuests, redraw, secret) {
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
-  var pinCheck = checkPin(dateISO, pin);
-  if (!pinCheck.ok) return pinCheck;
+  var auth = checkRunAuth(dateISO, secret, pin);
+  if (!auth.ok) return auth;
 
   var data = sheet.getDataRange().getValues();
   // Confirmed slice only, minus no-shows. The waitlist is never promoted here -
@@ -648,8 +661,8 @@ function generatePools(dateISO, pin, padGuests, redraw) {
 
 // ---- Check-in / no-show (admin only) ----
 
-function setCheckin(dateISO, name, secret) {
-  var auth = checkAdminSecret(secret);
+function setCheckin(dateISO, name, secret, pin) {
+  var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
@@ -689,8 +702,8 @@ function setCheckin(dateISO, name, secret) {
   return { ok: true, seated: seated };
 }
 
-function setNoShow(dateISO, name, secret) {
-  var auth = checkAdminSecret(secret);
+function setNoShow(dateISO, name, secret, pin) {
+  var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
@@ -721,8 +734,8 @@ function setNoShow(dateISO, name, secret) {
   return { ok: true };
 }
 
-function clearStatus(dateISO, name, secret) {
-  var auth = checkAdminSecret(secret);
+function clearStatus(dateISO, name, secret, pin) {
+  var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
@@ -835,8 +848,8 @@ function validateScores(scoreA, scoreB) {
   return { ok: true, a: a, b: b };
 }
 
-function startMatch(dateISO, a, b, guestNames, clientId, secret) {
-  var auth = checkAdminSecret(secret);
+function startMatch(dateISO, a, b, guestNames, clientId, secret, pin) {
+  var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
@@ -918,8 +931,8 @@ function writePairScore(sheet, data, nameA, nameB, scoreA, scoreB) {
   return { ok: true, infoOnly: guestA || guestB };
 }
 
-function recordScore(dateISO, matchId, scoreA, scoreB, secret) {
-  var auth = checkAdminSecret(secret);
+function recordScore(dateISO, matchId, scoreA, scoreB, secret, pin) {
+  var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
@@ -950,8 +963,8 @@ function recordScore(dateISO, matchId, scoreA, scoreB, secret) {
   return result;
 }
 
-function editScore(dateISO, a, b, scoreA, scoreB, matchId, secret) {
-  var auth = checkAdminSecret(secret);
+function editScore(dateISO, a, b, scoreA, scoreB, matchId, secret, pin) {
+  var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
@@ -995,8 +1008,8 @@ function editScore(dateISO, a, b, scoreA, scoreB, matchId, secret) {
   });
 }
 
-function cancelMatch(dateISO, matchId, secret) {
-  var auth = checkAdminSecret(secret);
+function cancelMatch(dateISO, matchId, secret, pin) {
+  var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
   var cancelled = null;
   var result = updateLiveState(dateISO, function (state) {

@@ -654,7 +654,26 @@ function paintSchedule(week, dateISO){
   const confirmed = week.signups.slice(0, CAP);
   const waitlist = week.signups.slice(CAP);
   const drawnPools = week.pools.filter(p=>p.drawn);
-  const admin = isAdmin();
+  const admin = hasRunAccess();
+
+  let signinHtml;
+  if(!admin){
+    signinHtml = `<div class="cta-line" style="flex-direction:column; align-items:stretch;">
+      <span>Sign in with tonight's PIN to manage check-in, matches, and pools (or use the admin passphrase on the Admin tab).</span>
+      <div class="search-row" style="margin:8px 0 0;">
+        <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="week-pin-input" placeholder="6-digit PIN" autocomplete="off">
+        <button type="button" class="btn small" onclick="weekPinSignIn('${dateISO}')">Sign in</button>
+      </div>
+      <p class="note" id="week-pin-error" style="display:none; color:var(--loss); margin:6px 0 0;"></p>
+    </div>`;
+  } else if(!isAdmin()){
+    signinHtml = `<div class="cta-line">
+      <span>Signed in with tonight's PIN.</span>
+      <button class="btn small ghost" onclick="weekPinSignOut()">Sign out</button>
+    </div>`;
+  } else {
+    signinHtml = '';
+  }
 
   const bannerHtml = `<div class="session-banner">
     <div><div class="date">Wed, ${fmtDate(dateISO)}</div>
@@ -663,10 +682,7 @@ function paintSchedule(week, dateISO){
       <div class="cap-pill"><div class="n">${confirmed.length}/${CAP}</div><div class="l">Confirmed</div></div>
       <div class="cap-pill"><div class="n">${waitlist.length}</div><div class="l">Waitlist</div></div>
     </div>
-  </div>` + (admin ? '' : `<div class="cta-line">
-    <span>Viewing only — sign in on the Admin tab to manage check-in, matches, and pools.</span>
-    <button class="btn small ghost" onclick="showView('admin')">Admin sign-in</button>
-  </div>`);
+  </div>` + signinHtml;
 
   let predrawHtml = '', liveHtml = '', checkinHtml = '', poolsHtml = '';
   if(drawnPools.length === 0){
@@ -695,7 +711,7 @@ function paintSchedule(week, dateISO){
     checkinHtml += `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">${admin
         ? 'Tap <strong>Check in</strong> as players arrive. A no-show\'s pool spot goes to a Guest; if they turn up before the guest plays, checking them in puts them back.'
-        : 'Sign in on the Admin tab to check players in or mark no-shows.'}</p>
+        : 'Sign in above to check players in or mark no-shows.'}</p>
       <ul class="roster-list">${checkinList.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO,admin)).join('')}</ul>
     </div>`;
     model.pools.forEach(mp=>{ poolsHtml += poolLiveCard(mp, model, admin); });
@@ -761,7 +777,7 @@ function generateCard(dateISO, confirmed, admin){
       ${admin ? `${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
       <button class="btn" id="gen-pools-btn" onclick="generatePoolsClick('${dateISO}', false)">Generate pools</button>
       <p class="note" style="margin-top:8px;">Needs tonight's PIN — emailed to organizers at noon, or grab it from the Admin tab.</p>`
-      : `<p class="note" style="margin-top:8px;">Sign in on the Admin tab to generate pools.</p>`}`;
+      : `<p class="note" style="margin-top:8px;">Sign in above to generate pools.</p>`}`;
   }
   return `<div class="card"><h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Generate pools <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>${body}</div>`;
 }
@@ -787,7 +803,7 @@ function poolStatusCard(dateISO, week, confirmed, drawnPools, admin){
 
   const {sizes, preview, padOptions} = splitPreviewAndPadding(eligible.length);
   const noteHtml = issues.length
-    ? `<p style="margin:0 0 10px; font-size:13px; color:var(--loss); font-weight:500;">${issues.join('; ')}${admin ? '. Redraw to fix this.' : ' — sign in on the Admin tab to redraw.'}</p>` : '';
+    ? `<p style="margin:0 0 10px; font-size:13px; color:var(--loss); font-weight:500;">${issues.join('; ')}${admin ? '. Redraw to fix this.' : ' — sign in above to redraw.'}</p>` : '';
   const actionHtml = admin
     ? `<p style="margin:0 0 4px; font-size:13px; color:var(--text-soft);">Redrawing re-seeds everyone checked-in-eligible by standings → <strong>${sizes.length} pools</strong> (${preview}). No-shows are excluded and any scores entered so far are cleared.</p>
     ${padOptions ? `<div class="pad-row">${padOptions}</div>` : ''}
@@ -802,19 +818,20 @@ function poolStatusCard(dateISO, week, confirmed, drawnPools, admin){
 
 async function generatePoolsClick(dateISO, redraw){
   if(redraw && !confirm('Redraw pools now? No-shows are left out and everyone else is re-seeded by standings.')) return;
+  const secret = adminSecret();
   let pin = sessionStorage.getItem('sw-pin-'+dateISO);
-  if(!pin){
+  if(!secret && !pin){
     pin = (prompt("Enter tonight's pool PIN:")||'').trim();
     if(!pin) return;
   }
   const padGuests = Array.from(document.querySelectorAll('input[name="pad-guest"]:checked')).map(i=>i.value);
   const btn = document.getElementById('gen-pools-btn');
   if(btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
-  const res = await postAction({action:'generatePools', date:dateISO, pin, padGuests, redraw});
+  const res = await postAction({action:'generatePools', date:dateISO, pin, secret, padGuests, redraw});
   if(!res.ok){
-    sessionStorage.removeItem('sw-pin-'+dateISO);
+    if(pin) sessionStorage.removeItem('sw-pin-'+dateISO);
     alert(res.error || 'Could not generate pools — please try again.');
-  } else {
+  } else if(pin){
     sessionStorage.setItem('sw-pin-'+dateISO, pin);
   }
   renderSchedule();
@@ -848,7 +865,7 @@ async function statusAction(btnEl, action, dateISO, name){
     const optimistic = {name, checkedIn: action==='checkin', noShow: action==='noshow'};
     li.outerHTML = checkinRow(optimistic, num, dateISO, true);
   }
-  const res = await postAction({action, date:dateISO, name, secret:adminSecret()});
+  const res = await postAction({action, date:dateISO, name, secret:adminSecret(), pin:eventPin()});
   if(!res.ok){
     alert(res.error || 'Could not update — please try again.');
   } else if(action==='checkin' && res.seated===false){
@@ -859,6 +876,24 @@ async function statusAction(btnEl, action, dateISO, name){
 
 function adminSecret(){ return sessionStorage.getItem('sw-admin-secret') || ''; }
 function isAdmin(){ return !!adminSecret(); }
+function eventPin(){ return WEEK_DATE ? (sessionStorage.getItem('sw-pin-'+WEEK_DATE) || '') : ''; }
+function hasRunAccess(){ return isAdmin() || !!eventPin(); }
+
+async function weekPinSignIn(dateISO){
+  const inp = document.getElementById('week-pin-input');
+  const err = document.getElementById('week-pin-error');
+  const pin = (inp.value||'').trim();
+  err.style.display = 'none';
+  if(!pin){ err.style.display='block'; err.textContent='Enter the PIN first.'; return; }
+  const res = await postAction({action:'verifyPin', date:dateISO, pin});
+  if(!res.ok){ err.style.display='block'; err.textContent = res.error || 'Wrong PIN.'; return; }
+  sessionStorage.setItem('sw-pin-'+dateISO, pin);
+  paintSchedule(LAST_WEEK, dateISO);
+}
+function weekPinSignOut(){
+  if(WEEK_DATE) sessionStorage.removeItem('sw-pin-'+WEEK_DATE);
+  paintSchedule(LAST_WEEK, WEEK_DATE);
+}
 
 function renderAdmin(){
   document.getElementById('admin-secret').value = sessionStorage.getItem('sw-admin-secret') || '';
@@ -1475,7 +1510,7 @@ async function startMatchClick(poolIdx){
     LAST_WEEK.live.matches.push(m);
     paintSchedule(LAST_WEEK);
   }
-  const res = await postAction({action:'startMatch', id, date:WEEK_DATE, a:a.name, b:b.name, guestNames, secret:adminSecret()});
+  const res = await postAction({action:'startMatch', id, date:WEEK_DATE, a:a.name, b:b.name, guestNames, secret:adminSecret(), pin:eventPin()});
   if(!res.ok) alert(res.error || 'Could not start the match — please try again.');
   // Reconcile with the server (or roll the optimistic card back on error).
   renderSchedule(true, true);
@@ -1521,7 +1556,7 @@ async function recordScoreClick(matchId){
     applyScoreLocally(cached, v.a, v.b);
     paintSchedule(LAST_WEEK);
   }
-  const res = await postAction({action:'recordScore', date:WEEK_DATE, matchId, scoreA:v.a, scoreB:v.b, secret:adminSecret()});
+  const res = await postAction({action:'recordScore', date:WEEK_DATE, matchId, scoreA:v.a, scoreB:v.b, secret:adminSecret(), pin:eventPin()});
   if(!res.ok) alert(res.error || 'Could not record the score — please try again.');
   // Reconcile with the server (or roll the optimistic result back on error).
   renderSchedule(true, true);
@@ -1533,7 +1568,7 @@ async function cancelMatchClick(matchId){
     const idx = LAST_WEEK.live.matches.findIndex(m=>m.id===matchId && !m.finishedAt);
     if(idx >= 0){ LAST_WEEK.live.matches.splice(idx, 1); paintSchedule(LAST_WEEK); }
   }
-  const res = await postAction({action:'cancelMatch', date:WEEK_DATE, matchId, secret:adminSecret()});
+  const res = await postAction({action:'cancelMatch', date:WEEK_DATE, matchId, secret:adminSecret(), pin:eventPin()});
   if(!res.ok) alert(res.error || 'Could not cancel — please try again.');
   renderSchedule(true, true);
 }
@@ -1559,7 +1594,7 @@ async function saveGameEdit(rowId){
   const ib = document.getElementById('edit-'+rowId+'-b');
   const v = checkScores(ia ? ia.value : '', ib ? ib.value : '');
   if(v.error){ alert(v.error); return; }
-  const res = await postAction({action:'editScore', date:WEEK_DATE, a:g.nameI, b:g.nameJ, scoreA:v.a, scoreB:v.b, matchId:g.matchId, secret:adminSecret()});
+  const res = await postAction({action:'editScore', date:WEEK_DATE, a:g.nameI, b:g.nameJ, scoreA:v.a, scoreB:v.b, matchId:g.matchId, secret:adminSecret(), pin:eventPin()});
   if(!res.ok) alert(res.error || 'Could not save the correction — please try again.');
   else { if(ia) ia.value=''; if(ib) ib.value=''; }
   renderSchedule(true, true);

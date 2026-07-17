@@ -441,6 +441,7 @@
       case 'join': return join(body.name, body.contact);
       case 'leave': return leave(body.name);
       case 'getpin': return { ok: true, pin: '123456' }; // dev sandbox: any passphrase works
+      case 'verifyPin': return { ok: true }; // dev sandbox: any PIN works
       case 'generatePools': return generatePools(body.padGuests, body.redraw);
       case 'checkin': return checkin(body.name);
       case 'noshow': return noshow(body.name);
