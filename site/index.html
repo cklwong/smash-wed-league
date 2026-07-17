@@ -331,6 +331,7 @@
         <button type="button" class="btn" onclick="fetchEventPin()">Sign in</button>
       </div>
       <p class="note" id="admin-pin-out" style="display:none;"></p>
+      <button type="button" class="btn ghost small" id="admin-signout-btn" style="display:none; margin-top:8px;" onclick="adminSignOut()">Sign out</button>
     </div>
     <div class="card" style="max-width:440px; display:none;" id="admin-mock-card">
       <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Developer sandbox</h3>
@@ -860,10 +861,20 @@ function isAdmin(){ return !!adminSecret(); }
 function renderAdmin(){
   document.getElementById('admin-secret').value = sessionStorage.getItem('sw-admin-secret') || '';
   document.getElementById('admin-mock-card').style.display = 'none';
+  document.getElementById('admin-signout-btn').style.display = isAdmin() ? 'inline-block' : 'none';
   const out = document.getElementById('admin-pin-out');
   out.style.display = 'none'; out.textContent = '';
   // A passphrase cached for this browser tab signs the organizer back in automatically.
   if(sessionStorage.getItem('sw-admin-secret')) fetchEventPin();
+}
+
+// Clears the cached passphrase and every event PIN this tab remembered, so
+// the next visitor sees the same view-only board a fresh browser tab would.
+function adminSignOut(){
+  sessionStorage.removeItem('sw-admin-secret');
+  Object.keys(sessionStorage).filter(k=>k.startsWith('sw-pin-')).forEach(k=>sessionStorage.removeItem(k));
+  document.getElementById('admin-secret').value = '';
+  renderAdmin();
 }
 
 async function fetchEventPin(){
@@ -878,6 +889,7 @@ async function fetchEventPin(){
   const res = await postAction({action:'getpin', date:dateISO, secret});
   if(!res.ok){
     sessionStorage.removeItem('sw-admin-secret');
+    document.getElementById('admin-signout-btn').style.display = 'none';
     out.textContent = res.error || 'Could not retrieve the PIN.';
     return;
   }
@@ -885,6 +897,7 @@ async function fetchEventPin(){
   sessionStorage.setItem('sw-pin-'+dateISO, res.pin);
   out.innerHTML = `Signed in. PIN for Wed, ${fmtDate(dateISO)}: <strong class="num">${res.pin}</strong> — remembered for this browser tab only.`;
   document.getElementById('admin-mock-card').style.display = 'block';
+  document.getElementById('admin-signout-btn').style.display = 'inline-block';
 }
 
 function rosterRow(s, num, phase){
