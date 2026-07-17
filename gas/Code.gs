@@ -1002,6 +1002,23 @@ function dryRunFinalize(dateISO) {
   return results;
 }
 
+// Edit this, then run dryRunFinalizeDate() / runFinalizeDate() from the
+// Apps Script editor to fix a single date's Rankings columns by hand - the
+// Run button can't take a text-box argument, so a constant + a pair of
+// zero-arg wrappers is the friction-free way to point dryRunFinalize /
+// finalizeWeek at whatever date needs it.
+var MANUAL_FINALIZE_DATE = '2026-07-15';
+
+function dryRunFinalizeDate() {
+  return dryRunFinalize(MANUAL_FINALIZE_DATE);
+}
+
+function runFinalizeDate() {
+  var result = finalizeWeek(MANUAL_FINALIZE_DATE);
+  Logger.log(JSON.stringify(result));
+  return result;
+}
+
 // Called after every recorded/edited score and by the nightly trigger; a
 // finalize failure must never break the score write that triggered it.
 function maybeFinalizeWeek(dateISO) {
