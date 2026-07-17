@@ -21,7 +21,7 @@
  *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score, pool}]}], weeks: ['YYYY-MM-DD', ...] } (pool is a "A6"-style pool+rank label for that week)
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools }
  *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}, ...]}, ...] } (season-long record + every individual game vs each opponent NAME has shared a pool with; matches are most-recent-first)
- *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error }
+ *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error } (if contact looks like an email, sends a welcome email with the site link)
  *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error }
  *   POST { action:'getpin', date, secret }      -> { ok, pin }
  *   POST { action:'generatePools', date, pin, padGuests:['A',...], redraw } -> { ok, pools }
@@ -38,6 +38,7 @@
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
 var NOSHOW_GUEST_COL = 31; // column AE - remembers which Guest label replaced a no-show, for swap-back
 var CAP = 24;
+var SITE_URL = 'https://cklwong.github.io/smash-wed-league/';
 
 // Fixed weekly-tab template geometry. Pool grids are formula-driven off the
 // column-E seed slots (grid headers are =E2 etc.), so drawing a pool is just
@@ -376,8 +377,23 @@ function addJoin(dateISO, name, contact) {
   if (contact) {
     sheet.getRange(1, CONTACT_COL).setValue('Contact');
     sheet.getRange(targetRow, CONTACT_COL).setValue(contact);
+    if (isEmail(contact)) emailWelcomeLink(contact, name);
   }
   return { ok: true, row: targetRow, position: position };
+}
+
+function isEmail(contact) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((contact || '').trim());
+}
+
+// New players who sign up with an email get a welcome email pointing them
+// at the league site, so they can find Standings/This week/Join again.
+function emailWelcomeLink(email, name) {
+  MailApp.sendEmail(email.trim(),
+    'Welcome to Smash Wed!',
+    'Hi ' + name + ',\n\n' +
+    'Thanks for signing up for Smash Wed. You can check standings, this week\'s pools, ' +
+    'and manage your signups any time here:\n' + SITE_URL);
 }
 
 // Deletes the signup's row outright (rather than blanking it) so every row
