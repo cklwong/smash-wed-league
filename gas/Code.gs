@@ -1055,6 +1055,26 @@ function finalizeWeek(dateISO) {
   }
 }
 
+// Extends whatever conditional-format rules are anchored on a single
+// existing column (e.g. a week's RP color scale) onto another column, over
+// the same data-row range every other Rankings column helper uses. Rules
+// that span multiple columns are left alone - only rules scoped to exactly
+// fromCol are cloned, since those are the "this one week's column" rules a
+// newly inserted week should inherit.
+function copyConditionalFormatting(sheet, fromCol, toCol) {
+  var rules = sheet.getConditionalFormatRules();
+  var toRange = sheet.getRange(RANKINGS_FIRST_DATA_ROW, toCol, RANKINGS_LAST_DATA_ROW - RANKINGS_FIRST_DATA_ROW + 1, 1);
+  var cloned = [];
+  rules.forEach(function (rule) {
+    var appliesToFromCol = rule.getRanges().some(function (r) {
+      return r.getColumn() === fromCol && r.getLastColumn() === fromCol;
+    });
+    if (!appliesToFromCol) return;
+    cloned.push(rule.copy().setRanges([toRange]).build());
+  });
+  if (cloned.length) sheet.setConditionalFormatRules(rules.concat(cloned));
+}
+
 function doFinalizeWeek(dateISO) {
   SpreadsheetApp.flush(); // a score was possibly just written; recalc GW/Rank before reading
   var week = getWeek(dateISO);
@@ -1087,6 +1107,11 @@ function doFinalizeWeek(dateISO) {
       sheet.getRange(1, rCol).setValue(shiftedLabel);
       sheet.getRange(1, rCol + 2).clearContent();
     }
+    // The week that was newest before this insert shifted from rCol/rCol+1
+    // to rCol+2/rCol+3 - carry its RP column's conditional formatting (e.g.
+    // a color scale) onto the new RP column, so every week keeps it without
+    // the organizer re-applying it by hand each time.
+    copyConditionalFormatting(sheet, rCol + 3, rCol + 1);
     inserted = true;
   }
 
