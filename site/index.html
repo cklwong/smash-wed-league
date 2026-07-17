@@ -1025,9 +1025,9 @@ function onCourtCard(model, admin){
 }
 
 // All not-yet-played pairs among this pool's available players, sorted by
-// longest-waiting player first, then by that match's longest-waiting
-// opponent. Guests have no meaningful wait time, so guest-involving pairs
-// always sort after every non-guest pairing.
+// the combined wait time of both players (longest combined wait first).
+// Guests have no meaningful wait time, so guest-involving pairs always sort
+// after every non-guest pairing.
 function pendingMatchesForPool(model, avail, poolIdx){
   const cands = avail.filter(c=>c.pool===poolIdx);
   const played = model.pools[poolIdx].playedSet;
@@ -1040,7 +1040,7 @@ function pendingMatchesForPool(model, avail, poolIdx){
   }
   pairs.sort((m1,m2)=>{
     const g1 = m1[0].guest||m1[1].guest ? 1 : 0, g2 = m2[0].guest||m2[1].guest ? 1 : 0;
-    return g1-g2 || (m1[0].since-m2[0].since) || (m1[1].since-m2[1].since);
+    return g1-g2 || ((m1[0].since+m1[1].since) - (m2[0].since+m2[1].since));
   });
   return pairs;
 }
