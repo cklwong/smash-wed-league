@@ -31,6 +31,7 @@
  *   POST { action:'recordScore', date, matchId, scoreA, scoreB } -> { ok } (writes the score grid and stops the match; guest games count 1-0 for the real player, actual score kept as info)
  *   POST { action:'editScore', date, a, b, scoreA, scoreB, matchId } -> { ok } (fixes a finished game's score; guest games only update the info score)
  *   POST { action:'cancelMatch', date, matchId }-> { ok } (removes a mis-started, unfinished match)
+ *   POST { action:'finalizeRankings', date, secret } -> { ok, finalized, updated, added, skipped } (admin passphrase; re-runs finalize for a fully-scored week, overwriting its Rankings column pair)
  */
 
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
@@ -80,6 +81,7 @@ function doPost(e) {
     else if (body.action === 'recordScore') result = recordScore(body.date, body.matchId, body.scoreA, body.scoreB);
     else if (body.action === 'editScore') result = editScore(body.date, body.a, body.b, body.scoreA, body.scoreB, body.matchId);
     else if (body.action === 'cancelMatch') result = cancelMatch(body.date, body.matchId);
+    else if (body.action === 'finalizeRankings') result = forceFinalizeWeek(body.date, body.secret);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
@@ -149,12 +151,17 @@ function parsePools(data) {
       if (!m || seenLabels[m[1]]) continue;
       seenLabels[m[1]] = true;
 
+      // Trailing seats past a pool's actual player count are blank - skip
+      // over them without stopping the scan; only the literal "GW" header
+      // marks the true end of the seat-header block (whatever its real
+      // width is - POOL_LAYOUT.size isn't a reliable stand-in for that, so
+      // don't use it here, only for the grid dimensions below).
       var members = [];
       var cc = c + 1;
       while (cc < headerRow.length) {
         var h = (headerRow[cc] || '').toString().trim();
-        if (h === 'GW' || h === '') break;
-        members.push(h);
+        if (h === 'GW') break;
+        if (h) members.push(h);
         cc++;
       }
       var summaryCol = cc; // GW column index
@@ -176,6 +183,8 @@ function parsePools(data) {
         }
       }
 
+      // Summary block is 6 columns: GW, GL, Pts W-L, Score (tie-break helper,
+      // unused here), Rank, Rank Pts.
       var players = members.map(function (memberName, i) {
         var prow = data[r2 + 1 + i] || [];
         return {
@@ -183,7 +192,6 @@ function parsePools(data) {
           gw: prow[summaryCol] || 0,
           gl: prow[summaryCol + 1] || 0,
           ptsWL: prow[summaryCol + 2] || '',
-          score: prow[summaryCol + 3] || '',
           rank: prow[summaryCol + 4] || '',
           rankPts: prow[summaryCol + 5] || ''
         };
@@ -406,10 +414,16 @@ function checkPin(dateISO, pin) {
   return { ok: true };
 }
 
-function getPin(dateISO, secret) {
+function checkAdminSecret(secret) {
   var expected = PropertiesService.getScriptProperties().getProperty('ADMIN_SECRET');
   if (!expected) return { ok: false, error: 'ADMIN_SECRET script property is not set — set it in Apps Script project settings.' };
   if (String(secret || '') !== expected) return { ok: false, error: 'Wrong passphrase.' };
+  return { ok: true };
+}
+
+function getPin(dateISO, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
   if (!dateISO) return { ok: false, error: 'Missing date.' };
   return { ok: true, pin: ensurePin(dateISO) };
 }
@@ -974,6 +988,37 @@ function computeWeekResults(week) {
   return results;
 }
 
+// Read-only sanity check: logs exactly what finalizeWeek would compute and
+// write for a date, without touching the Rankings sheet at all. Run this
+// from the editor and inspect the log before trusting a real finalize run,
+// especially right after changing parsePools - a parsing bug here writes
+// silently-wrong data straight into the season's standings.
+function dryRunFinalize(dateISO) {
+  var week = getWeek(dateISO);
+  if (!week.exists) { Logger.log('No tab exists for ' + dateISO); return; }
+  Logger.log('hasScores=' + week.hasScores + ' complete=' + weekIsComplete(week));
+  var results = computeWeekResults(week);
+  Logger.log(JSON.stringify(results, null, 2));
+  return results;
+}
+
+// Edit this, then run dryRunFinalizeDate() / runFinalizeDate() from the
+// Apps Script editor to fix a single date's Rankings columns by hand - the
+// Run button can't take a text-box argument, so a constant + a pair of
+// zero-arg wrappers is the friction-free way to point dryRunFinalize /
+// finalizeWeek at whatever date needs it.
+var MANUAL_FINALIZE_DATE = '2026-07-15';
+
+function dryRunFinalizeDate() {
+  return dryRunFinalize(MANUAL_FINALIZE_DATE);
+}
+
+function runFinalizeDate() {
+  var result = finalizeWeek(MANUAL_FINALIZE_DATE);
+  Logger.log(JSON.stringify(result));
+  return result;
+}
+
 // Called after every recorded/edited score and by the nightly trigger; a
 // finalize failure must never break the score write that triggered it.
 function maybeFinalizeWeek(dateISO) {
@@ -985,6 +1030,21 @@ function maybeFinalizeWeek(dateISO) {
   }
 }
 
+// Admin-triggered re-finalize from the site (Past weeks page), for when a
+// week's Rankings columns need overwriting - e.g. after a finalize-logic
+// bug is fixed. Same finalizeWeek every other caller uses, just gated on
+// the admin passphrase instead of running automatically off a score write.
+function forceFinalizeWeek(dateISO, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  if (!dateISO) return { ok: false, error: 'Missing date.' };
+  var result = maybeFinalizeWeek(dateISO);
+  if (result && result.pending) {
+    return { ok: false, error: "This week isn't fully scored yet — every pool game needs a result before it can finalize." };
+  }
+  return result;
+}
+
 function finalizeWeek(dateISO) {
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -993,6 +1053,26 @@ function finalizeWeek(dateISO) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// Extends whatever conditional-format rules are anchored on a single
+// existing column (e.g. a week's RP color scale) onto another column, over
+// the same data-row range every other Rankings column helper uses. Rules
+// that span multiple columns are left alone - only rules scoped to exactly
+// fromCol are cloned, since those are the "this one week's column" rules a
+// newly inserted week should inherit.
+function copyConditionalFormatting(sheet, fromCol, toCol) {
+  var rules = sheet.getConditionalFormatRules();
+  var toRange = sheet.getRange(RANKINGS_FIRST_DATA_ROW, toCol, RANKINGS_LAST_DATA_ROW - RANKINGS_FIRST_DATA_ROW + 1, 1);
+  var cloned = [];
+  rules.forEach(function (rule) {
+    var appliesToFromCol = rule.getRanges().some(function (r) {
+      return r.getColumn() === fromCol && r.getLastColumn() === fromCol;
+    });
+    if (!appliesToFromCol) return;
+    cloned.push(rule.copy().setRanges([toRange]).build());
+  });
+  if (cloned.length) sheet.setConditionalFormatRules(rules.concat(cloned));
 }
 
 function doFinalizeWeek(dateISO) {
@@ -1027,6 +1107,11 @@ function doFinalizeWeek(dateISO) {
       sheet.getRange(1, rCol).setValue(shiftedLabel);
       sheet.getRange(1, rCol + 2).clearContent();
     }
+    // The week that was newest before this insert shifted from rCol/rCol+1
+    // to rCol+2/rCol+3 - carry its RP column's conditional formatting (e.g.
+    // a color scale) onto the new RP column, so every week keeps it without
+    // the organizer re-applying it by hand each time.
+    copyConditionalFormatting(sheet, rCol + 3, rCol + 1);
     inserted = true;
   }
 
@@ -1096,7 +1181,29 @@ function appendRankingsPlayer(sheet, name, lastNameRow) {
 // 6 weeks played" (blanks don't count, an absence 0 does).
 function avgFormulaForRow(row) {
   var cells = ['$I', '$K', '$M', '$O', '$Q', '$S'].map(function (col) { return col + row; }).join(',');
-  return '=IFERROR(AVERAGE(LARGE({' + cells + '}, SEQUENCE(MIN(4, COUNT(' + cells + ')),1))),0)';
+  return '=IFERROR(AVERAGE(ARRAYFORMULA(LARGE({' + cells + '}, SEQUENCE(MIN(4, COUNT(' + cells + ')))))),0)';
+}
+
+// doFinalizeWeek only rewrites column F when it inserts a brand new week
+// pair (the insert is what shifts $I,$K,... for every existing row); a
+// re-finalize that reuses an existing column pair never touches F, so a
+// week whose R/RP got fixed after the fact (e.g. 7/15) can be left with
+// whatever formula - or lack of one - was there before. Run this manually
+// from the editor any time column F looks wrong, to force every named row
+// back to the canonical formula regardless of why it drifted.
+function fixAvgFormulas() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
+  if (!sheet) { Logger.log('Rankings sheet not found'); return; }
+  var data = sheet.getDataRange().getValues();
+  var fixed = 0;
+  for (var r = RANKINGS_FIRST_DATA_ROW - 1; r < data.length && r < RANKINGS_LAST_DATA_ROW; r++) {
+    var nm = (data[r][RANKINGS_NAME_COL - 1] || '').toString().trim();
+    if (!nm) continue;
+    var row = r + 1;
+    sheet.getRange(row, RANKINGS_AVG_COL).setFormula(avgFormulaForRow(row));
+    fixed++;
+  }
+  Logger.log('Rewrote column F for ' + fixed + ' player rows.');
 }
 
 // Long-term absence: a player's 4th consecutive missed week is marked
