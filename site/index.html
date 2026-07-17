@@ -66,6 +66,8 @@
   .rank-badge{display:inline-flex; align-items:center; justify-content:center; width:30px; height:26px; border:1.5px solid var(--ink); border-radius:4px; font-family:'IBM Plex Mono'; font-weight:500; font-size:13px; color:var(--ink);}
   .rank-badge.top3{background:var(--amber-tint); border-color:var(--amber-deep); color:var(--amber-deep);}
   .p-name{font-weight:500;}
+  table.standings .p-name{color:var(--ink); cursor:pointer;}
+  table.standings .p-name:hover{text-decoration:underline;}
   .avg-val{font-family:'IBM Plex Mono'; font-weight:500;}
   th.num-col, td.num-col{text-align:right;}
   .session-banner{display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; background:var(--ink); color:#fff; border-radius:10px; padding:16px 18px; margin-bottom:16px;}
@@ -103,6 +105,14 @@
   .stat-row{display:flex; gap:20px; margin:14px 0;}
   .stat{flex:1;}
   .stat .label{font-size:11px; color:var(--text-mute); text-transform:uppercase; letter-spacing:.03em;}
+  .week-strip{display:flex; flex-wrap:wrap; gap:6px;}
+  .week-pill{display:flex; flex-direction:column; align-items:center; gap:2px; border:1.5px solid var(--border); border-radius:6px; padding:5px 8px; min-width:44px;}
+  .week-pill .wp-pool{font-family:'IBM Plex Mono',monospace; font-weight:500; font-size:13px; color:var(--ink);}
+  .week-pill .wp-date{font-size:10px; color:var(--text-mute);}
+  .h2h-row{display:flex; align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border); font-size:14px;}
+  .h2h-row:last-child{border-bottom:none;}
+  .h2h-name{flex:1;}
+  .h2h-record{font-family:'IBM Plex Mono',monospace; font-weight:500; color:var(--ink); white-space:nowrap;}
   .stat .value{font-family:'Oswald'; font-size:26px; color:var(--ink);}
   form .field{margin-bottom:14px;}
   form label{display:block; font-size:13px; font-weight:500; margin-bottom:5px; color:var(--text);}
@@ -340,6 +350,11 @@
     </div>
     <div class="label" style="margin-bottom:6px;">Points, last weeks played</div>
     <div id="modal-chart"></div>
+    <div class="label" style="margin:16px 0 6px;">Last 6 weeks</div>
+    <div id="modal-weeks-strip"></div>
+    <div class="label" style="margin:16px 0 6px;">Head-to-head</div>
+    <div class="search-row" style="margin-bottom:10px;"><input type="text" id="modal-h2h-search" placeholder="Find an opponent"></div>
+    <div id="modal-h2h-body"></div>
   </div>
 </div>
 
@@ -470,7 +485,36 @@ function renderStandings(filter=''){
       <td>${sparkline(p.trend)}</td>
     </tr>`).join('');
 }
-function openModal(name){
+function weekPill(t){
+  return `<div class="week-pill"><span class="wp-pool">${t.pool || '–'}</span><span class="wp-date">${t.date?fmtDate(t.date):''}</span></div>`;
+}
+function renderWeeksStrip(p){
+  const el = document.getElementById('modal-weeks-strip');
+  const last6 = p.trend.slice(-6).reverse(); // most-recent-first, e.g. A6 B2 C1 ...
+  el.innerHTML = last6.length
+    ? `<div class="week-strip">${last6.map(weekPill).join('')}</div>`
+    : '<p style="font-size:13px;color:var(--text-mute); margin:0;">No games logged yet.</p>';
+}
+async function fetchHeadToHead(name){
+  try{
+    const r = await fetch(GAS_URL+'?action=headtohead&name='+encodeURIComponent(name));
+    const j = await r.json();
+    return j.opponents || [];
+  }catch(e){ return []; }
+}
+let modalH2H = { name: null, opponents: [], loading: false };
+function renderH2H(filter=''){
+  const body = document.getElementById('modal-h2h-body');
+  if(modalH2H.loading){ body.innerHTML = '<p style="font-size:13px;color:var(--text-mute); margin:0;">Loading…</p>'; return; }
+  if(!modalH2H.opponents.length){ body.innerHTML = '<p style="font-size:13px;color:var(--text-mute); margin:0;">No head-to-head games recorded yet.</p>'; return; }
+  const f = filter.trim().toLowerCase();
+  const rows = modalH2H.opponents.filter(o=>o.name.toLowerCase().includes(f));
+  body.innerHTML = rows.length
+    ? rows.map(o=>`<div class="h2h-row"><span class="h2h-name">${o.name}</span><span class="h2h-record">${o.wins}-${o.losses}</span></div>`).join('')
+    : '<p style="font-size:13px;color:var(--text-mute); margin:0;">No opponent matches that search.</p>';
+}
+document.getElementById('modal-h2h-search').addEventListener('input', e=>renderH2H(e.target.value));
+async function openModal(name){
   const p = PLAYERS.find(pl=>pl.name===name);
   if(!p) return;
   document.getElementById('modal-avatar').textContent = initials(p.name);
@@ -490,7 +534,15 @@ function openModal(name){
     chart = `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="overflow:visible;"><polyline points="${line}" fill="none" stroke="#16324A" stroke-width="1.8"/>${dots}</svg>`;
   }
   document.getElementById('modal-chart').innerHTML = chart;
+  renderWeeksStrip(p);
+  document.getElementById('modal-h2h-search').value = '';
+  modalH2H = { name: p.name, opponents: [], loading: true };
+  renderH2H();
   document.getElementById('modal-overlay').classList.add('active');
+  const opponents = await fetchHeadToHead(p.name);
+  if(modalH2H.name !== p.name) return; // player changed while the request was in flight
+  modalH2H = { name: p.name, opponents, loading: false };
+  renderH2H();
 }
 function closeModal(){ document.getElementById('modal-overlay').classList.remove('active'); closeChartTip(); }
 document.getElementById('modal-overlay').addEventListener('click', e=>{ if(e.target.id==='modal-overlay') closeModal(); });
@@ -1537,7 +1589,7 @@ async function renderJoinedList(){
 }
 
 async function renderJoinOptions(){
-  if(!PLAYERS.length) PLAYERS = await fetchRankings();
+  if(!PLAYERS.length){ const r = await fetchRankings(); PLAYERS = r.players; WEEKS = r.weeks; }
   const dates = getNextOpenWednesdays(3);
   const now = Date.now();
   const statuses = dates.map(d=>({date:d, closed: now >= pacificNoonTimestamp(d)}));
