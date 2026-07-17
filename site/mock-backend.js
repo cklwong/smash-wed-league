@@ -45,7 +45,8 @@
     for (let w = weeks; w >= 1; w--) {
       const d = new Date(Date.now() - w * 7 * 86400000);
       const base = 24 - i * 0.5;
-      trend.push({ date: d.toISOString().slice(0, 10), score: Math.round((base + (rand() * 8 - 4)) * 10) / 10 });
+      const pool = LETTERS[Math.floor(rand() * LETTERS.length)] + (1 + Math.floor(rand() * 6));
+      trend.push({ date: d.toISOString().slice(0, 10), score: Math.round((base + (rand() * 8 - 4)) * 10) / 10, pool });
     }
     return { name, rank: i + 1, avg: Math.round((24 - i * 0.55) * 100) / 100, trend };
   });
@@ -401,6 +402,40 @@
     return PAST_WEEKS;
   }
 
+  // Mirrors getHeadToHead() in gas/Code.gs: scans every drawn pool grid this
+  // player appears in (canned past weeks, plus tonight's live pools once
+  // scores exist) and tallies a season-long record + individual games per opponent.
+  function headToHead(name) {
+    const k = key(name);
+    const totals = {};
+    const weeks = Object.values(pastWeeks());
+    if (STATE.drawn) weeks.push(getWeek());
+    weeks.forEach((week) => {
+      (week.pools || []).forEach((p) => {
+        if (!p.drawn) return;
+        const idx = p.players.findIndex((pl) => key(pl.name) === k);
+        if (idx === -1) return;
+        for (let j = 0; j < p.players.length; j++) {
+          if (j === idx) continue;
+          const opp = p.players[j];
+          if (isGuestLabel(opp.name)) continue;
+          const a = p.grid[idx][j], b = p.grid[j][idx];
+          if (typeof a !== 'number' || typeof b !== 'number') continue;
+          const oppKey = key(opp.name);
+          if (!totals[oppKey]) totals[oppKey] = { name: opp.name.trim(), wins: 0, losses: 0, matches: [] };
+          const won = a > b;
+          if (won) totals[oppKey].wins++; else totals[oppKey].losses++;
+          totals[oppKey].matches.push({ date: week.date, scoreFor: a, scoreAgainst: b, won });
+        }
+      });
+    });
+    const opponents = Object.values(totals).map((o) => {
+      o.matches.sort((m1, m2) => (m2.date < m1.date ? -1 : m2.date > m1.date ? 1 : 0)); // most-recent-first
+      return o;
+    }).sort((x, y) => (y.wins + y.losses) - (x.wins + x.losses) || x.name.localeCompare(y.name));
+    return { opponents };
+  }
+
   function handlePost(body) {
     switch (body.action) {
       case 'join': return join(body.name, body.contact);
@@ -435,6 +470,7 @@
           const date = new URLSearchParams(qs).get('date');
           return jsonResponse(pastWeeks()[date] || getWeek());
         }
+        if (action === 'headtohead') return jsonResponse(headToHead(new URLSearchParams(qs).get('name')));
         return jsonResponse({ error: 'mock: unknown GET action ' + action });
       }
       const body = JSON.parse((opts && opts.body) || '{}');

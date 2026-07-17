@@ -18,8 +18,9 @@
  * marked (see the finalization section at the bottom of this file).
  *
  * Endpoints (after deploying as a Web App):
- *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score}]}], weeks: ['YYYY-MM-DD', ...] }
+ *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score, pool}]}], weeks: ['YYYY-MM-DD', ...] } (pool is a "A6"-style pool+rank label for that week)
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools }
+ *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}, ...]}, ...] } (season-long record + every individual game vs each opponent NAME has shared a pool with; matches are most-recent-first)
  *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error }
  *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error }
  *   POST { action:'getpin', date, secret }      -> { ok, pin }
@@ -58,6 +59,7 @@ function doGet(e) {
   try {
     if (action === 'rankings') result = getRankings();
     else if (action === 'week') result = getWeek(e.parameter.date);
+    else if (action === 'headtohead') result = getHeadToHead(e.parameter.name);
     else result = { error: 'unknown action: ' + action };
   } catch (err) {
     result = { error: String(err) };
@@ -253,11 +255,13 @@ function getRankings() {
   var rankCol = header.indexOf('Rank');
   var avgCol = header.indexOf('Avg (4 of 6wk)');
   var dateCols = [];
+  var labelCols = []; // the paired "M/D/YY R" column (pool+rank, e.g. "A6") - always immediately left of RP
   var dateLabels = [];
   for (var c = 0; c < header.length; c++) {
     var h = (header[c] || '').toString();
     if (/ RP$/.test(h)) { // most-recent-first
       dateCols.push(c);
+      labelCols.push(c - 1);
       dateLabels.push(headerToISODate(h));
     }
   }
@@ -271,7 +275,7 @@ function getRankings() {
     for (var i = dateCols.length - 1; i >= 0; i--) { // reverse -> chronological
       var v = row[dateCols[i]];
       if (v === '' || v === null || typeof v === 'string') continue; // skip blanks / "1mo absence"
-      trend.push({ date: dateLabels[i], score: Number(v) });
+      trend.push({ date: dateLabels[i], score: Number(v), pool: (row[labelCols[i]] || '').toString().trim() });
     }
     players.push({
       name: name,
@@ -288,6 +292,65 @@ function getRankings() {
     if (dateLabels[w]) weeks.push(dateLabels[w]);
   }
   return { players: players, weeks: weeks };
+}
+
+// Scans every finalized week's pool grid for games between `name` and each
+// opponent they shared a pool with, tallying a season-long head-to-head
+// record. Weeks come from the Rankings sheet's RP headers (same list
+// getRankings() exposes as `weeks`), so this only ever looks at completed
+// weeks - same source of truth, no separate bookkeeping to keep in sync.
+function getHeadToHead(name) {
+  var key = (name || '').toString().trim().toLowerCase();
+  if (!key) return { opponents: [] };
+  var rankSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
+  var weeks = [];
+  if (rankSheet) {
+    var header = rankSheet.getDataRange().getValues()[1] || [];
+    for (var c = 0; c < header.length; c++) {
+      var h = (header[c] || '').toString();
+      if (/ RP$/.test(h)) {
+        var iso = headerToISODate(h);
+        if (iso) weeks.push(iso);
+      }
+    }
+  }
+
+  var totals = {}; // lowercased opponent name -> {name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}]}
+  weeks.forEach(function (dateISO) {
+    var sheet = getWeekSheet(dateISO);
+    if (!sheet) return;
+    var pools = parsePools(sheet.getDataRange().getValues());
+    pools.forEach(function (p) {
+      if (!p.drawn) return;
+      var idx = -1;
+      for (var i = 0; i < p.players.length; i++) {
+        if (p.players[i].name.trim().toLowerCase() === key) { idx = i; break; }
+      }
+      if (idx === -1) return;
+      for (var j = 0; j < p.players.length; j++) {
+        if (j === idx) continue;
+        var opp = p.players[j];
+        if (isGuestLabel(opp.name)) continue;
+        var a = p.grid[idx][j], b = p.grid[j][idx];
+        if (typeof a !== 'number' || typeof b !== 'number') continue; // unplayed pair
+        var oppName = opp.name.trim(), oppKey = oppName.toLowerCase();
+        if (!totals[oppKey]) totals[oppKey] = { name: oppName, wins: 0, losses: 0, matches: [] };
+        var won = a > b;
+        if (won) totals[oppKey].wins++; else totals[oppKey].losses++;
+        totals[oppKey].matches.push({ date: dateISO, scoreFor: a, scoreAgainst: b, won: won });
+      }
+    });
+  });
+
+  var opponents = Object.keys(totals).map(function (k) {
+    var o = totals[k];
+    o.matches.sort(function (m1, m2) { return m2.date < m1.date ? -1 : (m2.date > m1.date ? 1 : 0); }); // most-recent-first
+    return o;
+  });
+  opponents.sort(function (a, b) {
+    return (b.wins + b.losses) - (a.wins + a.losses) || a.name.localeCompare(b.name);
+  });
+  return { opponents: opponents };
 }
 
 function addJoin(dateISO, name, contact) {
