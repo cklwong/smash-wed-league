@@ -1139,7 +1139,7 @@ function appendRankingsPlayer(sheet, name, lastNameRow) {
 // 6 weeks played" (blanks don't count, an absence 0 does).
 function avgFormulaForRow(row) {
   var cells = ['$I', '$K', '$M', '$O', '$Q', '$S'].map(function (col) { return col + row; }).join(',');
-  return '=IFERROR(AVERAGE(LARGE({' + cells + '}, SEQUENCE(MIN(4, COUNT(' + cells + ')),1))),0)';
+  return '=IFERROR(AVERAGE(ARRAYFORMULA(LARGE({' + cells + '}, SEQUENCE(MIN(4, COUNT(' + cells + ')))))),0)';
 }
 
 // doFinalizeWeek only rewrites column F when it inserts a brand new week
