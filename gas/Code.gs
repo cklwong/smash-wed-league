@@ -1142,6 +1142,28 @@ function avgFormulaForRow(row) {
   return '=IFERROR(AVERAGE(LARGE({' + cells + '}, SEQUENCE(MIN(4, COUNT(' + cells + ')),1))),0)';
 }
 
+// doFinalizeWeek only rewrites column F when it inserts a brand new week
+// pair (the insert is what shifts $I,$K,... for every existing row); a
+// re-finalize that reuses an existing column pair never touches F, so a
+// week whose R/RP got fixed after the fact (e.g. 7/15) can be left with
+// whatever formula - or lack of one - was there before. Run this manually
+// from the editor any time column F looks wrong, to force every named row
+// back to the canonical formula regardless of why it drifted.
+function fixAvgFormulas() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
+  if (!sheet) { Logger.log('Rankings sheet not found'); return; }
+  var data = sheet.getDataRange().getValues();
+  var fixed = 0;
+  for (var r = RANKINGS_FIRST_DATA_ROW - 1; r < data.length && r < RANKINGS_LAST_DATA_ROW; r++) {
+    var nm = (data[r][RANKINGS_NAME_COL - 1] || '').toString().trim();
+    if (!nm) continue;
+    var row = r + 1;
+    sheet.getRange(row, RANKINGS_AVG_COL).setFormula(avgFormulaForRow(row));
+    fixed++;
+  }
+  Logger.log('Rewrote column F for ' + fixed + ' player rows.');
+}
+
 // Long-term absence: a player's 4th consecutive missed week is marked
 // "1mo absence" with 0 rank points, so the 0 enters their best-4-of-6 average
 // and consistent attendees move past them. Once they've attended 2 weeks
