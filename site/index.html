@@ -719,6 +719,7 @@ function paintSchedule(week, dateISO){
   document.getElementById('schedule-pools').innerHTML = poolsHtml;
   showScheduleSubview(scheduleSubview);
   for(const id in snap){ const el = document.getElementById(id); if(el) el.value = snap[id]; }
+  document.querySelectorAll('#schedule-pools .pool-search-input').forEach(inp=>filterPoolGames(inp));
   Object.keys(NEXT_MATCHES).forEach(k=>{
     const poolIdx = Number(k);
     updateGuestInputs(poolIdx, NEXT_MATCHES[poolIdx][NEXT_SELECTED[poolIdx]]);
@@ -1230,9 +1231,29 @@ function poolLiveCard(mp, model, admin){
       <thead><tr><th style="width:30px;">#</th><th>Player</th><th class="num-col" style="width:56px;">W–L</th><th class="num-col" style="width:64px;">Pts ±</th><th class="num-col" style="width:76px;">Rank pts</th><th class="num-col" style="width:52px;">Left</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
+    ${(games.length || unplayed) ? `<div class="search-row" style="margin:10px 0 0;"><input type="text" id="pool-search-${mp.idx}" class="pool-search-input" placeholder="Find a player's games" oninput="filterPoolGames(this)"></div>` : ''}
     ${collapseSection(mp.label, 'played', 'Played', gameRows, games.length)}
     ${collapseSection(mp.label, 'pending', 'Pending', pending.join(''), unplayed)}
   </div>`;
+}
+
+// Hides Played/Pending game rows in one pool card that don't mention the
+// player typed into that pool's own search box. Row filtering (unlike
+// COLLAPSE_STATE) doesn't survive a re-render, so paintSchedule re-applies
+// it - from the input's own restored value - after every repaint.
+function filterPoolGames(input){
+  const card = input.closest('.card');
+  if(!card) return;
+  const q = input.value.trim().toLowerCase();
+  card.querySelectorAll('.games-details').forEach(det=>{
+    let anyVisible = false;
+    det.querySelectorAll(':scope > .game-row').forEach(row=>{
+      const match = !q || row.textContent.toLowerCase().includes(q);
+      row.style.display = match ? '' : 'none';
+      if(match) anyVisible = true;
+    });
+    if(q && anyVisible) det.open = true;
+  });
 }
 
 // Open/closed state per pool+section, kept across re-renders (a plain
