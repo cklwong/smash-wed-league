@@ -68,7 +68,8 @@
     pools: {},   // letter -> [names / seat labels]
     grids: {},   // letter -> NxN score matrix
     guestMap: {},// lowercased no-show name -> the guest label covering their seat
-    live: { matches: [], checkins: {} }
+    live: { matches: [], checkins: {} },
+    createdWeeks: [] // ISO dates created via the mock createWeek() action this session
   };
   STATE.signups[STATE.signups.length - 1].checkedIn = false; // waitlist isn't "at the venue"
   STATE.signups[STATE.signups.length - 2].checkedIn = false;
@@ -177,11 +178,23 @@
 
   // Mirrors createWeek() in gas/Code.gs: there's no real spreadsheet here to
   // duplicate a tab in, so this just echoes back the (possibly overridden)
-  // date the site confirmed.
+  // date the site confirmed, and remembers it so weekDates() (which drives
+  // the Join page) includes it right away.
   function createWeek(dateISO) {
     const peek = peekNextWeekDate();
     if (!peek.ok) return peek;
-    return { ok: true, date: dateISO || peek.date };
+    const date = dateISO || peek.date;
+    if (!STATE.createdWeeks.includes(date)) STATE.createdWeeks.push(date);
+    return { ok: true, date };
+  }
+
+  // Mirrors listWeekDates() in gas/Code.gs: the mock's fixed "This week"
+  // session plus any weeks created via the mock createWeek() action.
+  function weekDates() {
+    const base = (typeof getSessionDateISO === 'function' ? getSessionDateISO() : null);
+    const dates = base ? [base] : [];
+    STATE.createdWeeks.forEach((d) => { if (!dates.includes(d)) dates.push(d); });
+    return { dates: dates.sort() };
   }
 
   function checkin(name) {
@@ -512,6 +525,7 @@
           return jsonResponse(pastWeeks()[date] || getWeek());
         }
         if (action === 'headtohead') return jsonResponse(headToHead(new URLSearchParams(qs).get('name')));
+        if (action === 'weekDates') return jsonResponse(weekDates());
         return jsonResponse({ error: 'mock: unknown GET action ' + action });
       }
       const body = JSON.parse((opts && opts.body) || '{}');
