@@ -392,6 +392,16 @@ function fetchRankings(){
   }
   return rankingsPromise;
 }
+let weekDatesPromise = null;
+function fetchWeekDates(){
+  if(!weekDatesPromise){
+    weekDatesPromise = fetch(GAS_URL+'?action=weekDates')
+      .then(r=>r.json())
+      .then(j=>j.dates || [])
+      .catch(e=>{ weekDatesPromise = null; return []; });
+  }
+  return weekDatesPromise;
+}
 async function fetchWeek(dateISO){
   try{
     const r = await fetch(GAS_URL+'?action=week&date='+encodeURIComponent(dateISO));
@@ -410,11 +420,6 @@ async function postAction(body){
 }
 function postJoin(dateISO, name, contact){ return postAction({action:'join', date:dateISO, name, contact}); }
 function postLeave(dateISO, name){ return postAction({action:'leave', date:dateISO, name}); }
-
-function getNextOpenWednesdays(n){
-  const candidates = getUpcomingWednesdays(n+4);
-  return candidates.filter(d=>Date.now() < pacificNoonTimestamp(d)).slice(0,n);
-}
 
 function partsInTZ(date, timeZone){
   return new Intl.DateTimeFormat('en-US',{timeZone,hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'})
@@ -447,17 +452,6 @@ function getSessionDateISO(){
 function fmtDate(iso){
   const d = new Date(iso+'T12:00:00Z');
   return d.toLocaleDateString('en-US',{timeZone:'UTC',month:'short',day:'numeric'});
-}
-function addDaysISO(dateISO, days){
-  const d = new Date(dateISO+'T12:00:00Z');
-  d.setUTCDate(d.getUTCDate()+days);
-  return d.toISOString().slice(0,10);
-}
-function getUpcomingWednesdays(n){
-  const base = getSessionDateISO();
-  const dates = [];
-  for(let i=0;i<n;i++) dates.push(addDaysISO(base, i*7));
-  return dates;
 }
 function initials(name){ return name.trim().split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase(); }
 function chartDots(trend, w, h){
@@ -965,6 +959,7 @@ async function createNextWeek(){
   out.style.display = 'block'; out.textContent = 'Creating…';
   const res = await postAction({action:'createWeek', date: dateISO, secret: adminSecret()});
   if(!res.ok){ out.textContent = res.error || 'Could not create next week.'; return; }
+  weekDatesPromise = null; // so the Join page picks up the new week without a page reload
   out.textContent = `Created a blank tab for Wed, ${fmtDate(res.date)}.`;
 }
 
@@ -1752,8 +1747,9 @@ async function renderJoinedList(){
 
 async function renderJoinOptions(){
   if(!PLAYERS.length){ const r = await fetchRankings(); PLAYERS = r.players; WEEKS = r.weeks; }
-  const dates = getNextOpenWednesdays(3);
+  const allDates = await fetchWeekDates();
   const now = Date.now();
+  const dates = allDates.filter(d=>now < pacificNoonTimestamp(d));
   const statuses = dates.map(d=>({date:d, closed: now >= pacificNoonTimestamp(d)}));
   const firstOpenIdx = statuses.findIndex(s=>!s.closed);
   const container = document.getElementById('jf-date-options');

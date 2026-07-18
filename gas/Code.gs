@@ -63,6 +63,7 @@ function doGet(e) {
     if (action === 'rankings') result = getRankings();
     else if (action === 'week') result = getWeek(e.parameter.date);
     else if (action === 'headtohead') result = getHeadToHead(e.parameter.name);
+    else if (action === 'weekDates') result = getWeekDates();
     else result = { error: 'unknown action: ' + action };
   } catch (err) {
     result = { error: String(err) };
@@ -331,6 +332,25 @@ function readRankingsSheet(sheet) {
 
 function getRankings() {
   return cached('rankings', 60, computeRankings);
+}
+
+function getWeekDates() {
+  return cached('weekDates', 60, listWeekDates);
+}
+
+// All dated weekly tabs currently in the spreadsheet, ascending - drives the
+// Join page's date picker so a newly created (but not yet finalized) week
+// is immediately selectable, instead of the Join page guessing at upcoming
+// Wednesdays independent of whether a tab actually exists for them.
+function listWeekDates() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var dates = [];
+  ss.getSheets().forEach(function (sh) {
+    var iso = headerToISODate(sh.getName());
+    if (iso) dates.push(iso);
+  });
+  dates.sort();
+  return { dates: dates };
 }
 
 // Returns season standings with the tie-broken order that writeSortedRankings()
@@ -1090,6 +1110,10 @@ function createWeek(dateISO, secret) {
   clearSignupsForNewWeek(newSheet);
   writeWeekDateCell(newSheet, newDateISO);
   protectWeekSheet(newSheet);
+
+  // So the Join page's date list (driven by weekDates) picks up the new tab
+  // right away instead of waiting out the 60s cache.
+  CacheService.getScriptCache().remove('weekDates');
 
   return { ok: true, date: newDateISO };
 }
