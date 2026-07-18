@@ -18,7 +18,7 @@
  * marked (see the finalization section at the bottom of this file).
  *
  * Endpoints (after deploying as a Web App):
- *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score, pool}]}], weeks: ['YYYY-MM-DD', ...] } (pool is a "A6"-style pool+rank label for that week)
+ *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score, pool}]}], weeks: ['YYYY-MM-DD', ...] } (pool is a "A6"-style pool+rank label for that week; rank is tie-broken - the sheet's own Rank column ties on equal Avg, so equal-rank groups are re-ordered by most-recent-week rank points then most-recent head-to-head; anyone still unresolved keeps sharing one rank number [skip-style, like standard competition ranking] but is shuffled randomly, since pool seeding sorts on this field and shouldn't consistently favor the same player - see applyTieBreaks())
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools }
  *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}, ...]}, ...] } (season-long record + every individual game vs each opponent NAME has shared a pool with; matches are most-recent-first)
  *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error } (if contact looks like an email, sends a welcome email with the site link)
@@ -296,6 +296,13 @@ function computeRankings() {
     }
   }
 
+  // The RP headers are exactly the finalized weeks - the site's Past weeks
+  // list. Header order = most recent first.
+  var weeks = [];
+  for (var w = 0; w < dateLabels.length; w++) {
+    if (dateLabels[w]) weeks.push(dateLabels[w]);
+  }
+
   var players = [];
   for (var r = 2; r < data.length; r++) {
     var row = data[r];
@@ -315,13 +322,194 @@ function computeRankings() {
     });
   }
   players.sort(function (a, b) { return a.rank - b.rank; });
-  // The RP headers are exactly the finalized weeks - the site's Past weeks
-  // list. Header order = most recent first.
-  var weeks = [];
-  for (var w = 0; w < dateLabels.length; w++) {
-    if (dateLabels[w]) weeks.push(dateLabels[w]);
-  }
+  applyTieBreaks(players, weeks);
   return { players: players, weeks: weeks };
+}
+
+// The sheet's Rank column is =RANK.EQ() on Avg, which gives every player in
+// a tied group the same number and doesn't order them further. This walks
+// the rank-sorted list, re-orders each tied group with resolveTiedGroup(),
+// then renumbers: players whose order got fully resolved (by week/
+// head-to-head) each get their own consecutive number, but anyone left
+// unresolved keeps sharing one rank number with the rest of their tied
+// cluster (skip-style, like standard competition ranking) - both the
+// standings display and pool seeding (which sorts on this same `rank`
+// field) depend on this, so genuine ties should still look tied, and the
+// random shuffle resolveTiedGroup leaves them in is what actually decides
+// pool-seeding order among them (no alphabetical or sign-up-order bias).
+function applyTieBreaks(players, weeks) {
+  var nextRank = 1;
+  var i = 0;
+  while (i < players.length) {
+    var j = i + 1;
+    while (j < players.length && players[j].rank === players[i].rank) j++;
+    if (j - i > 1) {
+      // A 0 Avg tie is long-term absences bottoming out together, not a
+      // real competitive tie - skip the week/head-to-head lookups and just
+      // shuffle them like any other unresolved group.
+      if (players[i].avg !== 0) {
+        resolveTiedGroup(players, i, j, weeks);
+      } else {
+        var group0 = players.slice(i, j);
+        shuffle(group0);
+        group0.forEach(function (p) { p._tied = true; });
+        for (var z = i; z < j; z++) players[z] = group0[z - i];
+      }
+    } else {
+      players[i]._tied = false;
+    }
+    nextRank = assignGroupRanks(players, i, j, nextRank);
+    i = j;
+  }
+  for (var c = 0; c < players.length; c++) delete players[c]._tieKey;
+}
+
+// Assigns rank numbers to players[start..end) - one originally-tied group,
+// already reordered/marked by resolveTiedGroup - continuing from nextRank.
+// Runs of players still marked _tied share one number and the counter
+// skips past the whole run; everyone else gets their own consecutive
+// number. Returns the next rank number to use for the following group.
+function assignGroupRanks(players, start, end, nextRank) {
+  var i = start;
+  while (i < end) {
+    if (players[i]._tied) {
+      var j = i + 1;
+      while (j < end && players[j]._tied) j++;
+      for (var k = i; k < j; k++) { players[k].rank = nextRank; delete players[k]._tied; }
+      nextRank += (j - i);
+      i = j;
+    } else {
+      players[i].rank = nextRank;
+      delete players[i]._tied;
+      nextRank++;
+      i++;
+    }
+  }
+  return nextRank;
+}
+
+// Fisher-Yates shuffle, in place.
+function shuffle(arr) {
+  for (var i = arr.length - 1; i > 0; i--) {
+    var j = Math.floor(Math.random() * (i + 1));
+    var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+  }
+}
+
+// Reorders players[start..end) (a group tied on rank) in place per the
+// season tie-break rules:
+//   - exactly 2 tied: most recent head-to-head result between them
+//   - 3+ tied: most recent week where every tied player has a score, highest
+//     rank-points-that-week wins; any players still tied after that fall
+//     back to the same pairwise head-to-head rule
+//   - anyone still unresolved (no common week, or no head-to-head history)
+//     is shuffled randomly and marked _tied, so applyTieBreaks() keeps them
+//     sharing one rank number instead of inventing a fake distinct order
+function resolveTiedGroup(players, start, end, weeks) {
+  var group = players.slice(start, end);
+  if (group.length === 2) {
+    orderByHeadToHead(group, weeks);
+  } else {
+    orderByMostRecentCommonWeek(group, weeks);
+    var i = 0;
+    while (i < group.length) {
+      var j = i + 1;
+      while (j < group.length && group[j]._tieKey === group[i]._tieKey) j++;
+      if (j - i > 1) {
+        var sub = group.slice(i, j);
+        orderByHeadToHead(sub, weeks);
+        for (var k = i; k < j; k++) group[k] = sub[k - i];
+      }
+      i = j;
+    }
+  }
+  for (var m = start; m < end; m++) players[m] = group[m - start];
+}
+
+// Sorts a tied group by rank points earned in the most recent week where
+// every player in the group has a score (walking back through weeks - most
+// recent first - until one qualifies). Sets _tieKey on each player so the
+// caller can find any still-equal sub-runs left to resolve, and marks
+// everyone resolved (_tied = false) - any residual equal-key run gets
+// re-marked by orderByHeadToHead() if it can't separate them further. If no
+// common week exists at all, everyone gets the same key (0), forming one
+// big residual run handled the same way.
+function orderByMostRecentCommonWeek(group, weeks) {
+  var weekDate = null;
+  for (var w = 0; w < weeks.length && !weekDate; w++) {
+    var d = weeks[w];
+    var allPlayed = true;
+    for (var g = 0; g < group.length; g++) {
+      var has = false;
+      for (var t = 0; t < group[g].trend.length; t++) {
+        if (group[g].trend[t].date === d) { has = true; break; }
+      }
+      if (!has) { allPlayed = false; break; }
+    }
+    if (allPlayed) weekDate = d;
+  }
+  group.forEach(function (p) {
+    p._tieKey = 0;
+    if (weekDate) {
+      for (var t = 0; t < p.trend.length; t++) {
+        if (p.trend[t].date === weekDate) { p._tieKey = p.trend[t].score; break; }
+      }
+    }
+  });
+  group.sort(function (a, b) { return b._tieKey - a._tieKey; });
+  group.forEach(function (p) { p._tied = false; });
+}
+
+// Orders a tied pair by their most recent head-to-head result (winner
+// first), marking both resolved. Falls back to a random shuffle - marking
+// everyone _tied - when there's no head-to-head data, or when the group has
+// 3+ players left with no other way to separate them (head-to-head is
+// inherently pairwise), so pool seeding doesn't get a fake alphabetical or
+// sign-up-order bias for a tie the data can't actually settle.
+function orderByHeadToHead(group, weeks) {
+  if (group.length === 2) {
+    var result = mostRecentHeadToHead(group[0].name, group[1].name, weeks);
+    if (result) {
+      group.sort(function (a, b) {
+        if (a.name === result.winner) return -1;
+        if (b.name === result.winner) return 1;
+        return 0;
+      });
+      group.forEach(function (p) { p._tied = false; });
+      return;
+    }
+  }
+  shuffle(group);
+  group.forEach(function (p) { p._tied = true; });
+}
+
+// Scans finalized weeks (most-recent-first) for the most recent match
+// between exactly nameA and nameB, stopping at the first one found. Cheaper
+// than getHeadToHead() when only the latest result matters (tie-breaking),
+// since that function scans every week to build a full season record.
+function mostRecentHeadToHead(nameA, nameB, weeks) {
+  var keyA = (nameA || '').toString().trim().toLowerCase();
+  var keyB = (nameB || '').toString().trim().toLowerCase();
+  for (var w = 0; w < weeks.length; w++) {
+    var sheet = getWeekSheet(weeks[w]);
+    if (!sheet) continue;
+    var pools = parsePools(sheet.getDataRange().getValues());
+    for (var p = 0; p < pools.length; p++) {
+      var pool = pools[p];
+      if (!pool.drawn) continue;
+      var idxA = -1, idxB = -1;
+      for (var i = 0; i < pool.players.length; i++) {
+        var n = pool.players[i].name.trim().toLowerCase();
+        if (n === keyA) idxA = i;
+        if (n === keyB) idxB = i;
+      }
+      if (idxA === -1 || idxB === -1) continue;
+      var scoreA = pool.grid[idxA][idxB], scoreB = pool.grid[idxB][idxA];
+      if (typeof scoreA !== 'number' || typeof scoreB !== 'number') continue; // unplayed pair
+      return { winner: scoreA > scoreB ? nameA : nameB, date: weeks[w] };
+    }
+  }
+  return null;
 }
 
 // Scans every finalized week's pool grid for games between `name` and each
