@@ -1095,11 +1095,15 @@ function createWeek(dateISO, secret) {
 }
 
 // Stamps cell A1 with the week's date so the tab is self-labeled even
-// without looking at the tab name. Built from date parts (not
-// `new Date(isoString)`) to avoid a UTC/local timezone day-shift.
+// without looking at the tab name. Parsed in the league's own timezone
+// (same constant upcomingWednesdayISO() uses) rather than built with
+// `new Date(y, m, d)`, which resolves in the Apps Script runtime's default
+// timezone (often UTC) and can land a day off once Sheets displays it.
 function writeWeekDateCell(sheet, dateISO) {
-  var parts = dateISO.split('-').map(Number);
-  sheet.getRange(1, 1).setValue(new Date(parts[0], parts[1] - 1, parts[2]));
+  var parts = dateISO.split('-');
+  var mdY = parts[1] + '/' + parts[2] + '/' + parts[0];
+  var date = Utilities.parseDate(mdY, 'America/Los_Angeles', 'MM/dd/yyyy');
+  sheet.getRange(1, 1).setValue(date);
 }
 
 // Locks the tab so only the spreadsheet owner (and the deployed web app,
