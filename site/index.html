@@ -1406,12 +1406,33 @@ function poolResultsCard(mp, model){
     `<div class="game-row"><span class="vs">${mp.names[g.i]} <strong class="num">${g.a}–${g.b}</strong> ${mp.names[g.j]}</span></div>`).join('');
   return `<div class="card">
     <div class="pool-head"><h3>Pool ${mp.label}</h3><span class="pool-status full">${mp.names.length} players · ${played.length}/${mp.totalPairs} games${bonus?' · +1 rank pt':''}</span></div>
+    <div class="search-row" style="margin:0 0 10px;"><input type="text" id="history-search-${mp.idx}" class="history-pool-search-input" placeholder="Find a player" oninput="filterHistoryPool(this)"></div>
     <table class="standings">
       <thead><tr><th style="width:30px;">#</th><th>Player</th><th class="num-col" style="width:56px;">W–L</th><th class="num-col" style="width:64px;">Pts ±</th><th class="num-col" style="width:76px;">Rank pts</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     ${collapseSection('hist-'+mp.label, 'played', 'Games', gameRows, played.length)}
   </div>`;
+}
+
+// Filters one past-week pool card down to rows mentioning the typed player -
+// both the standings row and any of their games in the Games list.
+function filterHistoryPool(input){
+  const card = input.closest('.card');
+  if(!card) return;
+  const q = input.value.trim().toLowerCase();
+  card.querySelectorAll('table.standings tbody tr').forEach(row=>{
+    row.style.display = (!q || row.textContent.toLowerCase().includes(q)) ? '' : 'none';
+  });
+  card.querySelectorAll('.games-details').forEach(det=>{
+    let anyVisible = false;
+    det.querySelectorAll(':scope > .game-row').forEach(row=>{
+      const match = !q || row.textContent.toLowerCase().includes(q);
+      row.style.display = match ? '' : 'none';
+      if(match) anyVisible = true;
+    });
+    if(q && anyVisible) det.open = true;
+  });
 }
 
 function findFinishedMatch(model, poolLabel, nameA, nameB){
