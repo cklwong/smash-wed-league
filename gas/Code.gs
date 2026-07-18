@@ -20,7 +20,7 @@
  * Endpoints (after deploying as a Web App):
  *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score, pool}]}], weeks: ['YYYY-MM-DD', ...] } (pool is a "A6"-style pool+rank label for that week; rank is tie-broken - the sheet's own Rank column ties on equal Avg, so equal-rank groups are re-ordered by most-recent-week rank points then most-recent head-to-head, with unresolved ties sharing one rank number [skip-style] but shuffled randomly rather than alphabetically, since pool seeding sorts on this field. This tie-break runs once per finalize and is persisted to the Rankings sheet's "Sorted Name"/"Sorted Rank" columns [A/B] by writeSortedRankings() - getRankings() just reads that snapshot back, so the order is stable across views until the next finalize, not re-shuffled on every request)
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools }
- *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}, ...]}, ...] } (season-long record + every individual game vs each opponent NAME has shared a pool with; matches are most-recent-first)
+ *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}, ...]}, ...] } (record over NAME's last 6 completed weeks + every individual game vs each opponent shared a pool with in that window; matches are most-recent-first)
  *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error } (if contact looks like an email, sends a welcome email with the site link)
  *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error }
  *   POST { action:'getpin', date, secret }      -> { ok, pin }
@@ -32,7 +32,9 @@
  *   POST { action:'recordScore', date, matchId, scoreA, scoreB, secret } -> { ok } (admin passphrase; writes the score grid and stops the match; guest games count 1-0 for the real player, actual score kept as info)
  *   POST { action:'editScore', date, a, b, scoreA, scoreB, matchId, secret } -> { ok } (admin passphrase; fixes a finished game's score; guest games only update the info score)
  *   POST { action:'cancelMatch', date, matchId, secret }-> { ok } (admin passphrase; removes a mis-started, unfinished match)
- *   POST { action:'finalizeRankings', date, secret } -> { ok, finalized, updated, added, skipped } (admin passphrase; re-runs finalize for a fully-scored week, overwriting its Rankings column pair)
+ *   POST { action:'finalizeRankings', date, secret } -> { ok, finalized, updated, added, skipped } (admin passphrase; re-runs finalize for a fully-scored week, overwriting its Rankings column pair - this also recomputes the tie-broken standings snapshot, see writeSortedRankings())
+ *   POST { action:'resetWeek', date, secret } -> { ok } (admin passphrase; wipes a week's pool draw, every score, and check-in/no-show status back to the undrawn template state - for testing, not during a real session)
+ *   POST { action:'createWeek', secret } -> { ok, date } (admin passphrase; duplicates the most recently dated week tab as a new blank tab one week later, wiping signups/draw/scores from the copy)
  */
 
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
@@ -86,6 +88,8 @@ function doPost(e) {
     else if (body.action === 'editScore') result = editScore(body.date, body.a, body.b, body.scoreA, body.scoreB, body.matchId, body.secret, body.pin);
     else if (body.action === 'cancelMatch') result = cancelMatch(body.date, body.matchId, body.secret, body.pin);
     else if (body.action === 'finalizeRankings') result = forceFinalizeWeek(body.date, body.secret);
+    else if (body.action === 'resetWeek') result = resetWeek(body.date, body.secret);
+    else if (body.action === 'createWeek') result = createWeek(body.secret);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
@@ -582,10 +586,13 @@ function mostRecentHeadToHead(nameA, nameB, weeks) {
 }
 
 // Scans every finalized week's pool grid for games between `name` and each
-// opponent they shared a pool with, tallying a season-long head-to-head
-// record. Weeks come from the Rankings sheet's RP headers (same list
-// getRankings() exposes as `weeks`), so this only ever looks at completed
-// weeks - same source of truth, no separate bookkeeping to keep in sync.
+// opponent they shared a pool with, tallying a head-to-head record over the
+// last 6 completed weeks. Weeks come from the Rankings sheet's RP headers
+// (same list getRankings() exposes as `weeks`, most-recent-first), so this
+// only ever looks at completed weeks - same source of truth, no separate
+// bookkeeping to keep in sync.
+var H2H_WEEK_WINDOW = 6;
+
 function getHeadToHead(name) {
   var key = (name || '').toString().trim().toLowerCase();
   if (!key) return { opponents: [] };
@@ -605,6 +612,7 @@ function computeHeadToHead(key) {
       }
     }
   }
+  weeks = weeks.slice(0, H2H_WEEK_WINDOW); // header order is most-recent-first
 
   var totals = {}; // lowercased opponent name -> {name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}]}
   weeks.forEach(function (dateISO) {
@@ -951,6 +959,117 @@ function generatePools(dateISO, pin, padGuests, redraw, secret) {
   });
 
   return { ok: true, pools: pools };
+}
+
+// Wipes a week tab's pool draw and every score back to the undrawn template
+// state - all four pool blocks, regardless of which were in use, plus the
+// no-show guest-swap column. Shared by resetWeek() (keeps signups, for
+// testing an existing week) and createWeek() (wipes signups too, since it's
+// starting a brand new one).
+function clearDrawAndScores(sheet) {
+  for (var pi = 0; pi < POOL_LETTERS.length; pi++) {
+    var letter = POOL_LETTERS[pi];
+    var lay = POOL_LAYOUT[letter];
+    var values = [];
+    for (var s = 0; s < lay.size; s++) values.push([slotDefaultLabel(letter, s)]);
+    sheet.getRange(lay.firstSlotRow, SLOT_COL, lay.size, 1).setValues(values);
+    sheet.getRange(lay.firstSlotRow, GRID_FIRST_COL, lay.size, lay.size).clearContent();
+  }
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) sheet.getRange(2, NOSHOW_GUEST_COL, lastRow - 1, 1).clearContent();
+}
+
+// Wipes a week's pool draw, every score, and every signup's check-in/no-show
+// status back to the undrawn template state - for testing pool
+// generation/scoring against a real week's tab without waiting for real
+// players; never called during a real session.
+function resetWeek(dateISO, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  var sheet = getWeekSheet(dateISO);
+  if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
+
+  clearDrawAndScores(sheet);
+
+  // Column B ("y" / "ns") covers every signup row, confirmed and waitlisted
+  // alike - same contiguous-until-first-blank scan parseSignups() uses,
+  // without its inline-label skip since those rows' column B is blank anyway.
+  var data = sheet.getDataRange().getValues();
+  var lastSignupRow = 1;
+  for (var r = 1; r < data.length; r++) {
+    if (!(data[r][0] || '').toString().trim()) break;
+    lastSignupRow = r + 1;
+  }
+  if (lastSignupRow > 1) sheet.getRange(2, 2, lastSignupRow - 1, 1).clearContent();
+
+  // Any matches from before the reset refer to wiped grids; drop them along
+  // with check-in timestamps and no-show guest swaps, same as the sheet
+  // columns above.
+  updateLiveState(dateISO, function (state) {
+    state.matches = [];
+    state.checkins = {};
+    return { ok: true };
+  });
+
+  return { ok: true };
+}
+
+// '2026-07-15' -> '2026-07-22' (7 days later, tz-safe via UTC).
+function addDaysISO(dateISO, days) {
+  var parts = dateISO.split('-').map(Number);
+  var d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  d.setUTCDate(d.getUTCDate() + days);
+  var y = d.getUTCFullYear(), mo = d.getUTCMonth() + 1, da = d.getUTCDate();
+  return y + '-' + (mo < 10 ? '0' : '') + mo + '-' + (da < 10 ? '0' : '') + da;
+}
+
+// Wipes every real signup name, status, and contact from a freshly
+// duplicated week tab, leaving the organizer's inline template labels
+// ("Max limit (24ppl)", "Wait List Below") in place - same skip rule
+// parseSignups() uses to tell labels from real signups.
+function clearSignupsForNewWeek(sheet) {
+  var lastRow = sheet.getLastRow();
+  for (var r = 2; r <= lastRow; r++) {
+    var name = (sheet.getRange(r, 1).getValue() || '').toString().trim();
+    if (!name) break; // first truly blank row ends the signup section
+    if (/max limit/i.test(name) || /wait list/i.test(name)) continue;
+    sheet.getRange(r, 1).clearContent();
+    sheet.getRange(r, 2).clearContent();
+    sheet.getRange(r, CONTACT_COL).clearContent();
+  }
+}
+
+// Duplicates the most recently dated weekly tab (found by parsing every
+// sheet name as "M/D/YY") as next week's blank tab - one week after the
+// template, keeping its pool-grid formulas and formatting, with every
+// signup, draw, and score wiped so it's ready for a new session. Saves the
+// organizer from copy-pasting the template tab and clearing it out by hand
+// each week.
+function createWeek(secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var latest = null; // { sheet, dateISO }
+  ss.getSheets().forEach(function (sh) {
+    var iso = headerToISODate(sh.getName());
+    if (!iso) return;
+    if (!latest || iso > latest.dateISO) latest = { sheet: sh, dateISO: iso };
+  });
+  if (!latest) return { ok: false, error: 'No existing week tabs found to use as a template.' };
+
+  var newDateISO = addDaysISO(latest.dateISO, 7);
+  var newTabName = tabNameForDate(newDateISO);
+  if (ss.getSheetByName(newTabName)) return { ok: false, error: 'A tab for ' + newTabName + ' already exists.' };
+
+  var newSheet = latest.sheet.copyTo(ss);
+  newSheet.setName(newTabName);
+  ss.setActiveSheet(newSheet);
+  ss.moveActiveSheet(ss.getSheets().length); // to the end, after every existing week
+
+  clearDrawAndScores(newSheet);
+  clearSignupsForNewWeek(newSheet);
+
+  return { ok: true, date: newDateISO };
 }
 
 // ---- Check-in / no-show (admin only) ----
@@ -1618,9 +1737,11 @@ function fixAvgFormulas() {
 // "1mo absence" with 0 rank points, so the 0 enters their best-4-of-6 average
 // and consistent attendees move past them. Once they've attended 2 weeks
 // again, the artificial 0 is erased (the text stays, as the organizer always
-// kept it). While an absence 0 still sits inside the 6-week average window no
-// new one is added - reproducing the organizer's manual cadence for very long
-// absences. Both passes are idempotent, so re-finalizing after an edit is safe.
+// kept it). No matter how many more weeks they stay away - even once that 0
+// ages out of the 6-week average window - no second marker is ever added on
+// top; a player is either freshly flagged or already flagged, never
+// re-flagged while still absent. Both passes are idempotent, so re-finalizing
+// after an edit is safe.
 function applyAbsencePasses(sheet, rCol, playedRows, names) {
   SpreadsheetApp.flush();
   var data = sheet.getDataRange().getValues();
@@ -1665,16 +1786,21 @@ function applyAbsencePasses(sheet, rCol, playedRows, names) {
     // Absent this week: mark the 4th consecutive miss.
     if ((rowVals[weekCols[cur]] || '').toString().trim()) return; // organizer already labelled it
     if (cur + 3 >= weekCols.length) return; // not enough history yet
-    // The most recent week already carries the label - don't stack another
-    // one on top, just leave this week blank until they return.
-    if (cur + 1 < weekCols.length && (rowVals[weekCols[cur + 1]] || '').toString().trim() === ABSENCE_LABEL) return;
     for (var p = 1; p <= 3; p++) {
       if (attended(rowVals, weekCols[cur + p])) return; // streak broken
     }
     var playedEver = weekCols.some(function (wc) { return attended(rowVals, wc); });
     if (!playedEver) return; // never mark a row that never played
-    for (var w = 0; w < 6 && w < weekCols.length; w++) {
-      if (absenceZero(rowVals, weekCols[w])) return; // a 0 already drags this average
+    // Don't stack a new marker on an already-open one: walk back past the
+    // blank weeks a still-absent player leaves behind (see the comeback pass
+    // above) to the nearest week with anything written in it at all. If
+    // that's the absence label, this player is already flagged - however
+    // long ago - and stays that way until they return, so skip marking.
+    for (var b = cur + 1; b < weekCols.length; b++) {
+      var priorLabel = (rowVals[weekCols[b]] || '').toString().trim();
+      if (!priorLabel) continue;
+      if (priorLabel === ABSENCE_LABEL) return;
+      break; // most recent entry was a real played week - clear to mark
     }
     sheet.getRange(n.row, weekCols[cur] + 1).setValue(ABSENCE_LABEL);
     sheet.getRange(n.row, weekCols[cur] + 2).setValue(0);
