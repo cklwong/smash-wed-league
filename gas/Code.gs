@@ -98,6 +98,19 @@ function jsonOutput(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// Short-TTL cache for the read endpoints - absorbs duplicate/concurrent
+// requests (multiple phones on league night, the 45s schedule poll, repeat
+// player-modal opens) without needing invalidation wired into every write
+// action. Staleness is bounded by ttlSeconds.
+function cached(key, ttlSeconds, compute) {
+  var cache = CacheService.getScriptCache();
+  var hit = cache.get(key);
+  if (hit) return JSON.parse(hit);
+  var result = compute();
+  cache.put(key, JSON.stringify(result), ttlSeconds);
+  return result;
+}
+
 // '2026-07-15' -> '7/15/26' (matches this workbook's tab naming)
 function tabNameForDate(dateISO) {
   var parts = dateISO.split('-');
@@ -206,7 +219,19 @@ function parsePools(data) {
   return pools;
 }
 
+// Cached, read-only view for the site's GET ?action=week - never call this
+// from a finalize/write path, since a stale hit could hide a just-recorded
+// score. Those paths call computeWeek() directly instead.
 function getWeek(dateISO) {
+  // `now` is excluded from the cached payload (and always computed fresh)
+  // since the client uses it to sync its clock against the server's -
+  // caching it would let SERVER_OFFSET drift by up to the cache TTL.
+  var result = cached('week_' + dateISO, 15, function () { return computeWeek(dateISO); });
+  result.now = Date.now();
+  return result;
+}
+
+function computeWeek(dateISO) {
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { date: dateISO, exists: false, hasScores: false, signups: [], pools: [] };
   var data = sheet.getDataRange().getValues();
@@ -218,8 +243,7 @@ function getWeek(dateISO) {
   return {
     date: dateISO, exists: true, hasScores: anyScoresEntered(data),
     signups: signups, pools: pools,
-    live: { matches: live.matches, checkins: live.checkins },
-    now: Date.now()
+    live: { matches: live.matches, checkins: live.checkins }
   };
 }
 
@@ -248,6 +272,10 @@ function headerToISODate(header) {
 }
 
 function getRankings() {
+  return cached('rankings', 60, computeRankings);
+}
+
+function computeRankings() {
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
   if (!sheet) return { players: [] };
   var data = sheet.getDataRange().getValues();
@@ -304,6 +332,10 @@ function getRankings() {
 function getHeadToHead(name) {
   var key = (name || '').toString().trim().toLowerCase();
   if (!key) return { opponents: [] };
+  return cached('h2h_' + key, 60, function () { return computeHeadToHead(key); });
+}
+
+function computeHeadToHead(key) {
   var rankSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
   var weeks = [];
   if (rankSheet) {
@@ -1100,7 +1132,7 @@ function computeWeekResults(week) {
 // especially right after changing parsePools - a parsing bug here writes
 // silently-wrong data straight into the season's standings.
 function dryRunFinalize(dateISO) {
-  var week = getWeek(dateISO);
+  var week = computeWeek(dateISO);
   if (!week.exists) { Logger.log('No tab exists for ' + dateISO); return; }
   Logger.log('hasScores=' + week.hasScores + ' complete=' + weekIsComplete(week));
   var results = computeWeekResults(week);
@@ -1183,7 +1215,7 @@ function copyConditionalFormatting(sheet, fromCol, toCol) {
 
 function doFinalizeWeek(dateISO) {
   SpreadsheetApp.flush(); // a score was possibly just written; recalc GW/Rank before reading
-  var week = getWeek(dateISO);
+  var week = computeWeek(dateISO);
   if (!week.exists) return { ok: false, error: 'No tab exists for ' + dateISO };
   if (!week.hasScores || !weekIsComplete(week)) return { ok: false, pending: true };
 

@@ -374,12 +374,15 @@ let PLAYERS = [];
 let WEEKS = []; // finalized week dates (ISO), most recent first
 const CAP = 24;
 
-async function fetchRankings(){
-  try{
-    const r = await fetch(GAS_URL+'?action=rankings');
-    const j = await r.json();
-    return {players: j.players || [], weeks: j.weeks || []};
-  }catch(e){ return {players:[], weeks:[]}; }
+let rankingsPromise = null;
+function fetchRankings(){
+  if(!rankingsPromise){
+    rankingsPromise = fetch(GAS_URL+'?action=rankings')
+      .then(r=>r.json())
+      .then(j=>({players: j.players || [], weeks: j.weeks || []}))
+      .catch(e=>{ rankingsPromise = null; return {players:[], weeks:[]}; });
+  }
+  return rankingsPromise;
 }
 async function fetchWeek(dateISO){
   try{
@@ -503,11 +506,14 @@ function renderWeeksStrip(p){
     ? `<div class="week-strip">${last6.map(weekPill).join('')}</div>`
     : '<p style="font-size:13px;color:var(--text-mute); margin:0;">No games logged yet.</p>';
 }
+const H2H_CACHE = {};
 async function fetchHeadToHead(name){
+  if(H2H_CACHE[name]) return H2H_CACHE[name];
   try{
     const r = await fetch(GAS_URL+'?action=headtohead&name='+encodeURIComponent(name));
     const j = await r.json();
-    return j.opponents || [];
+    H2H_CACHE[name] = j.opponents || [];
+    return H2H_CACHE[name];
   }catch(e){ return []; }
 }
 let modalH2H = { name: null, opponents: [], loading: false };
@@ -1779,8 +1785,6 @@ localStorage.removeItem('sw-admin-secret');
 Object.keys(localStorage).filter(k=>k.startsWith('sw-pin-')).forEach(k=>localStorage.removeItem(k));
 
 fetchRankings().then(({players, weeks})=>{ PLAYERS = players; WEEKS = weeks; renderStandings(); });
-renderSchedule();
-renderJoinOptions();
 </script>
 </body>
 </html>
