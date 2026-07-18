@@ -577,6 +577,16 @@ function orderByHeadToHead(group, weeks) {
   group.forEach(function (p) { p._tied = true; });
 }
 
+// Matches a pool-grid player name (often a short signup name, e.g. "Ellyn")
+// against a full Rankings name key (e.g. "ellyn park", already lowercased/
+// trimmed) - same short-vs-full-name gap matchNameIndex() handles for pool
+// seeding, but here we're testing one specific known player rather than
+// picking the unique match out of a whole roster.
+function nameMatchesKey(playerName, key) {
+  var n = (playerName || '').toString().trim().toLowerCase();
+  return n === key || key.indexOf(n + ' ') === 0;
+}
+
 // Scans finalized weeks (most-recent-first) for the most recent match
 // between exactly nameA and nameB, stopping at the first one found. Cheaper
 // than getHeadToHead() when only the latest result matters (tie-breaking),
@@ -593,9 +603,9 @@ function mostRecentHeadToHead(nameA, nameB, weeks) {
       if (!pool.drawn) continue;
       var idxA = -1, idxB = -1;
       for (var i = 0; i < pool.players.length; i++) {
-        var n = pool.players[i].name.trim().toLowerCase();
-        if (n === keyA) idxA = i;
-        if (n === keyB) idxB = i;
+        var n = pool.players[i].name;
+        if (nameMatchesKey(n, keyA)) idxA = i;
+        if (nameMatchesKey(n, keyB)) idxB = i;
       }
       if (idxA === -1 || idxB === -1) continue;
       var scoreA = pool.grid[idxA][idxB], scoreB = pool.grid[idxB][idxA];
@@ -644,7 +654,7 @@ function computeHeadToHead(key) {
       if (!p.drawn) return;
       var idx = -1;
       for (var i = 0; i < p.players.length; i++) {
-        if (p.players[i].name.trim().toLowerCase() === key) { idx = i; break; }
+        if (nameMatchesKey(p.players[i].name, key)) { idx = i; break; }
       }
       if (idx === -1) return;
       for (var j = 0; j < p.players.length; j++) {
