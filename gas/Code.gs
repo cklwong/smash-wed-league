@@ -18,7 +18,7 @@
  * marked (see the finalization section at the bottom of this file).
  *
  * Endpoints (after deploying as a Web App):
- *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score, pool}]}], weeks: ['YYYY-MM-DD', ...] } (pool is a "A6"-style pool+rank label for that week; rank is tie-broken - the sheet's own Rank column ties on equal Avg, so equal-rank groups are re-ordered by most-recent-week rank points then most-recent head-to-head; anyone still unresolved keeps sharing one rank number [skip-style, like standard competition ranking] but is shuffled randomly, since pool seeding sorts on this field and shouldn't consistently favor the same player - see applyTieBreaks())
+ *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score, pool}]}], weeks: ['YYYY-MM-DD', ...] } (pool is a "A6"-style pool+rank label for that week; rank is tie-broken - the sheet's own Rank column ties on equal Avg, so equal-rank groups are re-ordered by most-recent-week rank points then most-recent head-to-head, with unresolved ties sharing one rank number [skip-style] but shuffled randomly rather than alphabetically, since pool seeding sorts on this field. This tie-break runs once per finalize and is persisted to the Rankings sheet's "Sorted Name"/"Sorted Rank" columns [A/B] by writeSortedRankings() - getRankings() just reads that snapshot back, so the order is stable across views until the next finalize, not re-shuffled on every request)
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools }
  *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}, ...]}, ...] } (season-long record + every individual game vs each opponent NAME has shared a pool with; matches are most-recent-first)
  *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error } (if contact looks like an email, sends a welcome email with the site link)
@@ -271,13 +271,13 @@ function headerToISODate(header) {
   return yr + '-' + (mo < 10 ? '0' : '') + mo + '-' + (da < 10 ? '0' : '') + da;
 }
 
-function getRankings() {
-  return cached('rankings', 60, computeRankings);
-}
-
-function computeRankings() {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
-  if (!sheet) return { players: [] };
+// Reads the Rankings sheet into { players, weeks, data } - players carry
+// name/avg/trend plus the sheet's raw =RANK.EQ() rank (still tied on equal
+// Avg at this point). Shared by computeRankings() (which layers the
+// persisted tie-broken order from columns A/B on top) and
+// writeSortedRankings() (which recomputes that tie-broken order and writes
+// it back).
+function readRankingsSheet(sheet) {
   var data = sheet.getDataRange().getValues();
   var header = data[1] || []; // row 1 is a "DO NOT TOUCH" label row; row 2 has real headers
 
@@ -321,9 +321,78 @@ function computeRankings() {
       trend: trend
     });
   }
-  players.sort(function (a, b) { return a.rank - b.rank; });
-  applyTieBreaks(players, weeks);
+  return { players: players, weeks: weeks, data: data };
+}
+
+function getRankings() {
+  return cached('rankings', 60, computeRankings);
+}
+
+// Returns season standings with the tie-broken order that writeSortedRankings()
+// persisted into columns A/B ("Sorted Name"/"Sorted Rank") the last time a
+// week finalized - not recomputed here, so every viewer of the standings
+// page sees the same order for the week instead of a fresh random shuffle
+// (unresolved ties are randomized, see applyTieBreaks()) on every load. The
+// returned array's order is taken directly from A/B's row order too, not
+// just the rank number - two players sharing one rank number still need a
+// stable relative order (rankFor() below relies on it for pool seeding),
+// and re-deriving that from rank number alone would lose it. Players not
+// yet in that snapshot (e.g. just added, no finalize since) fall back to
+// the sheet's raw =RANK.EQ() rank, sorted after everyone in the snapshot.
+function computeRankings() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
+  if (!sheet) return { players: [] };
+  var read = readRankingsSheet(sheet);
+  var players = read.players, weeks = read.weeks, data = read.data;
+
+  var sortedInfo = {}; // lowercased name -> { rank, pos } from columns A/B, pos = row order there
+  var pos = 0;
+  for (var r = 2; r < data.length; r++) {
+    var nm = (data[r][RANKINGS_SORTED_NAME_COL - 1] || '').toString().trim();
+    var rk = data[r][RANKINGS_SORTED_RANK_COL - 1];
+    if (!nm || rk === '' || rk === null) continue;
+    sortedInfo[nm.toLowerCase()] = { rank: Number(rk), pos: pos };
+    pos++;
+  }
+  players.forEach(function (p) {
+    var info = sortedInfo[p.name.trim().toLowerCase()];
+    if (info) { p.rank = info.rank; p._pos = info.pos; }
+    else { p._pos = 1e6 + p.rank; } // not in the snapshot yet - after everyone who is
+  });
+  players.sort(function (a, b) { return a._pos - b._pos; });
+  players.forEach(function (p) { delete p._pos; });
   return { players: players, weeks: weeks };
+}
+
+// Recomputes the tie-broken season order (including a fresh random shuffle
+// for any still-unresolved ties) and writes it into the Rankings sheet's
+// "Sorted Name"/"Sorted Rank" columns (A/B) - the snapshot getRankings()
+// reads back on every view and generatePools() seeds pools from (via
+// getRankings()). Called once per finalize (doFinalizeWeek), not on every
+// read, so the order stays stable for everyone viewing that week.
+function writeSortedRankings(sheet) {
+  var read = readRankingsSheet(sheet);
+  // applyTieBreaks() groups tied players by scanning for adjacent equal
+  // ranks, so they must be rank-sorted first.
+  read.players.sort(function (a, b) { return a.rank - b.rank; });
+  applyTieBreaks(read.players, read.weeks);
+  var rows = read.players.map(function (p) { return [p.name, p.rank]; });
+  if (rows.length) {
+    sheet.getRange(RANKINGS_FIRST_DATA_ROW, RANKINGS_SORTED_NAME_COL, rows.length, 2).setValues(rows);
+  }
+  var clearFrom = RANKINGS_FIRST_DATA_ROW + rows.length;
+  if (clearFrom <= RANKINGS_LAST_DATA_ROW) {
+    sheet.getRange(clearFrom, RANKINGS_SORTED_NAME_COL, RANKINGS_LAST_DATA_ROW - clearFrom + 1, 2).clearContent();
+  }
+}
+
+// Manual editor entry point for re-syncing columns A/B without a full
+// re-finalize - same pattern as fixAvgFormulas().
+function writeSortedRankingsNow() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
+  if (!sheet) { Logger.log('Rankings sheet not found'); return; }
+  writeSortedRankings(sheet);
+  Logger.log('Wrote sorted rankings to columns A/B.');
 }
 
 // The sheet's Rank column is =RANK.EQ() on Avg, which gives every player in
@@ -797,12 +866,17 @@ function matchNameIndex(keys, name) {
   return prefixHits === 1 ? prefixHit : -1;
 }
 
-// A player's standings rank, or 9999 (= seeded last, in signup order) when
-// they can't be matched in Rankings.
+// A player's seeding order: their position in rankedPlayers (getRankings()'s
+// already tie-broken array, in the exact order persisted at last finalize -
+// see getRankings()), or 9999 (= seeded last, in signup order) when they
+// can't be matched in Rankings. Position rather than the raw rank number,
+// so two players sharing one rank number (an unresolved tie) still seed in
+// the stable order that was randomly decided once at finalize time, instead
+// of falling back to this week's sign-up order.
 function rankFor(rankedPlayers, name) {
   var keys = rankedPlayers.map(function (p) { return p.name.toLowerCase(); });
   var idx = matchNameIndex(keys, name);
-  return idx === -1 ? 9999 : rankedPlayers[idx].rank;
+  return idx === -1 ? 9999 : idx;
 }
 
 // Always >= 2 pools: <=16 -> 2, <=21 -> 3, else 4. Even sizes, extras to earlier pools.
@@ -1261,6 +1335,8 @@ function cancelMatch(dateISO, matchId, secret, pin) {
 // nightly trigger (for scores typed straight into the sheet).
 
 var RANKINGS_FIRST_WEEK_COL = 8;   // column H - the newest week pair lives here
+var RANKINGS_SORTED_NAME_COL = 1;  // column A ("Sorted Name" header) - tie-broken snapshot, written by writeSortedRankings()
+var RANKINGS_SORTED_RANK_COL = 2;  // column B ("Sorted Rank" header) - tie-broken snapshot, written by writeSortedRankings()
 var RANKINGS_NAME_COL = 4;         // column D
 var RANKINGS_RANK_COL = 5;         // column E (formula)
 var RANKINGS_AVG_COL = 6;          // column F (formula)
@@ -1488,6 +1564,12 @@ function doFinalizeWeek(dateISO) {
   }
 
   applyAbsencePasses(sheet, rCol, playedRows, names);
+
+  // Rank/Avg are formulas that depend on the R/RP values and absence-pass
+  // edits just written above - flush so writeSortedRankings() reads this
+  // week's recalculated numbers, not last week's.
+  SpreadsheetApp.flush();
+  writeSortedRankings(sheet);
 
   return { ok: true, finalized: true, date: dateISO, updated: results.length - skipped.length, added: added, skipped: skipped };
 }
