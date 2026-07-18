@@ -956,8 +956,14 @@ async function fetchEventPin(){
 
 async function createNextWeek(){
   const out = document.getElementById('admin-tools-out');
+  const peek = await postAction({action:'peekNextWeekDate', secret: adminSecret()});
+  if(!peek.ok){ out.style.display = 'block'; out.textContent = peek.error || 'Could not determine next week.'; return; }
+  const input = prompt('Create a new tab for which Wednesday? (YYYY-MM-DD)', peek.date);
+  if(!input) return; // cancelled
+  const dateISO = input.trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)){ alert('Enter the date as YYYY-MM-DD.'); return; }
   out.style.display = 'block'; out.textContent = 'Creating…';
-  const res = await postAction({action:'createWeek', secret: adminSecret()});
+  const res = await postAction({action:'createWeek', date: dateISO, secret: adminSecret()});
   if(!res.ok){ out.textContent = res.error || 'Could not create next week.'; return; }
   out.textContent = `Created a blank tab for Wed, ${fmtDate(res.date)}.`;
 }

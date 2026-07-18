@@ -89,7 +89,8 @@ function doPost(e) {
     else if (body.action === 'cancelMatch') result = cancelMatch(body.date, body.matchId, body.secret, body.pin);
     else if (body.action === 'finalizeRankings') result = forceFinalizeWeek(body.date, body.secret);
     else if (body.action === 'resetWeek') result = resetWeek(body.date, body.secret);
-    else if (body.action === 'createWeek') result = createWeek(body.secret);
+    else if (body.action === 'createWeek') result = createWeek(body.date, body.secret);
+    else if (body.action === 'peekNextWeekDate') result = peekNextWeekDate(body.secret);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
@@ -1039,15 +1040,10 @@ function clearSignupsForNewWeek(sheet) {
   }
 }
 
-// Duplicates the most recently dated weekly tab (found by parsing every
-// sheet name as "M/D/YY") as next week's blank tab - one week after the
-// template, keeping its pool-grid formulas and formatting, with every
-// signup, draw, and score wiped so it's ready for a new session. Saves the
-// organizer from copy-pasting the template tab and clearing it out by hand
-// each week.
-function createWeek(secret) {
-  var auth = checkAdminSecret(secret);
-  if (!auth.ok) return auth;
+// Finds the most recently dated weekly tab (by parsing every sheet name as
+// "M/D/YY") and the date one week after it - the default suggestion for the
+// next week to create.
+function computeNextWeek() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var latest = null; // { sheet, dateISO }
   ss.getSheets().forEach(function (sh) {
@@ -1055,21 +1051,66 @@ function createWeek(secret) {
     if (!iso) return;
     if (!latest || iso > latest.dateISO) latest = { sheet: sh, dateISO: iso };
   });
-  if (!latest) return { ok: false, error: 'No existing week tabs found to use as a template.' };
+  if (!latest) return null;
+  return { latestSheet: latest.sheet, newDateISO: addDaysISO(latest.dateISO, 7) };
+}
 
-  var newDateISO = addDaysISO(latest.dateISO, 7);
+// Read-only preview so the site can show/confirm the suggested date before
+// createWeek() actually duplicates a tab.
+function peekNextWeekDate(secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  var next = computeNextWeek();
+  if (!next) return { ok: false, error: 'No existing week tabs found to use as a template.' };
+  return { ok: true, date: next.newDateISO };
+}
+
+// Duplicates the most recently dated weekly tab as the new week's blank tab,
+// keeping its pool-grid formulas and formatting, with every signup, draw,
+// and score wiped so it's ready for a new session. Saves the organizer from
+// copy-pasting the template tab and clearing it out by hand each week.
+// dateISO is normally the site's confirmed suggestion from peekNextWeekDate,
+// but an organizer may override it (e.g. a skipped or moved week).
+function createWeek(dateISO, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var next = computeNextWeek();
+  if (!next) return { ok: false, error: 'No existing week tabs found to use as a template.' };
+  var newDateISO = dateISO || next.newDateISO;
   var newTabName = tabNameForDate(newDateISO);
   if (ss.getSheetByName(newTabName)) return { ok: false, error: 'A tab for ' + newTabName + ' already exists.' };
 
-  var newSheet = latest.sheet.copyTo(ss);
+  var newSheet = next.latestSheet.copyTo(ss);
   newSheet.setName(newTabName);
   ss.setActiveSheet(newSheet);
-  ss.moveActiveSheet(ss.getSheets().length); // to the end, after every existing week
+  ss.moveActiveSheet(1); // move to the first tab for easier viewing
 
   clearDrawAndScores(newSheet);
   clearSignupsForNewWeek(newSheet);
+  writeWeekDateCell(newSheet, newDateISO);
+  protectWeekSheet(newSheet);
 
   return { ok: true, date: newDateISO };
+}
+
+// Stamps cell A1 with the week's date so the tab is self-labeled even
+// without looking at the tab name. Built from date parts (not
+// `new Date(isoString)`) to avoid a UTC/local timezone day-shift.
+function writeWeekDateCell(sheet, dateISO) {
+  var parts = dateISO.split('-').map(Number);
+  sheet.getRange(1, 1).setValue(new Date(parts[0], parts[1] - 1, parts[2]));
+}
+
+// Locks the tab so only the spreadsheet owner (and the deployed web app,
+// which executes as the owner) can edit it - manual edits by other editors
+// on the sheet are blocked in the Sheets UI. Apps Script always lets the
+// spreadsheet owner edit a protected sheet regardless of the editor list, so
+// removing every default editor is enough to lock it to "owner only."
+function protectWeekSheet(sheet) {
+  var protection = sheet.protect().setDescription('Week tab - edit via site admin tools only');
+  protection.removeEditors(protection.getEditors());
+  if (protection.canDomainEdit()) protection.setDomainEdit(false);
 }
 
 // ---- Check-in / no-show (admin only) ----
@@ -1689,8 +1730,24 @@ function doFinalizeWeek(dateISO) {
   // week's recalculated numbers, not last week's.
   SpreadsheetApp.flush();
   writeSortedRankings(sheet);
+  moveRankingsBeforeWeek(dateISO);
 
   return { ok: true, finalized: true, date: dateISO, updated: results.length - skipped.length, added: added, skipped: skipped };
+}
+
+// Keeps the Rankings tab pinned immediately to the left of whichever week
+// was just finalized, so the two stay adjacent as the season's tabs grow.
+function moveRankingsBeforeWeek(dateISO) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var weekSheet = getWeekSheet(dateISO);
+  var rankingsSheet = ss.getSheetByName('Rankings');
+  if (!weekSheet || !rankingsSheet || rankingsSheet === weekSheet) return;
+  var weekIndex = weekSheet.getIndex();
+  var rankingsIndex = rankingsSheet.getIndex();
+  if (rankingsIndex === weekIndex - 1) return; // already positioned correctly
+  var targetIndex = rankingsIndex < weekIndex ? weekIndex - 1 : weekIndex;
+  ss.setActiveSheet(rankingsSheet);
+  ss.moveActiveSheet(targetIndex);
 }
 
 // New players go on the row after the last named one, with the Rank/Avg
