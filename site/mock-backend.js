@@ -164,15 +164,24 @@
     return { ok: true };
   }
 
-  // Mirrors createWeek() in gas/Code.gs: there's no real spreadsheet here to
-  // duplicate a tab in, so this just reports what the next date would be -
-  // one week after the mock's fixed "This week" session.
-  function createWeek() {
+  // Mirrors computeNextWeek()/peekNextWeekDate() in gas/Code.gs: reports
+  // what the next date would be - one week after the mock's fixed "This
+  // week" session.
+  function peekNextWeekDate() {
     const base = (typeof getSessionDateISO === 'function' ? getSessionDateISO() : null);
     if (!base) return { ok: false, error: 'mock: no session date available' };
     const d = new Date(base + 'T00:00:00Z');
     d.setUTCDate(d.getUTCDate() + 7);
     return { ok: true, date: d.toISOString().slice(0, 10) };
+  }
+
+  // Mirrors createWeek() in gas/Code.gs: there's no real spreadsheet here to
+  // duplicate a tab in, so this just echoes back the (possibly overridden)
+  // date the site confirmed.
+  function createWeek(dateISO) {
+    const peek = peekNextWeekDate();
+    if (!peek.ok) return peek;
+    return { ok: true, date: dateISO || peek.date };
   }
 
   function checkin(name) {
@@ -480,7 +489,8 @@
       case 'cancelMatch': return cancelMatch(body.matchId);
       case 'finalizeRankings': return { ok: true, finalized: true, date: body.date, updated: RANKINGS.length, added: [], skipped: [] }; // dev sandbox: any passphrase works
       case 'resetWeek': return resetWeek();
-      case 'createWeek': return createWeek();
+      case 'createWeek': return createWeek(body.date);
+      case 'peekNextWeekDate': return peekNextWeekDate();
       default: return { ok: false, error: 'mock: unhandled action ' + body.action };
     }
   }
