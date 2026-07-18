@@ -339,6 +339,14 @@
       <p class="note" style="margin:0 0 8px;">Experiment with the match desk using local sample data — no spreadsheet required, nothing here touches the real roster.</p>
       <a class="btn ghost" href="?mock=1">Open mock backend (?mock=1)</a>
     </div>
+    <div class="card" style="max-width:440px; display:none;" id="admin-tools-card">
+      <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Organizer tools</h3>
+      <p class="note" style="margin:0 0 8px;">Duplicate the most recent week's tab as a new blank tab one week later — pool grids and formatting carried over, signups/draw/scores wiped.</p>
+      <button type="button" class="btn ghost small" onclick="createNextWeek()">Create next week</button>
+      <p class="note" style="margin:12px 0 8px;">Wipe tonight's pool draw, every score, and check-in/no-show status back to undrawn — for testing, not during a real session.</p>
+      <button type="button" class="btn ghost small" onclick="resetThisWeek()">Reset this week's draw &amp; scores</button>
+      <p class="note" id="admin-tools-out" style="display:none; margin-top:8px;"></p>
+    </div>
   </section>
 
 </main>
@@ -360,7 +368,7 @@
     <div id="modal-chart"></div>
     <div class="label" style="margin:16px 0 6px;">Last 6 weeks</div>
     <div id="modal-weeks-strip"></div>
-    <div class="label" style="margin:16px 0 6px;">Head-to-head</div>
+    <div class="label" style="margin:16px 0 6px;">Head-to-head (last 6 weeks)</div>
     <div class="search-row" style="margin-bottom:10px;"><input type="text" id="modal-h2h-search" placeholder="Find an opponent"></div>
     <div id="modal-h2h-body"></div>
   </div>
@@ -904,6 +912,7 @@ function weekPinSignOut(){
 function renderAdmin(){
   document.getElementById('admin-secret').value = sessionStorage.getItem('sw-admin-secret') || '';
   document.getElementById('admin-mock-card').style.display = 'none';
+  document.getElementById('admin-tools-card').style.display = 'none';
   document.getElementById('admin-signout-btn').style.display = isAdmin() ? 'inline-block' : 'none';
   const out = document.getElementById('admin-pin-out');
   out.style.display = 'none'; out.textContent = '';
@@ -926,6 +935,7 @@ async function fetchEventPin(){
   const out = document.getElementById('admin-pin-out');
   out.style.display = 'block';
   document.getElementById('admin-mock-card').style.display = 'none';
+  document.getElementById('admin-tools-card').style.display = 'none';
   if(!secret){ out.textContent = 'Enter the admin passphrase first.'; return; }
   out.textContent = 'Checking…';
   const dateISO = getSessionDateISO();
@@ -940,7 +950,27 @@ async function fetchEventPin(){
   sessionStorage.setItem('sw-pin-'+dateISO, res.pin);
   out.innerHTML = `Signed in. PIN for Wed, ${fmtDate(dateISO)}: <strong class="num">${res.pin}</strong> — remembered for this browser tab only.`;
   document.getElementById('admin-mock-card').style.display = 'block';
+  document.getElementById('admin-tools-card').style.display = 'block';
   document.getElementById('admin-signout-btn').style.display = 'inline-block';
+}
+
+async function createNextWeek(){
+  const out = document.getElementById('admin-tools-out');
+  out.style.display = 'block'; out.textContent = 'Creating…';
+  const res = await postAction({action:'createWeek', secret: adminSecret()});
+  if(!res.ok){ out.textContent = res.error || 'Could not create next week.'; return; }
+  out.textContent = `Created a blank tab for Wed, ${fmtDate(res.date)}.`;
+}
+
+async function resetThisWeek(){
+  const dateISO = getSessionDateISO();
+  if(!confirm(`Reset the draw, every score, and check-in/no-show status for Wed, ${fmtDate(dateISO)}? This clears the sheet and cannot be undone.`)) return;
+  const out = document.getElementById('admin-tools-out');
+  out.style.display = 'block'; out.textContent = 'Resetting…';
+  const res = await postAction({action:'resetWeek', date:dateISO, secret: adminSecret()});
+  if(!res.ok){ out.textContent = res.error || 'Could not reset the week.'; return; }
+  out.textContent = `Reset Wed, ${fmtDate(dateISO)} — draw, scores, and check-ins cleared.`;
+  if(WEEK_DATE === dateISO) renderSchedule(true, true);
 }
 
 function rosterRow(s, num, phase){

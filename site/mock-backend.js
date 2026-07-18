@@ -150,6 +150,31 @@
     return { ok: true, pools: letters.map((L) => ({ label: L, players: pools[L] })) };
   }
 
+  // Mirrors resetWeek() in gas/Code.gs: wipes tonight's draw, every score,
+  // and every signup's check-in/no-show status back to undrawn, for testing
+  // pool generation/scoring flows against the mock's live "This week" state.
+  function resetWeek() {
+    STATE.drawn = false;
+    STATE.pools = {};
+    STATE.grids = {};
+    STATE.guestMap = {};
+    STATE.live.matches = [];
+    STATE.live.checkins = {};
+    STATE.signups.forEach((s) => { s.checkedIn = false; s.noShow = false; });
+    return { ok: true };
+  }
+
+  // Mirrors createWeek() in gas/Code.gs: there's no real spreadsheet here to
+  // duplicate a tab in, so this just reports what the next date would be -
+  // one week after the mock's fixed "This week" session.
+  function createWeek() {
+    const base = (typeof getSessionDateISO === 'function' ? getSessionDateISO() : null);
+    if (!base) return { ok: false, error: 'mock: no session date available' };
+    const d = new Date(base + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + 7);
+    return { ok: true, date: d.toISOString().slice(0, 10) };
+  }
+
   function checkin(name) {
     const s = STATE.signups.find((x) => key(x.name) === key(name));
     if (!s) return { ok: false, error: 'Signup not found for ' + name };
@@ -403,14 +428,17 @@
   }
 
   // Mirrors getHeadToHead() in gas/Code.gs: scans every drawn pool grid this
-  // player appears in (canned past weeks, plus tonight's live pools once
-  // scores exist) and tallies a season-long record + individual games per opponent.
+  // player appears in over the last 6 weeks (canned past weeks, plus
+  // tonight's live pools once scores exist) and tallies a record + individual
+  // games per opponent within that window.
+  const H2H_WEEK_WINDOW = 6;
   function headToHead(name) {
     const k = key(name);
     const totals = {};
     const weeks = Object.values(pastWeeks());
     if (STATE.drawn) weeks.push(getWeek());
-    weeks.forEach((week) => {
+    weeks.sort((a, b) => (b.date < a.date ? -1 : b.date > a.date ? 1 : 0)); // most-recent-first
+    weeks.slice(0, H2H_WEEK_WINDOW).forEach((week) => {
       (week.pools || []).forEach((p) => {
         if (!p.drawn) return;
         const idx = p.players.findIndex((pl) => key(pl.name) === k);
@@ -451,6 +479,8 @@
       case 'editScore': return editScore(body.a, body.b, body.scoreA, body.scoreB, body.matchId);
       case 'cancelMatch': return cancelMatch(body.matchId);
       case 'finalizeRankings': return { ok: true, finalized: true, date: body.date, updated: RANKINGS.length, added: [], skipped: [] }; // dev sandbox: any passphrase works
+      case 'resetWeek': return resetWeek();
+      case 'createWeek': return createWeek();
       default: return { ok: false, error: 'mock: unhandled action ' + body.action };
     }
   }
