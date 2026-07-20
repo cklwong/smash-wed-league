@@ -740,7 +740,18 @@ function removeJoin(dateISO, name) {
   }
   if (!target) return { ok: false, error: 'Signup not found for ' + name };
   sheet.deleteRow(target.row);
+  emailOrganizersOnRemoval(dateISO, name);
   return { ok: true };
+}
+
+// Lets organizers know a spot opened up so they can watch for the waitlist to fill it.
+function emailOrganizersOnRemoval(dateISO, name) {
+  var emails = PropertiesService.getScriptProperties().getProperty('ADMIN_EMAILS');
+  if (!emails) return;
+  MailApp.sendEmail(emails,
+    'Smash Wed: ' + name + ' removed from ' + dateISO,
+    name + ' was removed from the signup list for ' + dateISO + '.\n\n' +
+    'The next waitlisted player has been promoted into their spot.');
 }
 
 function findSignup(signups, name) {
