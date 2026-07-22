@@ -469,8 +469,7 @@ function sparkline(trend){
   const w=76,h=24;
   const pts = chartDots(trend,w,h);
   const line = pts.map(p=>p.x.toFixed(1)+','+p.y.toFixed(1)).join(' ');
-  const up = trend[trend.length-1].score >= trend[0].score;
-  const color = up?'#2F7D52':'#B3492F';
+  const color = '#16324A';
   const dots = pts.map(p=>
     `<circle class="spark-hit" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5.5" fill="transparent" onclick="event.stopPropagation(); showChartTip(event,'${p.label}')"></circle>`+
     `<circle class="spark-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="1.6" fill="${color}" style="pointer-events:none;"></circle>`
