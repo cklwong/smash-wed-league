@@ -1073,7 +1073,8 @@ function availablePlayers(model){
       if(onCourtNow(model, name)) return;
       const hasGame = mp.names.some((_,j)=>j!==i && !mp.playedSet.has(pairId(i,j)));
       if(!hasGame) return;
-      out.push({pool:mp.idx, label:mp.label, i, name, guest, since:waitingSince(model, name)});
+      const gamesLeft = mp.names.length - 1 - mp.stats[i].played;
+      out.push({pool:mp.idx, label:mp.label, i, name, guest, since:waitingSince(model, name), gamesLeft});
     });
   });
   return out;
@@ -1098,9 +1099,10 @@ function onCourtCard(model, admin){
 }
 
 // All not-yet-played pairs among this pool's available players, sorted by
-// the combined wait time of both players (longest combined wait first).
-// Guests have no meaningful wait time, so guest-involving pairs always sort
-// after every non-guest pairing.
+// combined games left in their pool (most combined games left first) so no
+// one falls behind on total games, then by combined wait time (longest
+// combined wait first) to break ties. Guests have no meaningful wait time,
+// so guest-involving pairs always sort after every non-guest pairing.
 function pendingMatchesForPool(model, avail, poolIdx){
   const cands = avail.filter(c=>c.pool===poolIdx);
   const played = model.pools[poolIdx].playedSet;
@@ -1113,7 +1115,10 @@ function pendingMatchesForPool(model, avail, poolIdx){
   }
   pairs.sort((m1,m2)=>{
     const g1 = m1[0].guest||m1[1].guest ? 1 : 0, g2 = m2[0].guest||m2[1].guest ? 1 : 0;
-    return g1-g2 || ((m1[0].since+m1[1].since) - (m2[0].since+m2[1].since));
+    if(g1!==g2) return g1-g2;
+    const left1 = m1[0].gamesLeft+m1[1].gamesLeft, left2 = m2[0].gamesLeft+m2[1].gamesLeft;
+    if(left1!==left2) return left2-left1; // more combined games left plays first
+    return (m1[0].since+m1[1].since) - (m2[0].since+m2[1].since); // then longest combined wait
   });
   return pairs;
 }
@@ -1129,8 +1134,9 @@ function upNextCard(model, avail, admin){
   if(!model.hasLive){
     return `<div class="card">${head}<p style="margin:0; font-size:13px; color:var(--text-soft);">The match desk needs the updated backend — paste the new Code.gs into Apps Script and deploy a new version.</p></div>`;
   }
-  // Pool first (A, B, C, ...), then within each pool longest-waiting first;
-  // guests have no meaningful wait time, so they always sort last.
+  // Pool first (A, B, C, ...), then within each pool by games-left first
+  // (most games left plays first), then longest-waiting; guests have no
+  // meaningful wait time, so they always sort last.
   const poolsSorted = model.pools.slice().sort((a,b)=>a.label.localeCompare(b.label));
   NEXT_MATCHES = {};
   let any = false;
