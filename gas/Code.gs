@@ -692,6 +692,7 @@ function addJoin(dateISO, name, contact) {
   // not derived from the raw row number - inline labels like "Max limit
   // (24ppl)" would otherwise inflate it.
   var existing = parseSignups(data);
+  if (findSignup(existing, name)) return { ok: false, error: 'Already signed up' };
   var position = existing.length + 1;
 
   var lastRow = sheet.getLastRow();

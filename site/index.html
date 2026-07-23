@@ -1793,7 +1793,7 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   btn.disabled = false; btn.textContent = 'Request a spot';
 
   if(!result.ok){
-    errorEl.textContent = 'Could not save your signup — please try again in a moment.';
+    errorEl.textContent = result.error || 'Could not save your signup — please try again in a moment.';
     errorEl.style.display = 'block';
     return;
   }
