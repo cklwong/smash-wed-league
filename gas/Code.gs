@@ -726,10 +726,14 @@ function emailWelcomeLink(email, name) {
     'and manage your signups any time here:\n' + SITE_URL);
 }
 
-// Deletes the signup's row outright (rather than blanking it) so every row
-// below shifts up - this is what promotes the first waitlisted signup into
-// the newly-opened confirmed slot, since confirmed/waitlist is just a
-// position-based slice of the parsed signup order.
+// Shifts the signup-list columns (name, check-in status, contact, no-show
+// label) up by one past the removed row, rather than deleting the whole
+// sheet row - this is what promotes the first waitlisted signup into the
+// newly-opened confirmed slot, since confirmed/waitlist is just a
+// position-based slice of the parsed signup order. Using sheet.deleteRow
+// used to shift every column, corrupting the pool slot/score grid columns
+// (positioned by fixed POOL_LAYOUT geometry, not by signup order) on every
+// row below the removed one.
 function removeJoin(dateISO, name) {
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
@@ -740,7 +744,25 @@ function removeJoin(dateISO, name) {
     if (signups[i].name.toLowerCase() === (name || '').trim().toLowerCase()) { target = signups[i]; break; }
   }
   if (!target) return { ok: false, error: 'Signup not found for ' + name };
-  sheet.deleteRow(target.row);
+
+  var lastRow = sheet.getLastRow();
+  var colA = sheet.getRange(1, 1, lastRow, 1).getValues();
+  var listEndRow = lastRow;
+  for (var r = target.row; r < colA.length; r++) {
+    if ((colA[r][0] || '').toString().trim() === '') { listEndRow = r + 1; break; }
+  }
+
+  var cols = [1, 2, CONTACT_COL, NOSHOW_GUEST_COL];
+  for (var c = 0; c < cols.length; c++) {
+    var col = cols[c];
+    var shiftRows = listEndRow - target.row;
+    if (shiftRows > 0) {
+      var block = sheet.getRange(target.row + 1, col, shiftRows, 1).getValues();
+      sheet.getRange(target.row, col, shiftRows, 1).setValues(block);
+    }
+    sheet.getRange(listEndRow, col).clearContent();
+  }
+
   emailOrganizersOnRemoval(dateISO, name);
   return { ok: true };
 }
