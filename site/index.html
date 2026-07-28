@@ -295,7 +295,7 @@
         </div>
         <div id="jf-new-fields" style="display:none;">
           <div class="field"><label for="jf-name">Name</label><input id="jf-name" type="text" placeholder="Your full name"></div>
-          <div class="field"><label for="jf-contact">Email or phone</label><input id="jf-contact" type="text" placeholder="name@email.com"></div>
+          <div class="field"><label for="jf-contact">Email</label><input id="jf-contact" type="email" placeholder="name@email.com"></div>
           <p class="note">Please join one of the WhatsApp group chats above for league communications.</p>
         </div>
         <button type="submit" class="btn" id="join-submit-btn" style="width:100%;">Request a spot</button>
@@ -345,6 +345,8 @@
       <button type="button" class="btn ghost small" onclick="createNextWeek()">Create next week</button>
       <p class="note" style="margin:12px 0 8px;">Wipe tonight's pool draw, every score, and check-in/no-show status back to undrawn — for testing, not during a real session.</p>
       <button type="button" class="btn ghost small" onclick="resetThisWeek()">Reset this week's draw &amp; scores</button>
+      <p class="note" style="margin:12px 0 8px;">Fix a player's name across the season standings and every weekly signup list, and optionally set the email they get notified at when added to or removed from an event.</p>
+      <button type="button" class="btn ghost small" onclick="renamePlayerPrompt()">Rename player / set email</button>
       <p class="note" id="admin-tools-out" style="display:none; margin-top:8px;"></p>
     </div>
   </section>
@@ -971,6 +973,24 @@ async function resetThisWeek(){
   if(!res.ok){ out.textContent = res.error || 'Could not reset the week.'; return; }
   out.textContent = `Reset Wed, ${fmtDate(dateISO)} — draw, scores, and check-ins cleared.`;
   if(WEEK_DATE === dateISO) renderSchedule(true, true);
+}
+
+async function renamePlayerPrompt(){
+  if(!PLAYERS.length){ const r = await fetchRankings(); PLAYERS = r.players; WEEKS = r.weeks; }
+  const oldName = prompt('Current player name, exactly as shown in Standings:');
+  if(!oldName) return;
+  const match = PLAYERS.find(p=>p.name.toLowerCase() === oldName.trim().toLowerCase());
+  if(!match){ alert(`No player named "${oldName.trim()}" found in the season standings.`); return; }
+  const newName = prompt('New name:', match.name);
+  if(!newName) return;
+  const email = prompt("Email to notify when added to or removed from an event (leave blank to skip):", '');
+  if(email === null) return;
+  const out = document.getElementById('admin-tools-out');
+  out.style.display = 'block'; out.textContent = 'Renaming…';
+  const res = await postAction({action:'renamePlayer', oldName: oldName.trim(), newName: newName.trim(), email: email.trim(), secret: adminSecret()});
+  if(!res.ok){ out.textContent = res.error || 'Could not rename player.'; return; }
+  rankingsPromise = null; // refetch so Standings/search picks up the new name
+  out.textContent = `Renamed "${oldName.trim()}" to "${newName.trim()}"${res.tabsUpdated ? ' — ' + res.tabsUpdated + ' weekly tab' + (res.tabsUpdated===1?'':'s') + ' updated' : ''}.`;
 }
 
 function rosterRow(s, num, phase){

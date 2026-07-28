@@ -21,8 +21,8 @@
  *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score, pool}]}], weeks: ['YYYY-MM-DD', ...] } (pool is a "A6"-style pool+rank label for that week; rank is tie-broken - the sheet's own Rank column ties on equal Avg, so equal-rank groups are re-ordered by most-recent-week rank points then most-recent head-to-head, with unresolved ties sharing one rank number [skip-style] but shuffled randomly rather than alphabetically, since pool seeding sorts on this field. This tie-break runs once per finalize and is persisted to the Rankings sheet's "Sorted Name"/"Sorted Rank" columns [A/B] by writeSortedRankings() - getRankings() just reads that snapshot back, so the order is stable across views until the next finalize, not re-shuffled on every request)
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools }
  *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}, ...]}, ...] } (record over NAME's last 6 completed weeks + every individual game vs each opponent shared a pool with in that window; matches are most-recent-first)
- *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error } (if contact looks like an email, sends a welcome email with the site link)
- *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error }
+ *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error } (emails an "added" confirmation if contact looks like an email, or if the player has a registered email on file - see renamePlayer)
+ *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error } (emails a "removed" notice under the same conditions as join)
  *   POST { action:'getpin', date, secret }      -> { ok, pin }
  *   POST { action:'generatePools', date, pin, padGuests:['A',...], redraw } -> { ok, pools }
  *   POST { action:'checkin', date, name, secret }       -> { ok, seated } (admin passphrase; restores a no-show's pool spot if their guest hasn't played; seated:false means a redraw is needed to seat them)
@@ -35,6 +35,7 @@
  *   POST { action:'finalizeRankings', date, secret } -> { ok, finalized, updated, added, skipped } (admin passphrase; re-runs finalize for a fully-scored week, overwriting its Rankings column pair - this also recomputes the tie-broken standings snapshot, see writeSortedRankings())
  *   POST { action:'resetWeek', date, secret } -> { ok } (admin passphrase; wipes a week's pool draw, every score, and check-in/no-show status back to the undrawn template state - for testing, not during a real session)
  *   POST { action:'createWeek', secret } -> { ok, date } (admin passphrase; duplicates the most recently dated week tab as a new blank tab one week later, wiping signups/draw/scores from the copy)
+ *   POST { action:'renamePlayer', oldName, newName, email, secret } -> { ok, tabsUpdated } or { ok:false, error } (admin passphrase; renames a player with a Rankings entry across the season standings and every weekly tab's signup list/pool slots; email is optional and, if given, is saved as that player's registered email - see getRegisteredEmail() - used to notify them on future join/leave)
  */
 
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
@@ -92,6 +93,7 @@ function doPost(e) {
     else if (body.action === 'resetWeek') result = resetWeek(body.date, body.secret);
     else if (body.action === 'createWeek') result = createWeek(body.date, body.secret);
     else if (body.action === 'peekNextWeekDate') result = peekNextWeekDate(body.secret);
+    else if (body.action === 'renamePlayer') result = renamePlayer(body.oldName, body.newName, body.email, body.secret);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
@@ -707,8 +709,9 @@ function addJoin(dateISO, name, contact) {
   if (contact) {
     sheet.getRange(1, CONTACT_COL).setValue('Contact');
     sheet.getRange(targetRow, CONTACT_COL).setValue(contact);
-    if (isEmail(contact)) emailWelcomeLink(contact, name);
   }
+  var email = isEmail(contact) ? contact.trim() : getRegisteredEmail(name);
+  if (email) emailAddedNotification(email, name, dateISO);
   return { ok: true, row: targetRow, position: position };
 }
 
@@ -716,14 +719,15 @@ function isEmail(contact) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((contact || '').trim());
 }
 
-// New players who sign up with an email get a welcome email pointing them
-// at the league site, so they can find Standings/This week/Join again.
-function emailWelcomeLink(email, name) {
+// Players who join with an email (typed at signup, or already on file from
+// renamePlayer - see getRegisteredEmail) get a confirmation pointing them at
+// the league site, so they can find Standings/This week/Join again.
+function emailAddedNotification(email, name, dateISO) {
   MailApp.sendEmail(email.trim(),
-    'Welcome to Smash Wed!',
+    'Smash Wed: you\'re on the list for ' + dateISO,
     'Hi ' + name + ',\n\n' +
-    'Thanks for signing up for Smash Wed. You can check standings, this week\'s pools, ' +
-    'and manage your signups any time here:\n' + SITE_URL);
+    'You\'ve been added to the signup list for Smash Wed on ' + dateISO + '.\n\n' +
+    'You can check standings, this week\'s pools, and manage your signups any time here:\n' + SITE_URL);
 }
 
 // Shifts the signup-list columns (name, check-in status, contact, no-show
@@ -745,6 +749,8 @@ function removeJoin(dateISO, name) {
   }
   if (!target) return { ok: false, error: 'Signup not found for ' + name };
 
+  var contact = (data[target.row - 1][CONTACT_COL - 1] || '').toString();
+
   var lastRow = sheet.getLastRow();
   var colA = sheet.getRange(1, 1, lastRow, 1).getValues();
   var listEndRow = lastRow;
@@ -764,7 +770,21 @@ function removeJoin(dateISO, name) {
   }
 
   emailOrganizersOnRemoval(dateISO, name);
+  var email = isEmail(contact) ? contact.trim() : getRegisteredEmail(name);
+  if (email) emailRemovedNotification(email, name, dateISO);
   return { ok: true };
+}
+
+// Players with an email on file (this signup's contact, or the registered
+// email from renamePlayer - see getRegisteredEmail) get notified when
+// they're taken off a week's signup list, whether they left themselves or
+// an organizer removed them.
+function emailRemovedNotification(email, name, dateISO) {
+  MailApp.sendEmail(email.trim(),
+    'Smash Wed: removed from ' + dateISO,
+    'Hi ' + name + ',\n\n' +
+    'You\'ve been removed from the signup list for Smash Wed on ' + dateISO + '.\n\n' +
+    'If this wasn\'t you, or you\'d like to rejoin, visit:\n' + SITE_URL);
 }
 
 // Lets organizers know a spot opened up so they can watch for the waitlist to fill it.
@@ -1160,6 +1180,97 @@ function createWeek(dateISO, secret) {
   CacheService.getScriptCache().remove('weekDates');
 
   return { ok: true, date: newDateISO };
+}
+
+// Column C in Rankings is a blank spacer between "Sorted Rank" (B) and
+// "Name" (D) - never touched by finalize or week-column inserts (those only
+// ever shift columns at/after H), so it's a safe, stable place to keep each
+// player's registered email without disturbing the sheet's geometry.
+var RANKINGS_EMAIL_COL = 3; // column C
+
+// Admin tool: fixes a typo'd/legal-name-change player name across the
+// season standings and every weekly tab's signup list and pool-seed slots,
+// and optionally records (or updates) the player's registered email so
+// addJoin/removeJoin can notify them going forward - see
+// getRegisteredEmail(). Scoped to players who already have a Rankings row
+// (i.e. have completed at least one finalized week) since that's the
+// season roster driving Standings; a name with no Rankings row yet isn't
+// "an existing player" in that sense.
+function renamePlayer(oldName, newName, email, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  oldName = (oldName || '').toString().trim();
+  newName = (newName || '').toString().trim();
+  email = (email || '').toString().trim();
+  if (!oldName || !newName) return { ok: false, error: 'Both the current and new name are required.' };
+  if (email && !isEmail(email)) return { ok: false, error: "That doesn't look like a valid email address." };
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var rankSheet = ss.getSheetByName('Rankings');
+  if (!rankSheet) return { ok: false, error: 'Rankings sheet not found.' };
+
+  var oldKey = oldName.toLowerCase();
+  var data = rankSheet.getDataRange().getValues();
+  var row = -1;
+  for (var r = RANKINGS_FIRST_DATA_ROW - 1; r < data.length && r < RANKINGS_LAST_DATA_ROW; r++) {
+    var nm = (data[r][RANKINGS_NAME_COL - 1] || '').toString().trim();
+    if (nm.toLowerCase() === oldKey) { row = r + 1; break; }
+  }
+  if (row === -1) return { ok: false, error: 'No player named "' + oldName + '" found in the season standings.' };
+
+  rankSheet.getRange(row, RANKINGS_NAME_COL).setValue(newName);
+  if ((data[row - 1][RANKINGS_SORTED_NAME_COL - 1] || '').toString().trim().toLowerCase() === oldKey) {
+    rankSheet.getRange(row, RANKINGS_SORTED_NAME_COL).setValue(newName);
+  }
+  if (email) {
+    rankSheet.getRange(2, RANKINGS_EMAIL_COL).setValue('Email');
+    rankSheet.getRange(row, RANKINGS_EMAIL_COL).setValue(email);
+  }
+
+  // Propagate the same rename to every weekly tab's signup list (column A)
+  // and pool-seed slots (column E) - grid headers are formulas off E (=E2
+  // etc.), so this also updates past pool grids' displayed names.
+  var tabsUpdated = 0;
+  ss.getSheets().forEach(function (sheet) {
+    if (!headerToISODate(sheet.getName())) return;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 1) return;
+    var colA = sheet.getRange(1, 1, lastRow, 1).getValues();
+    var colE = sheet.getRange(1, SLOT_COL, lastRow, 1).getValues();
+    var changed = false;
+    for (var i = 0; i < lastRow; i++) {
+      if ((colA[i][0] || '').toString().trim().toLowerCase() === oldKey) {
+        sheet.getRange(i + 1, 1).setValue(newName);
+        changed = true;
+      }
+      if ((colE[i][0] || '').toString().trim().toLowerCase() === oldKey) {
+        sheet.getRange(i + 1, SLOT_COL).setValue(newName);
+        changed = true;
+      }
+    }
+    if (changed) tabsUpdated++;
+  });
+
+  return { ok: true, tabsUpdated: tabsUpdated };
+}
+
+// Looks up a player's registered email from the Rankings sheet (see
+// RANKINGS_EMAIL_COL / renamePlayer) for the added/removed notifications in
+// addJoin/removeJoin - matched the same short-vs-full-name way pool seeding
+// matches signup names against the roster (see matchNameIndex).
+function getRegisteredEmail(name) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
+  if (!sheet) return '';
+  var key = (name || '').toString().trim().toLowerCase();
+  if (!key) return '';
+  var data = sheet.getDataRange().getValues();
+  for (var r = RANKINGS_FIRST_DATA_ROW - 1; r < data.length && r < RANKINGS_LAST_DATA_ROW; r++) {
+    var nm = (data[r][RANKINGS_NAME_COL - 1] || '').toString().trim().toLowerCase();
+    if (!nm || (nm !== key && nm.indexOf(key + ' ') !== 0)) continue;
+    var email = (data[r][RANKINGS_EMAIL_COL - 1] || '').toString().trim();
+    if (email) return email;
+  }
+  return '';
 }
 
 // Stamps cell A1 with the week's session start (date + 5:30pm, matching the

@@ -274,6 +274,24 @@
     return { ok: true };
   }
 
+  // Mirrors renamePlayer() in gas/Code.gs: renames a player in RANKINGS (the
+  // season roster) plus wherever they appear in this week's signups/pools,
+  // and optionally stashes an email on the ranking entry (not sent anywhere
+  // in the sandbox - MailApp doesn't exist here).
+  function renamePlayer(oldName, newName, email) {
+    if (!oldName || !newName) return { ok: false, error: 'Both the current and new name are required.' };
+    const r = RANKINGS.find((p) => key(p.name) === key(oldName));
+    if (!r) return { ok: false, error: 'No player named "' + oldName + '" found in the season standings.' };
+    r.name = newName;
+    if (email) r.email = email;
+    let tabsUpdated = 0;
+    STATE.signups.forEach((s) => { if (key(s.name) === key(oldName)) { s.name = newName; tabsUpdated = 1; } });
+    Object.keys(STATE.pools).forEach((L) => {
+      STATE.pools[L] = STATE.pools[L].map((n) => (key(n) === key(oldName) ? newName : n));
+    });
+    return { ok: true, tabsUpdated };
+  }
+
   function validateScores(scoreA, scoreB) {
     const a = Number(scoreA), b = Number(scoreB);
     if (!isFinite(a) || !isFinite(b) || a % 1 !== 0 || b % 1 !== 0 || a < 0 || b < 0) {
@@ -504,6 +522,7 @@
       case 'resetWeek': return resetWeek();
       case 'createWeek': return createWeek(body.date);
       case 'peekNextWeekDate': return peekNextWeekDate();
+      case 'renamePlayer': return renamePlayer(body.oldName, body.newName, body.email);
       default: return { ok: false, error: 'mock: unhandled action ' + body.action };
     }
   }
