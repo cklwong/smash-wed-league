@@ -395,6 +395,7 @@
 <script>
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzBdibEu1hw4dri1-cfT_ql406Sc5pvBCU_u1Z2L5dEJDr9Imsw0kePRiTMgX4Uv8C8ag/exec';
 let PLAYERS = [];
+let PLAYER_EMAILS = {}; // name -> registered email, admin-only (see listPlayerEmails)
 let WEEKS = []; // finalized week dates (ISO), most recent first
 const CAP = 24;
 
@@ -962,6 +963,7 @@ async function fetchEventPin(){
   document.getElementById('admin-tools-card').style.display = 'block';
   document.getElementById('admin-signout-btn').style.display = 'inline-block';
   populateRenameSelect();
+  fetchPlayerEmails(secret);
 }
 
 async function createNextWeek(){
@@ -1000,8 +1002,17 @@ async function populateRenameSelect(force){
   if(names.includes(prev)) sel.value = prev;
 }
 
+// Admin-only lookup of each player's registered email (see listPlayerEmails
+// in gas/Code.gs) so the rename tool can show the current email on file as
+// soon as a player is picked, instead of always starting blank.
+async function fetchPlayerEmails(secret){
+  const res = await postAction({action:'listPlayerEmails', secret: secret || adminSecret()});
+  PLAYER_EMAILS = res.ok ? (res.emails || {}) : {};
+}
+
 document.getElementById('rename-select').addEventListener('change', e=>{
   document.getElementById('rename-new-name').value = e.target.value;
+  document.getElementById('rename-email').value = PLAYER_EMAILS[e.target.value] || '';
 });
 
 document.getElementById('rename-form').addEventListener('submit', async e=>{
@@ -1012,11 +1023,13 @@ document.getElementById('rename-form').addEventListener('submit', async e=>{
   if(!oldName || !newName) return;
   const out = document.getElementById('admin-tools-out');
   out.style.display = 'block'; out.textContent = 'Renaming…';
-  const res = await postAction({action:'renamePlayer', oldName, newName, email, secret: adminSecret()});
+  const secret = adminSecret();
+  const res = await postAction({action:'renamePlayer', oldName, newName, email, secret});
   if(!res.ok){ out.textContent = res.error || 'Could not rename player.'; return; }
   rankingsPromise = null; // refetch so Standings/search picks up the new name
   document.getElementById('rename-email').value = '';
   await populateRenameSelect(true);
+  await fetchPlayerEmails(secret);
   out.textContent = `Renamed "${oldName}" to "${newName}"${res.tabsUpdated ? ' — ' + res.tabsUpdated + ' weekly tab' + (res.tabsUpdated===1?'':'s') + ' updated' : ''}${email ? ' — confirmation emailed.' : '.'}`;
 });
 
