@@ -35,7 +35,8 @@
  *   POST { action:'finalizeRankings', date, secret } -> { ok, finalized, updated, added, skipped } (admin passphrase; re-runs finalize for a fully-scored week, overwriting its Rankings column pair - this also recomputes the tie-broken standings snapshot, see writeSortedRankings())
  *   POST { action:'resetWeek', date, secret } -> { ok } (admin passphrase; wipes a week's pool draw, every score, and check-in/no-show status back to the undrawn template state - for testing, not during a real session)
  *   POST { action:'createWeek', secret } -> { ok, date } (admin passphrase; duplicates the most recently dated week tab as a new blank tab one week later, wiping signups/draw/scores from the copy)
- *   POST { action:'renamePlayer', oldName, newName, email, secret } -> { ok, tabsUpdated } or { ok:false, error } (admin passphrase; renames a player with a Rankings entry across the season standings and every weekly tab's signup list/pool slots; email is optional and, if given, is saved as that player's registered email - see getRegisteredEmail() - used to notify them on future join/leave)
+ *   POST { action:'renamePlayer', oldName, newName, email, secret } -> { ok, tabsUpdated } or { ok:false, error } (admin passphrase; renames a player with a Rankings entry across the season standings and every weekly tab's signup list/pool slots; email is optional and, if given, is saved as that player's registered email - see getRegisteredEmail() - used to notify them on future join/leave, and also emails that address a confirmation of the name/email change right away)
+ *   POST { action:'listPlayerEmails', secret } -> { ok, emails: {name: email, ...} } (admin passphrase; every player's registered email keyed by their exact Rankings name, for the rename tool to show the current email on file)
  */
 
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
@@ -94,6 +95,7 @@ function doPost(e) {
     else if (body.action === 'createWeek') result = createWeek(body.date, body.secret);
     else if (body.action === 'peekNextWeekDate') result = peekNextWeekDate(body.secret);
     else if (body.action === 'renamePlayer') result = renamePlayer(body.oldName, body.newName, body.email, body.secret);
+    else if (body.action === 'listPlayerEmails') result = listPlayerEmails(body.secret);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
@@ -1251,7 +1253,23 @@ function renamePlayer(oldName, newName, email, secret) {
     if (changed) tabsUpdated++;
   });
 
+  if (email) emailRenameConfirmation(email, oldName, newName);
   return { ok: true, tabsUpdated: tabsUpdated };
+}
+
+// Confirms the change with the player themselves whenever renamePlayer is
+// given an email to save - so a mistaken edit (or a wrong name typed by the
+// organizer) doesn't go unnoticed by the person it affects.
+function emailRenameConfirmation(email, oldName, newName) {
+  var nameChanged = oldName.toLowerCase() !== newName.toLowerCase();
+  MailApp.sendEmail(email.trim(),
+    'Smash Wed: your profile was updated',
+    'Hi ' + newName + ',\n\n' +
+    (nameChanged
+      ? 'Your name on file was changed from "' + oldName + '" to "' + newName + '".\n'
+      : 'Your name on file is "' + newName + '".\n') +
+    'Your registered email is now ' + email.trim() + ' - you\'ll get notified here when you\'re added to or removed from an event.\n\n' +
+    'If you didn\'t request this change, reply to let the organizers know.');
 }
 
 // Looks up a player's registered email from the Rankings sheet (see
@@ -1271,6 +1289,27 @@ function getRegisteredEmail(name) {
     if (email) return email;
   }
   return '';
+}
+
+// Admin-only: every player's registered email, keyed by their exact
+// Rankings name - lets the rename tool show the current email (if any) as
+// soon as an organizer picks a player, instead of guessing. Not exposed via
+// the public rankings GET endpoint, since that has no auth and emails are
+// personal data.
+function listPlayerEmails(secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
+  if (!sheet) return { ok: false, error: 'Rankings sheet not found.' };
+  var data = sheet.getDataRange().getValues();
+  var emails = {};
+  for (var r = RANKINGS_FIRST_DATA_ROW - 1; r < data.length && r < RANKINGS_LAST_DATA_ROW; r++) {
+    var nm = (data[r][RANKINGS_NAME_COL - 1] || '').toString().trim();
+    if (!nm) continue;
+    var email = (data[r][RANKINGS_EMAIL_COL - 1] || '').toString().trim();
+    if (email) emails[nm] = email;
+  }
+  return { ok: true, emails: emails };
 }
 
 // Stamps cell A1 with the week's session start (date + 5:30pm, matching the

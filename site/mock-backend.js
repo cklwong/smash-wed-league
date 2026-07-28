@@ -292,6 +292,13 @@
     return { ok: true, tabsUpdated };
   }
 
+  // Mirrors listPlayerEmails() in gas/Code.gs, for the rename tool's dropdown.
+  function listPlayerEmails() {
+    const emails = {};
+    RANKINGS.forEach((p) => { if (p.email) emails[p.name] = p.email; });
+    return { ok: true, emails };
+  }
+
   function validateScores(scoreA, scoreB) {
     const a = Number(scoreA), b = Number(scoreB);
     if (!isFinite(a) || !isFinite(b) || a % 1 !== 0 || b % 1 !== 0 || a < 0 || b < 0) {
@@ -523,6 +530,7 @@
       case 'createWeek': return createWeek(body.date);
       case 'peekNextWeekDate': return peekNextWeekDate();
       case 'renamePlayer': return renamePlayer(body.oldName, body.newName, body.email);
+      case 'listPlayerEmails': return listPlayerEmails();
       default: return { ok: false, error: 'mock: unhandled action ' + body.action };
     }
   }
