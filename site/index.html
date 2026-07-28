@@ -345,8 +345,22 @@
       <button type="button" class="btn ghost small" onclick="createNextWeek()">Create next week</button>
       <p class="note" style="margin:12px 0 8px;">Wipe tonight's pool draw, every score, and check-in/no-show status back to undrawn — for testing, not during a real session.</p>
       <button type="button" class="btn ghost small" onclick="resetThisWeek()">Reset this week's draw &amp; scores</button>
-      <p class="note" style="margin:12px 0 8px;">Fix a player's name across the season standings and every weekly signup list, and optionally set the email they get notified at when added to or removed from an event.</p>
-      <button type="button" class="btn ghost small" onclick="renamePlayerPrompt()">Rename player / set email</button>
+      <p class="note" style="margin:12px 0 8px;">Fix a player's name across the season standings and every weekly signup list, and optionally set the email they get notified at when added to or removed from an event (they'll get a confirmation email of the change too).</p>
+      <form id="rename-form" style="margin-bottom:0;">
+        <div class="field">
+          <label for="rename-select">Current player</label>
+          <select id="rename-select" required><option value="">Select a player…</option></select>
+        </div>
+        <div class="field">
+          <label for="rename-new-name">New name</label>
+          <input id="rename-new-name" type="text" placeholder="New name" required>
+        </div>
+        <div class="field">
+          <label for="rename-email">Email (optional)</label>
+          <input id="rename-email" type="email" placeholder="name@email.com">
+        </div>
+        <button type="submit" class="btn ghost small">Rename player / set email</button>
+      </form>
       <p class="note" id="admin-tools-out" style="display:none; margin-top:8px;"></p>
     </div>
   </section>
@@ -947,6 +961,7 @@ async function fetchEventPin(){
   document.getElementById('admin-mock-card').style.display = 'block';
   document.getElementById('admin-tools-card').style.display = 'block';
   document.getElementById('admin-signout-btn').style.display = 'inline-block';
+  populateRenameSelect();
 }
 
 async function createNextWeek(){
@@ -975,23 +990,35 @@ async function resetThisWeek(){
   if(WEEK_DATE === dateISO) renderSchedule(true, true);
 }
 
-async function renamePlayerPrompt(){
-  if(!PLAYERS.length){ const r = await fetchRankings(); PLAYERS = r.players; WEEKS = r.weeks; }
-  const oldName = prompt('Current player name, exactly as shown in Standings:');
-  if(!oldName) return;
-  const match = PLAYERS.find(p=>p.name.toLowerCase() === oldName.trim().toLowerCase());
-  if(!match){ alert(`No player named "${oldName.trim()}" found in the season standings.`); return; }
-  const newName = prompt('New name:', match.name);
-  if(!newName) return;
-  const email = prompt("Email to notify when added to or removed from an event (leave blank to skip):", '');
-  if(email === null) return;
+async function populateRenameSelect(force){
+  if(force || !PLAYERS.length){ const r = await fetchRankings(); PLAYERS = r.players; WEEKS = r.weeks; }
+  const sel = document.getElementById('rename-select');
+  const prev = sel.value;
+  const names = PLAYERS.map(p=>p.name).slice().sort((a,b)=>a.localeCompare(b));
+  sel.innerHTML = '<option value="">Select a player…</option>' +
+    names.map(n=>`<option value="${n.replace(/"/g,'&quot;')}">${n}</option>`).join('');
+  if(names.includes(prev)) sel.value = prev;
+}
+
+document.getElementById('rename-select').addEventListener('change', e=>{
+  document.getElementById('rename-new-name').value = e.target.value;
+});
+
+document.getElementById('rename-form').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const oldName = document.getElementById('rename-select').value;
+  const newName = document.getElementById('rename-new-name').value.trim();
+  const email = document.getElementById('rename-email').value.trim();
+  if(!oldName || !newName) return;
   const out = document.getElementById('admin-tools-out');
   out.style.display = 'block'; out.textContent = 'Renaming…';
-  const res = await postAction({action:'renamePlayer', oldName: oldName.trim(), newName: newName.trim(), email: email.trim(), secret: adminSecret()});
+  const res = await postAction({action:'renamePlayer', oldName, newName, email, secret: adminSecret()});
   if(!res.ok){ out.textContent = res.error || 'Could not rename player.'; return; }
   rankingsPromise = null; // refetch so Standings/search picks up the new name
-  out.textContent = `Renamed "${oldName.trim()}" to "${newName.trim()}"${res.tabsUpdated ? ' — ' + res.tabsUpdated + ' weekly tab' + (res.tabsUpdated===1?'':'s') + ' updated' : ''}.`;
-}
+  document.getElementById('rename-email').value = '';
+  await populateRenameSelect(true);
+  out.textContent = `Renamed "${oldName}" to "${newName}"${res.tabsUpdated ? ' — ' + res.tabsUpdated + ' weekly tab' + (res.tabsUpdated===1?'':'s') + ' updated' : ''}${email ? ' — confirmation emailed.' : '.'}`;
+});
 
 function rosterRow(s, num, phase){
   return `<li>
