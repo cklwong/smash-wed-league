@@ -713,7 +713,10 @@ function addJoin(dateISO, name, contact) {
     sheet.getRange(targetRow, CONTACT_COL).setValue(contact);
   }
   var email = isEmail(contact) ? contact.trim() : getRegisteredEmail(name);
-  if (email) emailAddedNotification(email, name, dateISO);
+  if (email) {
+    try { emailAddedNotification(email, name, dateISO); }
+    catch (err) { Logger.log('emailAddedNotification failed: ' + err); }
+  }
   return { ok: true, row: targetRow, position: position };
 }
 
@@ -771,9 +774,13 @@ function removeJoin(dateISO, name) {
     sheet.getRange(listEndRow, col).clearContent();
   }
 
-  emailOrganizersOnRemoval(dateISO, name);
+  try { emailOrganizersOnRemoval(dateISO, name); }
+  catch (err) { Logger.log('emailOrganizersOnRemoval failed: ' + err); }
   var email = isEmail(contact) ? contact.trim() : getRegisteredEmail(name);
-  if (email) emailRemovedNotification(email, name, dateISO);
+  if (email) {
+    try { emailRemovedNotification(email, name, dateISO); }
+    catch (err) { Logger.log('emailRemovedNotification failed: ' + err); }
+  }
   return { ok: true };
 }
 
