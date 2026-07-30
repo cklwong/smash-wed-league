@@ -1807,6 +1807,11 @@ async function renderJoinedList(){
   list.innerHTML = '<li class="empty-row">Loading…</li>';
   waitlistCard.style.display = 'none';
   const week = await fetchWeek(dateISO);
+  // The date picker may have changed while this fetch was in flight (e.g.
+  // user clicked another Wednesday before the first request resolved) -
+  // discard a response that no longer matches what's selected so a slower
+  // request doesn't clobber a faster one that landed after it.
+  if(getSelectedJoinDate() !== dateISO) return;
   const confirmed = week.signups.slice(0, CAP);
   const waitlist = week.signups.slice(CAP);
   list.innerHTML = confirmed.length
