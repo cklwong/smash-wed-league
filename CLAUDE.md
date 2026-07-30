@@ -86,13 +86,16 @@ Google Apps Script file, edited directly.
   `ADMIN_SECRET` script property) checked server-side in `Code.gs`
   (`checkAdminSecret`/`checkRunAuth`) — the frontend hiding admin controls
   from signed-out users is UX only, not the security boundary. A separate
-  per-event PIN (emailed Wednesday noon by the `sendWeeklyPin` trigger, or
-  looked up via the `getpin` action with the admin secret) gates the
-  check-in/match-desk actions during a live session.
+  per-event PIN (looked up via the `getpin` action with the admin secret on
+  the Admin tab; `sendWeeklyPin` still exists to email it but no longer runs
+  on a schedule) gates the check-in/match-desk actions during a live
+  session.
 - **Finalization**: a week auto-finalizes (`maybeFinalizeWeek`) once every
   scheduled game is scored, writing a new `M/D/YY R`/`M/D/YY RP` column pair
-  into Rankings. `autoFinalizeDaily` (nightly trigger) catches weeks whose
-  last score was typed directly into the sheet instead of through the site.
+  into Rankings. `autoFinalizeWeekly` (Wednesday-9:30pm trigger) catches
+  weeks whose last score was typed directly into the sheet instead of
+  through the site, and sweeps up that week's stale PIN/live-state script
+  properties (`cleanupPastEventProperties`).
   `forceFinalizeWeek` (the site's "Finalize rankings" button) re-runs
   finalize for an already-finalized week, overwriting its column pair in
   place — use this after a post-hoc score correction.
@@ -116,6 +119,6 @@ Google Apps Script file, edited directly.
 - **One-time environment setup** on a fresh spreadsheet binding: set the
   `ADMIN_EMAILS` and `ADMIN_SECRET` script properties (Project Settings →
   Script Properties), then run `setupTriggers()` once to authorize `MailApp`
-  and install the Wednesday-noon PIN email and nightly auto-finalize
-  triggers. (`MailApp` is also used for the new-player welcome email on
-  signup, so authorization matters even if the PIN email is never used.)
+  (also used for the new-player welcome email on signup) and install the
+  Wednesday-9:30pm `autoFinalizeWeekly` trigger. It does not install a
+  recurring PIN email - the PIN is retrieved on demand from the Admin tab.

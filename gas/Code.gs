@@ -5,12 +5,13 @@
  *
  * One-time setup (Apps Script editor):
  *   1. Project Settings > Script Properties: set
- *        ADMIN_EMAILS  - comma-separated organizer emails for the weekly PIN email
+ *        ADMIN_EMAILS  - comma-separated organizer emails (used if you ever run sendWeeklyPin() by hand)
  *        ADMIN_SECRET  - passphrase organizers type on the site to retrieve an event PIN
- *   2. Run setupTriggers() once (authorizes MailApp and installs the Wednesday
- *      noon trigger that emails the event PIN, plus the nightly auto-finalize
- *      check). sendWeeklyPin() can also be run manually to (re)send the
- *      current week's PIN.
+ *   2. Run setupTriggers() once (authorizes MailApp - also needed for the
+ *      new-player welcome email on signup - and installs the Wednesday
+ *      9:30pm auto-finalize/cleanup check, see autoFinalizeWeekly). The PIN
+ *      is not emailed automatically; organizers retrieve it from the Admin
+ *      tab. sendWeeklyPin() still exists to (re)send it by hand if wanted.
  *
  * When a week's pool play completes (every game scored), the week is
  * finalized automatically: rank points are written into the Rankings sheet
@@ -946,19 +947,18 @@ function sendWeeklyPin() {
     'It can also be retrieved any time from the organizer panel with the admin passphrase.');
 }
 
-// Run once from the editor: installs the Wednesday-noon PIN email trigger and
-// the nightly auto-finalize check (for scores typed straight into the sheet).
+// Run once from the editor: installs the Wednesday-9:30pm auto-finalize/
+// cleanup check (see autoFinalizeWeekly). Also clears any previously
+// installed weekly-PIN-email trigger (see sendWeeklyPin) - the PIN is
+// retrieved on demand from the Admin tab instead, so it's no longer emailed
+// on a schedule; sendWeeklyPin() is still there to run by hand if wanted.
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     var fn = t.getHandlerFunction();
-    if (fn === 'sendWeeklyPin' || fn === 'autoFinalizeDaily') ScriptApp.deleteTrigger(t);
+    if (fn === 'sendWeeklyPin' || fn === 'autoFinalizeDaily' || fn === 'autoFinalizeWeekly') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('sendWeeklyPin')
-    .timeBased().onWeekDay(ScriptApp.WeekDay.WEDNESDAY).atHour(12)
-    .inTimezone('America/Los_Angeles')
-    .create();
-  ScriptApp.newTrigger('autoFinalizeDaily')
-    .timeBased().everyDays(1).atHour(23)
+  ScriptApp.newTrigger('autoFinalizeWeekly')
+    .timeBased().onWeekDay(ScriptApp.WeekDay.WEDNESDAY).atHour(21).nearMinute(30)
     .inTimezone('America/Los_Angeles')
     .create();
 }
@@ -1338,12 +1338,23 @@ var NOSHOW_DATES_KEPT = 5;
 function noShowSummary(secret) {
   var auth = checkAdminSecret(secret);
   if (!auth.ok) return auth;
+  return cached('noShowSummary', 60, computeNoShowSummary);
+}
+
+// Scanning every weekly tab is the expensive part, so this is cached like
+// the other season-wide reads (getRankings/getWeekDates). Only columns A/B
+// are fetched per sheet - parseSignups() never looks past column B - instead
+// of getDataRange(), which would also pull every score-grid formula on the
+// sheet just to throw it away.
+function computeNoShowSummary() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var counts = {}; // lowercase name -> {name, count, dates: [ISO, ...]}
   ss.getSheets().forEach(function (sheet) {
     var dateISO = headerToISODate(sheet.getName());
     if (!dateISO) return;
-    var data = sheet.getDataRange().getValues();
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 1) return;
+    var data = sheet.getRange(1, 1, lastRow, 2).getValues();
     parseSignups(data).forEach(function (s) {
       if (!s.noShow) return;
       var key = s.name.toLowerCase();
@@ -2211,17 +2222,34 @@ function applyAbsencePasses(sheet, rCol, playedRows, names) {
   });
 }
 
-// Nightly-trigger fallback so weeks whose last scores were typed straight
-// into the sheet still finalize. Only the most recent Wednesday, and only
-// within 3 days of it - never back-fills older weeks.
-function autoFinalizeDaily() {
-  var tz = 'America/Los_Angeles';
-  var now = new Date();
-  for (var i = 0; i <= 3; i++) {
-    var d = new Date(now.getTime() - i * 86400000);
-    if (Utilities.formatDate(d, tz, 'u') === '3') {
-      maybeFinalizeWeek(Utilities.formatDate(d, tz, 'yyyy-MM-dd'));
-      return;
-    }
-  }
+// Weekly-trigger fallback (see setupTriggers - runs Wednesday 9:30pm Pacific,
+// after the session ends) so a week whose last score was typed straight into
+// the sheet instead of through the site still finalizes, and to sweep up
+// that week's now-stale PIN/live-state properties (see
+// cleanupPastEventProperties). The trigger only fires on Wednesdays, so
+// "today" is always the week just played - no back-filling older weeks.
+function autoFinalizeWeekly() {
+  var dateISO = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd');
+  maybeFinalizeWeek(dateISO);
+  cleanupPastEventProperties();
+}
+
+// Admin maintenance: deletes PIN_<dateISO> (see ensurePin) and LIVE_<dateISO>
+// (see getLiveState) script properties for dates that have already passed -
+// both are only useful for that week's live session, so left alone they'd
+// accumulate one pair per week for the life of the spreadsheet. Called
+// weekly by autoFinalizeWeekly; can also be run by hand from the Apps
+// Script editor. Never touches ADMIN_EMAILS/ADMIN_SECRET/PLAYER_BANS, which
+// aren't date-keyed and don't match the pattern below.
+function cleanupPastEventProperties() {
+  var props = PropertiesService.getScriptProperties();
+  var all = props.getProperties();
+  var today = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd');
+  var removed = [];
+  Object.keys(all).forEach(function (key) {
+    var m = key.match(/^(?:PIN|LIVE)_(\d{4}-\d{2}-\d{2})$/);
+    if (!m) return;
+    if (m[1] < today) { props.deleteProperty(key); removed.push(key); }
+  });
+  return removed;
 }
