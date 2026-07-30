@@ -1414,18 +1414,27 @@ function fmtDateFull(iso){
   return new Date(iso+'T12:00:00Z').toLocaleDateString('en-US',{timeZone:'UTC',month:'short',day:'numeric',year:'numeric'});
 }
 
-function renderHistory(){
+async function renderHistory(){
   const sel = document.getElementById('history-week');
   const content = document.getElementById('history-content');
-  if(!WEEKS.length){
+  if(!WEEKS.length){ const r = await fetchRankings(); PLAYERS = r.players; WEEKS = r.weeks; }
+  const allDates = await fetchWeekDates();
+  const p = partsInTZ(new Date(),'America/Los_Angeles');
+  const today = `${p.year}-${p.month}-${p.day}`;
+  // Weeks with a tab but no Rankings RP column yet (missed auto-finalize) -
+  // still selectable so "Finalize rankings" has something to point at.
+  // Future tabs (drawn ahead of time on the Join page) are excluded.
+  const pending = allDates.filter(d=>!WEEKS.includes(d) && d<=today);
+  const dates = WEEKS.concat(pending).sort().reverse();
+  if(!dates.length){
     sel.style.display = 'none';
     content.innerHTML = '<div class="card"><p style="margin:0; font-size:14px; color:var(--text-soft);">No completed weeks yet — results show up here once a week\'s games are all played.</p></div>';
     return;
   }
   sel.style.display = '';
   const prev = sel.value;
-  sel.innerHTML = WEEKS.map(d=>`<option value="${d}">Wed, ${fmtDateFull(d)}</option>`).join('');
-  sel.value = (prev && WEEKS.includes(prev)) ? prev : WEEKS[0];
+  sel.innerHTML = dates.map(d=>`<option value="${d}">Wed, ${fmtDateFull(d)}${pending.includes(d) ? ' · not yet finalized' : ''}</option>`).join('');
+  sel.value = (prev && dates.includes(prev)) ? prev : dates[0];
   loadHistoryWeek(sel.value);
 }
 document.getElementById('history-week').addEventListener('change', e=>loadHistoryWeek(e.target.value));
