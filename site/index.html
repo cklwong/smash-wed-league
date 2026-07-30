@@ -134,6 +134,7 @@
   .note{font-size:12px; color:var(--text-mute); margin-top:10px;}
   .roster-list{list-style:none; margin:0; padding:0;}
   .roster-list li{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); font-size:14px;}
+  .ban-row{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); font-size:14px;}
   .roster-list li:last-child{border-bottom:none;}
   .roster-list .num{width:24px; color:var(--text-mute); font-size:12px;}
   .roster-list .rname{flex:1;}
@@ -362,6 +363,11 @@
         <button type="submit" class="btn ghost small">Rename player / set email</button>
       </form>
       <p class="note" id="admin-tools-out" style="display:none; margin-top:8px;"></p>
+      <p class="note" style="margin:16px 0 8px;">Players by no-show count, across every week this season. Ban a repeat no-show to block them from signing up through a date you pick (suggested: two weeks out).</p>
+      <button type="button" class="btn ghost small" onclick="loadNoShowSummary()">Load no-show summary</button>
+      <div id="noshow-summary" style="margin-top:8px;"></div>
+      <p class="note" style="margin:16px 0 8px;">Currently banned players.</p>
+      <div id="ban-list">—</div>
     </div>
   </section>
 
@@ -1008,6 +1014,67 @@ async function populateRenameSelect(force){
 async function fetchPlayerEmails(secret){
   const res = await postAction({action:'listPlayerEmails', secret: secret || adminSecret()});
   PLAYER_EMAILS = res.ok ? (res.emails || {}) : {};
+}
+
+// Two weeks out from today, as the default a "Ban" click prefills — the
+// organizer can change it before confirming.
+function suggestedBanUntil(){
+  const d = new Date();
+  d.setDate(d.getDate() + 14);
+  return d.toISOString().slice(0,10);
+}
+
+function renderBanList(bans){
+  const el = document.getElementById('ban-list');
+  if(!bans.length){ el.textContent = 'No players currently banned.'; return; }
+  el.innerHTML = bans.map(b=>{
+    const esc = b.name.replace(/'/g,"\\'");
+    return `<div class="ban-row"><span>${b.name} — banned through ${b.until}</span>
+      <button type="button" class="btn ghost small" onclick="unbanPlayerNow('${esc}')">Unban</button></div>`;
+  }).join('');
+}
+
+async function loadNoShowSummary(){
+  const el = document.getElementById('noshow-summary');
+  el.textContent = 'Loading…';
+  const secret = adminSecret();
+  const [summary, bansRes] = await Promise.all([
+    postAction({action:'noShowSummary', secret}),
+    postAction({action:'listBans', secret})
+  ]);
+  if(!summary.ok){ el.textContent = summary.error || 'Could not load no-show summary.'; return; }
+  const bans = bansRes.ok ? (bansRes.bans || []) : [];
+  const bannedByName = {};
+  bans.forEach(b=>{ bannedByName[b.name.toLowerCase()] = b; });
+  if(!summary.players.length){ el.textContent = 'No no-shows recorded.'; }
+  else{
+    el.innerHTML = summary.players.map(p=>{
+      const esc = p.name.replace(/'/g,"\\'");
+      const ban = bannedByName[p.name.toLowerCase()];
+      const dates = (p.dates || []).map(fmtDate).join(', ');
+      return `<div class="ban-row"><span>${p.name} — ${p.count} no-show${p.count===1?'':'s'}${ban ? ` <span class="note">(banned through ${ban.until})</span>` : ''}
+        <div class="note" style="margin-top:2px;">Last no-show${p.dates.length===1?'':'s'}: ${dates}</div></span>
+        <button type="button" class="btn ghost small" onclick="banPlayerPrompt('${esc}')">${ban ? 'Change ban' : 'Ban'}</button></div>`;
+    }).join('');
+  }
+  renderBanList(bans);
+}
+
+async function banPlayerPrompt(name){
+  const input = prompt(`Ban ${name} from signing up through which date? (YYYY-MM-DD)`, suggestedBanUntil());
+  if(!input) return;
+  const until = input.trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(until)){ alert('Enter the date as YYYY-MM-DD.'); return; }
+  const res = await postAction({action:'banPlayer', name, until, secret: adminSecret()});
+  if(!res.ok){ alert(res.error || 'Could not ban player.'); return; }
+  loadNoShowSummary();
+}
+
+async function unbanPlayerNow(name){
+  if(!confirm(`Remove the signup ban for ${name}?`)) return;
+  const res = await postAction({action:'unbanPlayer', name, secret: adminSecret()});
+  if(!res.ok){ alert(res.error || 'Could not unban player.'); return; }
+  loadNoShowSummary();
 }
 
 document.getElementById('rename-select').addEventListener('change', e=>{

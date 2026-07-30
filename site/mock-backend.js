@@ -69,7 +69,8 @@
     grids: {},   // letter -> NxN score matrix
     guestMap: {},// lowercased no-show name -> the guest label covering their seat
     live: { matches: [], checkins: {} },
-    createdWeeks: [] // ISO dates created via the mock createWeek() action this session
+    createdWeeks: [], // ISO dates created via the mock createWeek() action this session
+    bans: {} // lowercased name -> {name, until} - mirrors PLAYER_BANS in gas/Code.gs
   };
   STATE.signups[STATE.signups.length - 1].checkedIn = false; // waitlist isn't "at the venue"
   STATE.signups[STATE.signups.length - 2].checkedIn = false;
@@ -263,6 +264,8 @@
 
   function join(name, contact) {
     if (!name) return { ok: false, error: 'Missing name' };
+    const ban = STATE.bans[key(name)];
+    if (ban) return { ok: false, error: ban.name + ' is banned from signing up through ' + ban.until + '.' };
     if (STATE.signups.some((s) => key(s.name) === key(name))) return { ok: false, error: 'Already signed up' };
     STATE.signups.push({ name, checkedIn: false, noShow: false });
     return { ok: true, row: STATE.signups.length, position: STATE.signups.length };
@@ -297,6 +300,36 @@
     const emails = {};
     RANKINGS.forEach((p) => { if (p.email) emails[p.name] = p.email; });
     return { ok: true, emails };
+  }
+
+  // Mirrors noShowSummary() in gas/Code.gs - the sandbox only has one mutable
+  // week (past weeks are canned with no no-shows), so this just reflects
+  // tonight's signups.
+  function noShowSummary() {
+    const dateISO = (typeof getSessionDateISO === 'function' ? getSessionDateISO() : null);
+    const players = STATE.signups.filter((s) => s.noShow).map((s) => ({ name: s.name, count: 1, dates: dateISO ? [dateISO] : [] }));
+    players.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    return { ok: true, players };
+  }
+
+  // Mirrors banPlayer()/unbanPlayer()/listBans() in gas/Code.gs.
+  function banPlayer(name, until) {
+    name = (name || '').trim();
+    until = (until || '').trim();
+    if (!name) return { ok: false, error: 'Player name is required.' };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return { ok: false, error: 'Ban end date must be YYYY-MM-DD.' };
+    STATE.bans[key(name)] = { name, until };
+    return { ok: true };
+  }
+  function unbanPlayer(name) {
+    delete STATE.bans[key(name)];
+    return { ok: true };
+  }
+  function listBans() {
+    const today = new Date().toISOString().slice(0, 10);
+    const bans = Object.values(STATE.bans).filter((b) => b.until >= today)
+      .sort((a, b) => a.until.localeCompare(b.until));
+    return { ok: true, bans };
   }
 
   function validateScores(scoreA, scoreB) {
@@ -531,6 +564,10 @@
       case 'peekNextWeekDate': return peekNextWeekDate();
       case 'renamePlayer': return renamePlayer(body.oldName, body.newName, body.email);
       case 'listPlayerEmails': return listPlayerEmails();
+      case 'noShowSummary': return noShowSummary();
+      case 'banPlayer': return banPlayer(body.name, body.until);
+      case 'unbanPlayer': return unbanPlayer(body.name);
+      case 'listBans': return listBans();
       default: return { ok: false, error: 'mock: unhandled action ' + body.action };
     }
   }

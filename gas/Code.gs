@@ -5,12 +5,13 @@
  *
  * One-time setup (Apps Script editor):
  *   1. Project Settings > Script Properties: set
- *        ADMIN_EMAILS  - comma-separated organizer emails for the weekly PIN email
+ *        ADMIN_EMAILS  - comma-separated organizer emails (used if you ever run sendWeeklyPin() by hand)
  *        ADMIN_SECRET  - passphrase organizers type on the site to retrieve an event PIN
- *   2. Run setupTriggers() once (authorizes MailApp and installs the Wednesday
- *      noon trigger that emails the event PIN, plus the nightly auto-finalize
- *      check). sendWeeklyPin() can also be run manually to (re)send the
- *      current week's PIN.
+ *   2. Run setupTriggers() once (authorizes MailApp - also needed for the
+ *      new-player welcome email on signup - and installs the Wednesday
+ *      9:30pm auto-finalize/cleanup check, see autoFinalizeWeekly). The PIN
+ *      is not emailed automatically; organizers retrieve it from the Admin
+ *      tab. sendWeeklyPin() still exists to (re)send it by hand if wanted.
  *
  * When a week's pool play completes (every game scored), the week is
  * finalized automatically: rank points are written into the Rankings sheet
@@ -37,6 +38,10 @@
  *   POST { action:'createWeek', secret } -> { ok, date } (admin passphrase; duplicates the most recently dated week tab as a new blank tab one week later, wiping signups/draw/scores from the copy)
  *   POST { action:'renamePlayer', oldName, newName, email, secret } -> { ok, tabsUpdated } or { ok:false, error } (admin passphrase; renames a player with a Rankings entry across the season standings and every weekly tab's signup list/pool slots; email is optional and, if given, is saved as that player's registered email - see getRegisteredEmail() - used to notify them on future join/leave, and also emails that address a confirmation of the name/email change right away)
  *   POST { action:'listPlayerEmails', secret } -> { ok, emails: {name: email, ...} } (admin passphrase; every player's registered email keyed by their exact Rankings name, for the rename tool to show the current email on file)
+ *   POST { action:'noShowSummary', secret } -> { ok, players: [{name, count, dates: ['YYYY-MM-DD', ...]}, ...] } (admin passphrase; every player with at least one recorded no-show across every weekly tab, most no-shows first; dates is that player's up to 5 most recent no-show dates, most recent first)
+ *   POST { action:'banPlayer', name, until, secret } -> { ok } (admin passphrase; blocks name from signing up for any week dated on or before until [YYYY-MM-DD] - see activeBanFor(), checked by addJoin)
+ *   POST { action:'unbanPlayer', name, secret } -> { ok } (admin passphrase; lifts a ban early)
+ *   POST { action:'listBans', secret } -> { ok, bans: [{name, until}, ...] } (admin passphrase; every currently-active ban, soonest-expiring first)
  */
 
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
@@ -96,6 +101,10 @@ function doPost(e) {
     else if (body.action === 'peekNextWeekDate') result = peekNextWeekDate(body.secret);
     else if (body.action === 'renamePlayer') result = renamePlayer(body.oldName, body.newName, body.email, body.secret);
     else if (body.action === 'listPlayerEmails') result = listPlayerEmails(body.secret);
+    else if (body.action === 'noShowSummary') result = noShowSummary(body.secret);
+    else if (body.action === 'banPlayer') result = banPlayer(body.name, body.until, body.secret);
+    else if (body.action === 'unbanPlayer') result = unbanPlayer(body.name, body.secret);
+    else if (body.action === 'listBans') result = listBans(body.secret);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
@@ -690,6 +699,8 @@ function computeHeadToHead(key) {
 function addJoin(dateISO, name, contact) {
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
+  var ban = activeBanFor(name, dateISO);
+  if (ban) return { ok: false, error: ban.name + ' is banned from signing up through ' + ban.until + '.' };
   var data = sheet.getDataRange().getValues();
 
   // Position is the count of real signups already parsed (labels skipped),
@@ -936,19 +947,18 @@ function sendWeeklyPin() {
     'It can also be retrieved any time from the organizer panel with the admin passphrase.');
 }
 
-// Run once from the editor: installs the Wednesday-noon PIN email trigger and
-// the nightly auto-finalize check (for scores typed straight into the sheet).
+// Run once from the editor: installs the Wednesday-9:30pm auto-finalize/
+// cleanup check (see autoFinalizeWeekly). Also clears any previously
+// installed weekly-PIN-email trigger (see sendWeeklyPin) - the PIN is
+// retrieved on demand from the Admin tab instead, so it's no longer emailed
+// on a schedule; sendWeeklyPin() is still there to run by hand if wanted.
 function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     var fn = t.getHandlerFunction();
-    if (fn === 'sendWeeklyPin' || fn === 'autoFinalizeDaily') ScriptApp.deleteTrigger(t);
+    if (fn === 'sendWeeklyPin' || fn === 'autoFinalizeDaily' || fn === 'autoFinalizeWeekly') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('sendWeeklyPin')
-    .timeBased().onWeekDay(ScriptApp.WeekDay.WEDNESDAY).atHour(12)
-    .inTimezone('America/Los_Angeles')
-    .create();
-  ScriptApp.newTrigger('autoFinalizeDaily')
-    .timeBased().everyDays(1).atHour(23)
+  ScriptApp.newTrigger('autoFinalizeWeekly')
+    .timeBased().onWeekDay(ScriptApp.WeekDay.WEDNESDAY).atHour(21).nearMinute(30)
     .inTimezone('America/Los_Angeles')
     .create();
 }
@@ -1317,6 +1327,122 @@ function listPlayerEmails(secret) {
     if (email) emails[nm] = email;
   }
   return { ok: true, emails: emails };
+}
+
+// Admin tool: how many times each player has been marked a no-show, across
+// every dated weekly tab (see NOSHOW_GUEST_COL / setNoShow) - not just the
+// current week - so an organizer can spot repeat offenders before deciding
+// whether to ban them (see banPlayer below). Sorted most no-shows first.
+var NOSHOW_DATES_KEPT = 5;
+
+function noShowSummary(secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  return cached('noShowSummary', 60, computeNoShowSummary);
+}
+
+// Scanning every weekly tab is the expensive part, so this is cached like
+// the other season-wide reads (getRankings/getWeekDates). Only columns A/B
+// are fetched per sheet - parseSignups() never looks past column B - instead
+// of getDataRange(), which would also pull every score-grid formula on the
+// sheet just to throw it away.
+function computeNoShowSummary() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var counts = {}; // lowercase name -> {name, count, dates: [ISO, ...]}
+  ss.getSheets().forEach(function (sheet) {
+    var dateISO = headerToISODate(sheet.getName());
+    if (!dateISO) return;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 1) return;
+    var data = sheet.getRange(1, 1, lastRow, 2).getValues();
+    parseSignups(data).forEach(function (s) {
+      if (!s.noShow) return;
+      var key = s.name.toLowerCase();
+      if (!counts[key]) counts[key] = { name: s.name, count: 0, dates: [] };
+      counts[key].count++;
+      counts[key].dates.push(dateISO);
+    });
+  });
+  var players = Object.keys(counts).map(function (key) {
+    var p = counts[key];
+    p.dates.sort(function (a, b) { return b.localeCompare(a); }); // most recent first
+    p.dates = p.dates.slice(0, NOSHOW_DATES_KEPT);
+    return p;
+  });
+  players.sort(function (a, b) { return b.count - a.count || a.name.localeCompare(b.name); });
+  return { ok: true, players: players };
+}
+
+// Signup bans live as a single JSON blob in a script property - there's no
+// dedicated player-roster sheet to hang a column off of, and this mirrors
+// how the PIN/live-match-desk state already piggybacks on script properties
+// (see ensurePin/getLiveState) rather than adding new spreadsheet geometry.
+var PLAYER_BANS_PROP = 'PLAYER_BANS';
+
+function getBans() {
+  var raw = PropertiesService.getScriptProperties().getProperty(PLAYER_BANS_PROP);
+  return raw ? JSON.parse(raw) : {};
+}
+
+function saveBans(bans) {
+  PropertiesService.getScriptProperties().setProperty(PLAYER_BANS_PROP, JSON.stringify(bans));
+}
+
+// A ban blocks signups for any week dated on or before its end date, so it
+// still applies if an organizer bans someone the moment they no-show
+// tonight and the ban tool suggests two weeks out - checked by addJoin
+// against the week the player is trying to join, not against today, so
+// signing up in advance for a week still inside the ban window is blocked
+// too.
+function activeBanFor(name, dateISO) {
+  var bans = getBans();
+  var entry = bans[(name || '').toString().trim().toLowerCase()];
+  if (!entry) return null;
+  if (dateISO && dateISO > entry.until) return null;
+  return entry;
+}
+
+// Admin tool: bans a player from signing up through (and including) the
+// given date - the site suggests two weeks out from today, but the
+// organizer can pick any end date. Banning the same name again just
+// overwrites the end date (e.g. to extend or shorten it).
+function banPlayer(name, until, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  name = (name || '').toString().trim();
+  until = (until || '').toString().trim();
+  if (!name) return { ok: false, error: 'Player name is required.' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return { ok: false, error: 'Ban end date must be YYYY-MM-DD.' };
+  var bans = getBans();
+  bans[name.toLowerCase()] = { name: name, until: until };
+  saveBans(bans);
+  return { ok: true };
+}
+
+// Admin tool: lifts a ban early.
+function unbanPlayer(name, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  var bans = getBans();
+  delete bans[(name || '').toString().trim().toLowerCase()];
+  saveBans(bans);
+  return { ok: true };
+}
+
+// Admin tool: every ban still in effect today (Pacific, matching the
+// league's own timezone - see upcomingWednesdayISO), soonest-expiring
+// first, for the admin panel's ban list. Expired bans are left in storage
+// rather than pruned here - they age out of this list on their own and get
+// overwritten if the same player is banned again.
+function listBans(secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  var today = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd');
+  var bans = getBans();
+  var list = Object.keys(bans).map(function (key) { return bans[key]; })
+    .filter(function (b) { return b.until >= today; });
+  list.sort(function (a, b) { return a.until.localeCompare(b.until); });
+  return { ok: true, bans: list };
 }
 
 // Stamps cell A1 with the week's session start (date + 5:30pm, matching the
@@ -2096,17 +2222,34 @@ function applyAbsencePasses(sheet, rCol, playedRows, names) {
   });
 }
 
-// Nightly-trigger fallback so weeks whose last scores were typed straight
-// into the sheet still finalize. Only the most recent Wednesday, and only
-// within 3 days of it - never back-fills older weeks.
-function autoFinalizeDaily() {
-  var tz = 'America/Los_Angeles';
-  var now = new Date();
-  for (var i = 0; i <= 3; i++) {
-    var d = new Date(now.getTime() - i * 86400000);
-    if (Utilities.formatDate(d, tz, 'u') === '3') {
-      maybeFinalizeWeek(Utilities.formatDate(d, tz, 'yyyy-MM-dd'));
-      return;
-    }
-  }
+// Weekly-trigger fallback (see setupTriggers - runs Wednesday 9:30pm Pacific,
+// after the session ends) so a week whose last score was typed straight into
+// the sheet instead of through the site still finalizes, and to sweep up
+// that week's now-stale PIN/live-state properties (see
+// cleanupPastEventProperties). The trigger only fires on Wednesdays, so
+// "today" is always the week just played - no back-filling older weeks.
+function autoFinalizeWeekly() {
+  var dateISO = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd');
+  maybeFinalizeWeek(dateISO);
+  cleanupPastEventProperties();
+}
+
+// Admin maintenance: deletes PIN_<dateISO> (see ensurePin) and LIVE_<dateISO>
+// (see getLiveState) script properties for dates that have already passed -
+// both are only useful for that week's live session, so left alone they'd
+// accumulate one pair per week for the life of the spreadsheet. Called
+// weekly by autoFinalizeWeekly; can also be run by hand from the Apps
+// Script editor. Never touches ADMIN_EMAILS/ADMIN_SECRET/PLAYER_BANS, which
+// aren't date-keyed and don't match the pattern below.
+function cleanupPastEventProperties() {
+  var props = PropertiesService.getScriptProperties();
+  var all = props.getProperties();
+  var today = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd');
+  var removed = [];
+  Object.keys(all).forEach(function (key) {
+    var m = key.match(/^(?:PIN|LIVE)_(\d{4}-\d{2}-\d{2})$/);
+    if (!m) return;
+    if (m[1] < today) { props.deleteProperty(key); removed.push(key); }
+  });
+  return removed;
 }
