@@ -483,7 +483,7 @@
       <div id="noshow-summary" style="margin-top:8px;"></div>
       <p class="note" style="margin:16px 0 8px;">Currently banned players.</p>
       <div id="ban-list">—</div>
-      <p class="note" style="margin:16px 0 8px;"><strong>Sheet editors</strong> — people who can still edit the protected week/relay tabs by hand in Google Sheets. Share the spreadsheet with them as Editor first. One email per line (or comma-separated); saving also adds them to every tab that's already protected.</p>
+      <p class="note" style="margin:16px 0 8px;"><strong>Sheet editors</strong> — people who can still edit the protected week/relay tabs by hand in Google Sheets. Share the spreadsheet with them as Editor first. One email per line (or comma-separated). They get edit access to today's and upcoming events' tabs only — past events stay locked, and access to an event's tabs is taken away after it's over (at the next Wednesday's 9:30pm run).</p>
       <textarea id="sheet-editors" rows="3" class="week-select" style="max-width:100%; font-family:inherit; resize:vertical;" placeholder="name@gmail.com" aria-label="Sheet editor emails"></textarea>
       <button type="button" class="btn ghost small" onclick="saveSheetEditors()">Save sheet editors</button>
       <p class="note" id="sheet-editors-out" style="display:none; margin-top:8px;"></p>
@@ -2668,7 +2668,7 @@ async function saveSheetEditors(){
   if(!res.ok){ out.style.color = 'var(--loss)'; out.textContent = res.error || 'Could not save sheet editors.'; return; }
   document.getElementById('sheet-editors').value = res.emails.join('\n');
   out.textContent = res.emails.length
-    ? `Saved ${res.emails.length} editor${res.emails.length===1?'':'s'} — added to ${res.updated} protected tab${res.updated===1?'':'s'}.`
+    ? `Saved ${res.emails.length} editor${res.emails.length===1?'':'s'} — added to ${res.updated} tab${res.updated===1?'':'s'} for today's and upcoming events (past events unchanged).`
     : 'Cleared — new tabs won\'t add anyone. (People already added to existing tabs stay until removed in Sheets.)';
   if(res.warnings && res.warnings.length){ out.style.color = 'var(--loss)'; out.textContent += ' ' + res.warnings.join(' '); }
 }

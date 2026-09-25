@@ -11,7 +11,7 @@
  *                        week/relay tabs by hand (share the spreadsheet with them as
  *                        Editors too). Easiest to set from the site's Admin tab
  *                        ("Sheet editors"), which also applies it to already-protected
- *                        tabs; if set here instead, run applySheetEditorsToProtectedTabs()
+ *                        tabs of today's/upcoming events (past events stay owner-only); if set here instead, run applySheetEditorsToProtectedTabs()
  *   2. Run setupTriggers() once (authorizes MailApp - also needed for the
  *      new-player welcome email on signup - and installs the Wednesday
  *      9:30pm auto-finalize/cleanup check, see autoFinalizeWeekly). The PIN
@@ -53,7 +53,7 @@
  *   POST { action:'unbanPlayer', name, secret } -> { ok } (admin passphrase; lifts a ban early)
  *   POST { action:'listBans', secret } -> { ok, bans: [{name, until}, ...] } (admin passphrase; every currently-active ban, soonest-expiring first)
  *   POST { action:'getSheetEditors', secret } -> { ok, emails } (admin passphrase; the SHEET_EDITORS list)
- *   POST { action:'setSheetEditors', emails, secret } -> { ok, emails, updated, warnings } (admin passphrase; saves SHEET_EDITORS and adds them to every protected tab)
+ *   POST { action:'setSheetEditors', emails, secret } -> { ok, emails, updated, warnings } (admin passphrase; saves SHEET_EDITORS and adds them to the protected tabs of today's and upcoming events - never past ones)
  *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team relay doubles night or back to singles)
  *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: snake-drafts eligible signups into teamCount teams by standings)
  *   POST { action:'relaySaveTeams', date, teams, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, late adds/guests, removals, captain, positions, playing order)
@@ -2374,6 +2374,8 @@ function autoFinalizeWeekly() {
   var dateISO = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd');
   maybeFinalizeWeek(dateISO);
   cleanupPastEventProperties();
+  try { removeSheetEditorsFromPastTabs(); }
+  catch (err) { Logger.log('removeSheetEditorsFromPastTabs failed: ' + err); }
 }
 
 // Admin maintenance: deletes PIN_<dateISO> (see ensurePin) and LIVE_<dateISO>
@@ -3012,8 +3014,10 @@ function clearRelayState(dateISO) {
 // SHEET_EDITORS (script property, comma-separated emails) are people who may
 // still edit protected week/relay tabs by hand in Sheets. They must also be
 // shared as Editors on the spreadsheet itself. protectWeekSheet() adds them
-// to every newly protected tab. The site's Admin tab sets the list
-// (setSheetEditors) and applies it to already-protected tabs in one go -
+// to every newly protected tab (always a new/upcoming event). The site's
+// Admin tab sets the list (setSheetEditors) and applies it to already-
+// protected tabs of today's and upcoming events in one go - past events are
+// never opened up -
 // the Apps Script Project Settings panel can fail to save properties on a
 // project holding this many, so the site is the reliable way in.
 // applySheetEditorsToProtectedTabs() does the same backfill from the editor.
@@ -3023,14 +3027,26 @@ function sheetEditorEmails() {
   return raw.split(',').map(function (s) { return s.trim(); }).filter(isEmail);
 }
 
-// Adds every SHEET_EDITORS email to every protected tab. One address that
-// can't be added (typically: not shared on the spreadsheet yet) doesn't stop
-// the rest - it comes back as a warning instead.
+// The event date of a week tab ("9/30/26") or relay tab ("Relay 9/30/26"),
+// or null for any other tab (Rankings, etc.).
+function eventTabDateISO(name) {
+  var m = String(name || '').match(/^Relay (.+)$/);
+  return headerToISODate(m ? m[1] : String(name || ''));
+}
+
+// Adds every SHEET_EDITORS email to the protected week/relay tabs of
+// today's and upcoming events only - past events stay owner-only, and
+// non-event tabs (Rankings) are never touched. One address that can't be
+// added (typically: not shared on the spreadsheet yet) doesn't stop the
+// rest - it comes back as a warning instead.
 function applySheetEditorsToProtectedTabs() {
   var emails = sheetEditorEmails();
   if (!emails.length) { Logger.log('SHEET_EDITORS is not set.'); return { updated: 0, emails: [], warnings: [] }; }
+  var today = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd');
   var updated = 0, failed = {};
   SpreadsheetApp.getActiveSpreadsheet().getSheets().forEach(function (sheet) {
+    var iso = eventTabDateISO(sheet.getName());
+    if (!iso || iso < today) return;
     sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (p) {
       emails.forEach(function (e) {
         try { p.addEditor(e); }
@@ -3042,8 +3058,34 @@ function applySheetEditorsToProtectedTabs() {
   var warnings = Object.keys(failed).map(function (e) {
     return 'Could not add ' + e + ' — share the spreadsheet with them as Editor first, then save again.';
   });
-  Logger.log('Added ' + emails.join(', ') + ' to ' + updated + ' protected tab(s).' + (warnings.length ? ' ' + warnings.join(' ') : ''));
+  Logger.log('Added ' + emails.join(', ') + ' to ' + updated + ' protected tab(s) for today/upcoming events.' + (warnings.length ? ' ' + warnings.join(' ') : ''));
   return { updated: updated, emails: emails, warnings: warnings };
+}
+
+// Takes SHEET_EDITORS back off the protected week/relay tabs of events
+// dated before today, so hand-edit access ends once an event is over. Runs
+// from the weekly autoFinalizeWeekly trigger (so an event's tabs lock at the
+// next Wednesday's run); can also be run by hand from the editor.
+function removeSheetEditorsFromPastTabs() {
+  var emails = sheetEditorEmails();
+  if (!emails.length) return 0;
+  var today = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd');
+  var keys = {};
+  emails.forEach(function (e) { keys[e.toLowerCase()] = true; });
+  var removed = 0;
+  SpreadsheetApp.getActiveSpreadsheet().getSheets().forEach(function (sheet) {
+    var iso = eventTabDateISO(sheet.getName());
+    if (!iso || iso >= today) return;
+    sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (p) {
+      p.getEditors().forEach(function (u) {
+        if (!keys[(u.getEmail() || '').toLowerCase()]) return;
+        try { p.removeEditor(u); removed++; }
+        catch (err) { Logger.log('Could not remove ' + u.getEmail() + ' from ' + sheet.getName() + ': ' + err); }
+      });
+    });
+  });
+  Logger.log('Removed ' + removed + ' sheet-editor grant(s) from past event tabs.');
+  return removed;
 }
 
 function getSheetEditors(secret) {
@@ -3053,7 +3095,8 @@ function getSheetEditors(secret) {
 }
 
 // Admin tab: saves the SHEET_EDITORS list (comma/newline separated) and
-// applies it to every already-protected tab right away. An empty list
+// applies it right away to today's and upcoming events' protected tabs
+// (never past events). An empty list
 // clears the property (existing tabs keep whoever was added before).
 function setSheetEditors(emails, secret) {
   var auth = checkAdminSecret(secret);
