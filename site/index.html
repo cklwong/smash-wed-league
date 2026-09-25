@@ -849,6 +849,7 @@ function paintSchedule(week, dateISO){
       <button class="btn small" onclick="showView('join')">Add/remove a player</button>
     </div>`;
     predrawHtml += generateCard(dateISO, confirmed, admin);
+    predrawHtml += walkInCard(week, admin);
     predrawHtml += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Confirmed (${confirmed.length}/${CAP})</h3>
       <ul class="roster-list">${confirmed.length ? confirmed.map((s,i)=>rosterRow(s,i+1,'confirmed')).join('') : '<li class="empty-row">No signups yet — be the first.</li>'}</ul>
     </div>`;
@@ -861,7 +862,7 @@ function paintSchedule(week, dateISO){
     GAME_INDEX = {};
     const avail = availablePlayers(model);
     liveHtml = onCourtCard(model, admin) + upNextCard(model, avail, admin) + benchCard(model, avail);
-    checkinHtml = poolStatusCard(dateISO, week, confirmed, drawnPools, admin);
+    checkinHtml = poolStatusCard(dateISO, week, confirmed, drawnPools, admin) + walkInCard(week, admin);
     // Alphabetical is easier to scan at the door, but the join-order number
     // (who signed up first / first off the waitlist) still needs to show,
     // so it's captured before the sort rather than derived from position.
@@ -880,7 +881,7 @@ function paintSchedule(week, dateISO){
   // excluded here - otherwise every re-render would stomp its fresh value
   // with whatever match was showing before.
   const snap = {};
-  content.querySelectorAll('input[id]').forEach(el=>{
+  content.querySelectorAll('input[id], select[id]').forEach(el=>{
     if(el.value !== '' && !el.classList.contains('match-combo-input')) snap[el.id] = el.value;
   });
   skel.style.display = 'none';
@@ -1264,6 +1265,73 @@ function statusBadge(s){
   if(s.noShow) return ' <span class="mine-badge ns">No show</span>';
   return '';
 }
+// ---- Walk-ins (singles and doubles nights) ----
+// Someone at the desk who didn't sign up: pick a returning season player
+// from the dropdown (so the name matches Rankings) or type a new player's
+// name. addWalkIn signs them up (no email) and checks them in; tonight's
+// walk-ins are listed with ✎ (fix the name) and ✕ (remove, if added by
+// mistake) - both only for walk-ins, see editWalkIn/removeWalkIn in Code.gs.
+function walkInCard(week, admin){
+  if(!admin) return '';
+  const signed = new Set(week.signups.map(s=>playerKey(s.name)));
+  const returning = PLAYERS.map(p=>p.name).filter(n=>!signed.has(playerKey(n))).sort((a,b)=>a.localeCompare(b));
+  const walk = new Set(((week.live && week.live.walkins) || []).map(playerKey));
+  const mine = week.signups.map((s,i)=>({s, i})).filter(({s})=>walk.has(playerKey(s.name)));
+  const rows = mine.map(({s,i})=>`<li><span class="rname">${escHtml(s.name)}${statusBadge(s)}</span>
+      <span class="checkin-actions">
+        <button class="btn small ghost" title="Fix the name" onclick="walkInEditClick(${i})">✎ Edit</button>
+        <button class="btn small ghost" title="Remove this walk-in" onclick="walkInRemoveClick(${i})">✕</button>
+      </span></li>`).join('');
+  return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Walk-ins <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>
+    <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Someone here who didn't sign up? Pick a returning player, or type a new player's name, then <strong>Add &amp; check in</strong>.</p>
+    <div class="search-row" style="margin:0 0 6px; gap:6px; flex-wrap:wrap;">
+      <select id="walkin-pick" class="mini-select" style="flex:1; min-width:170px; padding:9px 10px; font-size:14px;" aria-label="Returning player">
+        <option value="">Returning player…</option>${returning.map(n=>`<option value="${escAttr(n)}">${escHtml(n)}</option>`).join('')}
+      </select>
+      <input type="text" id="walkin-new" placeholder="…or a new player's name" autocomplete="off" style="flex:1; min-width:170px;">
+      <button class="btn small" id="walkin-add-btn" onclick="walkInAddClick()">Add &amp; check in</button>
+    </div>
+    ${rows ? `<ul class="roster-list">${rows}</ul>` : ''}
+  </div>`;
+}
+function walkInCreds(){ return {secret: adminSecret(), pin: eventPin()}; }
+async function walkInAddClick(){
+  const pick = document.getElementById('walkin-pick'), inp = document.getElementById('walkin-new');
+  const typed = inp ? inp.value.trim() : '', picked = pick ? pick.value : '';
+  if(typed && picked){ alert('Pick a returning player OR type a new name — not both.'); return; }
+  const name = typed || picked;
+  if(!name){ alert('Pick a returning player or type a new player\'s name.'); return; }
+  if(typed && PLAYERS.some(p=>playerKey(p.name)===playerKey(typed)) && !confirm(`${typed} is already a season player — add them?`)) return;
+  const btn = document.getElementById('walkin-add-btn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Adding…'; }
+  const res = await postAction({action:'addWalkIn', date:WEEK_DATE, name, ...walkInCreds()});
+  if(btn){ btn.disabled = false; btn.textContent = 'Add & check in'; }
+  if(!res.ok){ alert(res.error || 'Could not add the walk-in — please try again.'); return; }
+  if(pick) pick.value = ''; if(inp) inp.value = '';
+  if(res.waitlisted){
+    alert(`${res.name} is checked in, but tonight is already full, so they're on the waitlist${isRelayWeek(LAST_WEEK) ? ' — add them to a team from the "not on a team" list after the draw.' : '.'}`);
+  } else if(res.seated === false){
+    alert(`${res.name} is checked in. Pools are already drawn, so use "Redraw pools" to give them a seat.`);
+  }
+  renderSchedule(true, true);
+}
+async function walkInEditClick(i){
+  const s = LAST_WEEK && LAST_WEEK.signups[i];
+  if(!s) return;
+  const newName = (prompt(`Correct the name for ${s.name}:`, s.name) || '').trim();
+  if(!newName || newName === s.name) return;
+  const res = await postAction({action:'editWalkIn', date:WEEK_DATE, oldName:s.name, newName, ...walkInCreds()});
+  if(!res.ok) alert(res.error || 'Could not rename — please try again.');
+  renderSchedule(true, true);
+}
+async function walkInRemoveClick(i){
+  const s = LAST_WEEK && LAST_WEEK.signups[i];
+  if(!s || !confirm(`Remove walk-in ${s.name} from tonight?`)) return;
+  const res = await postAction({action:'removeWalkIn', date:WEEK_DATE, name:s.name, ...walkInCreds()});
+  if(!res.ok) alert(res.error || 'Could not remove — please try again.');
+  renderSchedule(true, true);
+}
+
 // ---- Live match desk ----
 // The score grid (from the sheet) is the source of truth for results; the
 // backend's per-date live state supplies who's on court, start/finish times
@@ -2175,15 +2243,17 @@ function paintRelay(week, dateISO){
       <button class="btn small" onclick="showView('join')">Add/remove a player</button>
     </div>`;
     predrawHtml += relayDrawCard(dateISO, week, confirmed, admin, false);
+    predrawHtml += walkInCard(week, admin);
     predrawHtml += relayCheckinCard(dateISO, week, confirmed, admin);
     predrawHtml += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Waitlist</h3>
       <ul class="roster-list">${waitlist.length ? waitlist.map((s,i)=>rosterRow(s,i+1,'waitlist',cap)).join('') : '<li class="empty-row">Nobody waiting right now.</li>'}</ul>
     </div>`;
   } else {
     liveHtml = relayLiveHtml(state, admin);
-    teamsHtml = relayUnassignedCard(week, confirmed, state, admin) + relayTeamsHtml(week, state, admin);
+    teamsHtml = relayUnassignedCard(week, confirmed, state, admin) + relayTeamsHtml(week, state, admin) + (admin ? relayNamesDatalist() : '');
     checkinHtml = (admin && !state.games.length ? relayDrawCard(dateISO, week, confirmed, admin, true) : '')
       + relayUnassignedCard(week, confirmed, state, admin)
+      + walkInCard(week, admin)
       + relayCheckinCard(dateISO, week, confirmed, admin);
     playersHtml = relayPlayersCard(state, ev);
   }
@@ -2256,15 +2326,10 @@ function relayCheckinCard(dateISO, week, confirmed, admin){
   const cap = weekCap(week);
   const list = week.signups.map((s,i)=>({s, joinNum:i+1})).filter(({s,joinNum})=>joinNum<=cap || s.checkedIn)
     .sort((a,b)=>a.s.name.localeCompare(b.s.name));
-  const walkIn = admin ? `<div class="search-row" style="margin:0 0 10px; gap:6px; flex-wrap:wrap;">
-      <input type="text" id="relay-walkin" list="relay-player-names" placeholder="Walk-in's name" style="min-width:160px;" autocomplete="off">
-      <button class="btn small" onclick="relayWalkInClick()">Add &amp; check in</button>
-    </div>${relayNamesDatalist()}` : '';
   return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in (${confirmed.length}/${cap})</h3>
     <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">${admin
-      ? 'Tap <strong>Check in</strong> as players arrive — only checked-in players are drawn into teams. Someone who didn\'t sign up? Add them here (pick a returning player\'s name from the list so their standings match).'
+      ? 'Tap <strong>Check in</strong> as players arrive — only checked-in players are drawn into teams. Someone who didn\'t sign up? Use <strong>Walk-ins</strong> above.'
       : 'Sign in above to check players in or mark no-shows.'}</p>
-    ${walkIn}
     <ul class="roster-list">${list.length ? list.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO,admin)).join('') : '<li class="empty-row">No signups yet.</li>'}</ul>
   </div>`;
 }
@@ -2625,10 +2690,6 @@ async function relayAddPlayerClick(name, ti, inputEl){
     alert(`${res.name} is checked in, but tonight is already full (${RELAY_CAP}), so they're past the draw cut-off — add them to a team from the "not on a team" list after the draw.`);
   }
   renderSchedule(true, true); // signups + teams both changed
-}
-function relayWalkInClick(){
-  const inp = document.getElementById('relay-walkin');
-  relayAddPlayerClick(inp ? inp.value : '', null, inp);
 }
 function relayAddTyped(ti){
   const inp = document.getElementById('relay-add-'+ti);
