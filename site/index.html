@@ -398,7 +398,7 @@
       </details>
       <details>
         <summary>How are teams formed?</summary>
-        <p>Teams are drawn from the standings "snake" style (1st pick to Team A, 2nd to B, … then back the other way), so every team gets a similar mix. Teams are split as evenly as possible, so a team can have fewer than 6 players. The organizer can move players between teams and add late arrivals or guests. Each team picks a <strong>captain</strong>.</p>
+        <p>Teams are drawn from the checked-in players by standings, "snake" style (1st pick to Team A, 2nd to B, … then back the other way), so every team gets a similar mix. Teams are split as evenly as possible, so a team can have fewer than 6 players. The organizer can move players between teams and add late arrivals (they're signed in at the desk) or guests — a guest plays for a team but doesn't earn ranking points. Each team picks a <strong>captain</strong>.</p>
       </details>
       <details>
         <summary>Who plays with whom?</summary>
@@ -1979,7 +1979,21 @@ function relayRpText(ev){
     : 'Exhibition — doesn\'t count toward standings';
 }
 
-function isRelayGuest(n){ return /^guest\b/i.test((n||'').trim()); }
+// Guests: unnamed "Guest 3" placeholders or names added as guests
+// (state.guests) - no signup, no check-in, no rank points (Code.gs isRelayGuest).
+function isRelayGuest(n, state){
+  if(/^guest\b/i.test((n||'').trim())) return true;
+  return !!(state && state.guests && state.guests.some(g=>playerKey(g)===playerKey(n)));
+}
+// Who a draw takes: checked-in players once check-in has started, else every
+// confirmed signup who isn't a no-show (Code.gs drawTeams).
+function relayDrawEligible(confirmed){
+  const anyIn = confirmed.some(s=>s.checkedIn);
+  return confirmed.filter(s=>anyIn ? s.checkedIn : !s.noShow);
+}
+function relayNamesDatalist(){
+  return `<datalist id="relay-player-names">${PLAYERS.map(p=>`<option value="${escAttr(p.name)}"></option>`).join('')}</datalist>`;
+}
 function relayPairs(players){
   const n = players.length;
   if(n < 2) return [];
@@ -2065,7 +2079,7 @@ function relayPlayerStats(state, bonus){
   }
   const entry = name=>{
     const k = playerKey(name);
-    if(!byKey[k]) byKey[k] = {name:name.trim(), team:teamOf[k]||'', played:0, won:0, guest:isRelayGuest(name)};
+    if(!byKey[k]) byKey[k] = {name:name.trim(), team:teamOf[k]||'', played:0, won:0, guest:isRelayGuest(name, state)};
     return byKey[k];
   };
   state.teams.forEach(t=>t.players.forEach(entry));
@@ -2177,7 +2191,8 @@ document.getElementById('relay-subnav').addEventListener('click', e=>{
 });
 
 function relayDrawCard(dateISO, week, confirmed, admin, redraw){
-  const eligible = confirmed.filter(s=>!s.noShow).length;
+  const eligible = relayDrawEligible(confirmed).length;
+  const anyIn = confirmed.some(s=>s.checkedIn);
   const counts = (week.event && week.event.teamCounts) || [4, 6];
   if(!RELAY_TEAM_COUNT_PICK || !counts.includes(RELAY_TEAM_COUNT_PICK)) RELAY_TEAM_COUNT_PICK = relayDefaultTeamCount(eligible, counts);
   const k = RELAY_TEAM_COUNT_PICK;
@@ -2192,34 +2207,44 @@ function relayDrawCard(dateISO, week, confirmed, admin, redraw){
   return `<div class="card">${head}
     <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">${redraw
       ? 'No games have started yet, so teams can still be redrawn from scratch — any moves or added players are lost.'
-      : 'Snake draft by standings (1st pick to Team A, 2nd to B, … then back the other way). Confirmed signups minus no-shows are included; you can move, add and remove players afterwards.'}</p>
+      : 'Snake draft by standings (1st pick to Team A, 2nd to B, … then back the other way). Checked-in players are drawn (or every confirmed signup if nobody\'s checked in yet); you can move, add and remove players afterwards.'}</p>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
       <select id="relay-team-count" class="mini-select" style="padding:8px 10px; font-size:13px;" onchange="RELAY_TEAM_COUNT_PICK=Number(this.value); paintSchedule(LAST_WEEK);">
         ${counts.map(c=>`<option value="${c}" ${c===k?'selected':''}>${c} teams</option>`).join('')}
       </select>
       <button class="btn" id="relay-draw-btn" onclick="drawTeamsClick('${dateISO}', ${redraw})" ${eligible < k*2 ? 'disabled' : ''}>${redraw ? 'Redraw teams' : 'Draw teams'}</button>
     </div>
-    <p style="margin:0; font-size:13px; color:var(--text-soft);">${eligible} eligible → ${preview}</p>
+    <p style="margin:0; font-size:13px; color:var(--text-soft);">${eligible} ${anyIn ? 'checked in' : 'confirmed'} → ${preview}</p>
     ${uneven.length ? `<p style="margin:6px 0 0; font-size:13px; color:var(--loss);">Uneven match-up${uneven.length>1?'s':''}: ${uneven.join(', ')} — add a guest or late player to even it out after the draw.</p>` : ''}
     ${eligible < k*2 ? `<p style="margin:6px 0 0; font-size:13px; color:var(--loss);">Need at least ${k*2} players for ${k} teams.</p>` : ''}
   </div>`;
 }
 
 function relayCheckinCard(dateISO, week, confirmed, admin){
-  const list = confirmed.map((s,i)=>({s, joinNum:i+1})).sort((a,b)=>a.s.name.localeCompare(b.s.name));
-  return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in (${confirmed.length}/${weekCap(week)})</h3>
+  // Confirmed signups, plus any walk-in checked in past the cap.
+  const cap = weekCap(week);
+  const list = week.signups.map((s,i)=>({s, joinNum:i+1})).filter(({s,joinNum})=>joinNum<=cap || s.checkedIn)
+    .sort((a,b)=>a.s.name.localeCompare(b.s.name));
+  const walkIn = admin ? `<div class="search-row" style="margin:0 0 10px; gap:6px; flex-wrap:wrap;">
+      <input type="text" id="relay-walkin" list="relay-player-names" placeholder="Walk-in's name" style="min-width:160px;" autocomplete="off">
+      <button class="btn small" onclick="relayWalkInClick()">Add &amp; check in</button>
+    </div>${relayNamesDatalist()}` : '';
+  return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in (${confirmed.length}/${cap})</h3>
     <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">${admin
-      ? 'Tap <strong>Check in</strong> as players arrive. No-shows are left out of the team draw.'
+      ? 'Tap <strong>Check in</strong> as players arrive — only checked-in players are drawn into teams. Someone who didn\'t sign up? Add them here (pick a returning player\'s name from the list so their standings match).'
       : 'Sign in above to check players in or mark no-shows.'}</p>
+    ${walkIn}
     <ul class="roster-list">${list.length ? list.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO,admin)).join('') : '<li class="empty-row">No signups yet.</li>'}</ul>
   </div>`;
 }
 
-// Confirmed, not-no-show signups who aren't on any team - late arrivals
-// after the draw, or someone removed from a team.
+// Players the draw would include (relayDrawEligible - plus any walk-in
+// checked in past the cap) who aren't on a team: late arrivals after the
+// draw, or someone taken off a team.
 function relayUnassignedCard(week, confirmed, state, admin){
   const onTeam = new Set(state.teams.flatMap(t=>t.players.map(playerKey)));
-  const loose = confirmed.filter(s=>!s.noShow && !onTeam.has(playerKey(s.name)));
+  const pool = relayDrawEligible(confirmed).concat(week.signups.slice(weekCap(week)).filter(s=>s.checkedIn));
+  const loose = pool.filter(s=>!onTeam.has(playerKey(s.name)));
   if(!loose.length) return '';
   const rows = loose.map(s=>`<div class="team-row"><span class="rname">${escHtml(s.name)}${statusBadge(s)}</span>
     ${admin ? `<select class="mini-select" aria-label="Add ${escAttr(s.name)} to a team" onchange="if(this.value!=='') relayAddExisting(this.dataset.name, Number(this.value))" data-name="${escAttr(s.name)}">
@@ -2361,7 +2386,7 @@ function relayTeamCard(week, state, ti, admin){
   const rows = t.players.map((p,pi)=>{
     const s = signup[playerKey(p)];
     const badges = (playerKey(p)===playerKey(t.captain) ? ' <span class="mine-badge">captain</span>' : '')
-      + (isRelayGuest(p) ? ' <span class="mine-badge">guest</span>' : '')
+      + (isRelayGuest(p, state) ? ' <span class="mine-badge">guest</span>' : '')
       + (s && s.noShow ? ' <span class="mine-badge ns">No show</span>' : '');
     const tools = admin ? `<span class="tools">
       <button class="icon-btn" title="Move up" onclick="relayMovePos(${ti},${pi},-1)" ${pi===0||r1Locked?'disabled':''}>▲</button>
@@ -2376,9 +2401,9 @@ function relayTeamCard(week, state, ti, admin){
   }).join('');
 
   const addHtml = admin ? `<div class="search-row" style="margin:10px 0 0; gap:6px; flex-wrap:wrap;">
-      <input type="text" id="relay-add-${ti}" placeholder="Late player's name" style="min-width:140px;">
-      <button class="btn small ghost" onclick="relayAddTyped(${ti})">Add</button>
-      <button class="btn small ghost" onclick="relayAddGuest(${ti})">+ Guest</button>
+      <input type="text" id="relay-add-${ti}" list="relay-player-names" placeholder="Late player or guest name" style="min-width:140px;" autocomplete="off">
+      <button class="btn small ghost" title="Signs them up, checks them in and adds them to this team" onclick="relayAddTyped(${ti})">Add player</button>
+      <button class="btn small ghost" title="Adds this name as a guest (no ranking points) — leave the box empty for Guest 1, 2, …" onclick="relayAddGuest(${ti})">+ Guest</button>
     </div>` : '';
 
   const orderHtml = [1,2].map(r=>{
@@ -2497,7 +2522,7 @@ function relayCommitTeams(){
   RELAY_SAVE_CHAIN = RELAY_SAVE_CHAIN.then(async ()=>{
     if(!LAST_WEEK || !LAST_WEEK.relay) return;
     const relay = LAST_WEEK.relay;
-    const res = await postAction({action:'relaySaveTeams', date:WEEK_DATE, teams:relay.teams, rev:relay.rev, ...relayCreds()});
+    const res = await postAction({action:'relaySaveTeams', date:WEEK_DATE, teams:relay.teams, guests:relay.guests||[], rev:relay.rev, ...relayCreds()});
     if(!res.ok){
       alert(res.error || 'Could not save the team change — please try again.');
       relayAdopt(res);
@@ -2538,28 +2563,56 @@ function relayRemove(ti, pi){
   relayResetOrder(t);
   relayCommitTeams();
 }
-function relayAddName(ti, name){
+// Real players added on the night go through the backend (relayAddPlayer):
+// signed up if needed, checked in, and - with a team index - put on that
+// team, so they show on the Check-in tab like everyone else.
+async function relayAddPlayerClick(name, ti, inputEl){
   name = (name||'').trim().slice(0,40);
-  if(!name) return false;
-  const teams = relayTeams();
-  const clash = teams.find(t=>t.players.some(p=>playerKey(p)===playerKey(name)));
-  if(clash){ alert(`${name} is already on Team ${clash.id}.`); return false; }
-  teams[ti].players.push(name);
-  relayResetOrder(teams[ti]);
-  relayCommitTeams();
-  return true;
+  if(!name){ alert('Enter the player\'s name.'); return; }
+  if(ti !== null){
+    const clash = relayTeams().find(t=>t.players.some(p=>playerKey(p)===playerKey(name)));
+    if(clash){ alert(`${name} is already on Team ${clash.id}.`); return; }
+  }
+  if(inputEl) inputEl.value = '';
+  const res = await postAction({action:'relayAddPlayer', date:WEEK_DATE, name, team: ti, ...relayCreds()});
+  if(!res.ok){ alert(res.error || 'Could not add the player — please try again.'); if(inputEl) inputEl.value = name; }
+  else if(res.waitlisted && ti === null){
+    alert(`${res.name} is checked in, but tonight is already full (${RELAY_CAP}), so they're past the draw cut-off — add them to a team from the "not on a team" list after the draw.`);
+  }
+  renderSchedule(true, true); // signups + teams both changed
+}
+function relayWalkInClick(){
+  const inp = document.getElementById('relay-walkin');
+  relayAddPlayerClick(inp ? inp.value : '', null, inp);
 }
 function relayAddTyped(ti){
   const inp = document.getElementById('relay-add-'+ti);
-  if(inp && relayAddName(ti, inp.value)) inp.value = '';
+  relayAddPlayerClick(inp ? inp.value : '', ti, inp);
 }
+// Guests stay team-only (no signup/check-in, no rank points). A typed name
+// becomes a named guest; an empty box gives "Guest 1", "Guest 2", ...
 function relayAddGuest(ti){
-  const used = new Set(relayTeams().flatMap(t=>t.players.map(playerKey)));
-  let n = 1;
-  while(used.has('guest '+n)) n++;
-  relayAddName(ti, 'Guest '+n);
+  const inp = document.getElementById('relay-add-'+ti);
+  const relay = LAST_WEEK.relay, teams = relay.teams;
+  let name = (inp ? inp.value : '').trim().slice(0,40);
+  if(!name){
+    const used = new Set(teams.flatMap(t=>t.players.map(playerKey)));
+    let n = 1;
+    while(used.has('guest '+n)) n++;
+    name = 'Guest '+n;
+  }
+  const clash = teams.find(t=>t.players.some(p=>playerKey(p)===playerKey(name)));
+  if(clash){ alert(`${name} is already on Team ${clash.id}.`); return; }
+  if(LAST_WEEK.signups.some(s=>playerKey(s.name)===playerKey(name))){
+    alert(`${name} signed up for tonight — use "Add player" instead so they're checked in and get ranking points.`); return;
+  }
+  teams[ti].players.push(name);
+  relay.guests = (relay.guests||[]).concat([name]);
+  relayResetOrder(teams[ti]);
+  if(inp) inp.value = '';
+  relayCommitTeams();
 }
-function relayAddExisting(name, ti){ relayAddName(ti, name); }
+function relayAddExisting(name, ti){ relayAddPlayerClick(name, ti, null); }
 function relayMoveOrder(ti, round, k, dir){
   const t = relayTeams()[ti];
   const order = relayOrder(t, round), j = k+dir;

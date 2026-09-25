@@ -139,6 +139,10 @@ Google Apps Script file, edited directly.
   `recordScore`, `editScore`, `cancelMatch`) refuse on relay dates. Ranking
   points per relay night: exhibition (nothing written to Rankings) or ranked
   (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label `T<team>`).
+  The team draw takes checked-in players once check-in has started. Walk-ins
+  and late players are added through `relayAddPlayer` (signs them up + checks
+  them in, optionally onto a team); guests (named, or "Guest N") are
+  team-only, listed in the relay state's `guests`, and never get rank points.
   Test with `site/index.html?mock=1&relay=1`.
 - **One-time environment setup** on a fresh spreadsheet binding: set the
   `ADMIN_EMAILS` and `ADMIN_SECRET` script properties (Project Settings →
