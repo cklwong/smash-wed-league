@@ -402,7 +402,7 @@
       </details>
       <details>
         <summary>Who plays with whom?</summary>
-        <p>The captain puts the team in order P1, P2, P3 … and the doubles pairs rotate: <strong>P1+P2, P2+P3, P3+P4, P4+P5, P5+P6 and P6+P1</strong>. With 6 players that's 6 pairs, and everyone plays in exactly 2 of them each round. The captain also decides the order the pairs play in.</p>
+        <p>The captain puts the team in order P1, P2, P3 … and the doubles pairs rotate: <strong>P1+P2, P2+P3, P3+P4, P4+P5, P5+P6 and P6+P1</strong>. With 6 players that's 6 pairs, and everyone plays in exactly 2 of them each round. The captain also decides the order the pairs play in — the site starts every team on an order that spreads out rest, so nobody plays two games in a row (with 5 or more players) or waits too long between games.</p>
         <p>Between rounds the captain can <strong>change the pairings for round 2</strong> by putting the team in a new P1, P2, P3 … order (and a new playing order) before round 2's first game.</p>
       </details>
       <details>
@@ -2011,11 +2011,27 @@ function relayLineup(team, round){
   players.forEach(p=>{ if(!used.has(playerKey(p))) out.push(p); });
   return out;
 }
+// Rest-spreading default playing order per team size (Code.gs RELAY_REST_ORDERS).
+const RELAY_REST_ORDERS = {
+  3: [[0,1,2],[0,1,2]],
+  4: [[0,2,1,3],[1,3,0,2]],
+  5: [[0,2,4,1,3],[0,2,4,1,3]],
+  6: [[0,2,4,1,5,3],[1,5,3,0,2,4]],
+  7: [[0,2,4,6,1,3,5],[0,2,4,6,1,3,5]],
+  8: [[0,2,6,4,1,7,3,5],[1,7,3,5,0,2,6,4]]
+};
+function relayDefaultOrder(n, round){
+  const t = RELAY_REST_ORDERS[n];
+  if(t) return t[round===2 ? 1 : 0].slice();
+  const evens = [], odds = [];
+  for(let k=0;k<n;k++) (k%2 ? odds : evens).push(k);
+  return round===2 ? odds.concat(evens) : evens.concat(odds);
+}
 function relayOrder(team, round){
   const n = relayPairs(relayLineup(team, round)).length;
   const o = team.order && team.order[round];
   if(o && o.length===n && new Set(o).size===n && o.every(x=>Number.isInteger(x) && x>=0 && x<n)) return o.slice();
-  return Array.from({length:n}, (_,i)=>i);
+  return relayDefaultOrder(n, round);
 }
 function relayTieCount(state){ return Math.floor(state.teams.length/2); }
 function relayFindGame(state, tie, round, seq){
@@ -2419,7 +2435,11 @@ function relayTeamCard(week, state, ti, admin){
         </span>` : '';
       return `<div class="team-row" style="font-size:13px;"><span class="pos">G${k+1}</span><span class="rname"><span class="pool-tag">${posLabel}</span> ${pr.map(escHtml).join(' + ')}</span>${tools}</div>`;
     }).join('');
-    const copyBtn = (admin && r===2 && !locked) ? ` <button class="icon-btn" onclick="relayCopyOrder(${ti})">same as round 1</button>` : '';
+    const n2 = order.length;
+    const isDefault = order.join(',') === relayDefaultOrder(n2, r).join(',');
+    const copyBtn = (admin && !locked && !isDefault)
+      ? ` <button class="icon-btn" title="Back to the order that spreads out everyone's rest" onclick="relayRecommendedOrder(${ti},${r})">recommended order</button>`
+      : (isDefault && n2 > 2 ? ' <span class="game-note" style="text-transform:none; letter-spacing:0;">· spreads out rest</span>' : '');
     return (r===2 ? relayLineup2Html(t, ti, admin, locked) : '')
       + `<div class="relay-sub">Round ${r} playing order${locked ? ' · locked (round under way)' : ''}${copyBtn}</div>${items || '<p class="game-note">Needs at least 2 players.</p>'}`;
   }).join('');
@@ -2633,9 +2653,9 @@ function relayResetLineup2(ti){
   delete relayTeams()[ti].lineup2;
   relayCommitTeams();
 }
-function relayCopyOrder(ti){
+function relayRecommendedOrder(ti, round){
   const t = relayTeams()[ti];
-  t.order = Object.assign({}, t.order, {2: relayOrder(t, 1)});
+  t.order = Object.assign({}, t.order, {[round]: relayDefaultOrder(relayPairs(relayLineup(t, round)).length, round)});
   relayCommitTeams();
 }
 

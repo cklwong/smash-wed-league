@@ -133,7 +133,9 @@ Google Apps Script file, edited directly.
   never in the weekly tab's pool geometry. The site's This week page renders
   relay nights via `paintRelay` in `index.html`; the pure relay rules
   (`relayLineup`/`relayPairs`/`relayOrder`/`relayTieView`/`relayPlayerStats`;
-  a team's optional `lineup2` holds the captain's round-2 positions) exist in both
+  a team's optional `lineup2` holds the captain's round-2 positions; unset
+  playing orders default to `RELAY_REST_ORDERS`, a per-team-size table that
+  spreads each player's rest across both rounds) exist in both
   `Code.gs` and `index.html` and must stay in sync (the mock reuses the
   page's copies). Singles-only actions (`generatePools`, `startMatch`,
   `recordScore`, `editScore`, `cancelMatch`) refuse on relay dates. Ranking

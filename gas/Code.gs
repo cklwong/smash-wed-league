@@ -2670,9 +2670,36 @@ function relayLineup(team, round) {
   return out;
 }
 
+// Recommended playing order per team size (pair index k = Pk+1 with Pk+2),
+// one per round, found by brute force to spread each player's rest across
+// both rounds back to back: no player plays two games in a row (except
+// 3-4 players, where it's unavoidable once a round), and round 2 is
+// arranged so nobody plays the last game of round 1 and the first of
+// round 2. E.g. 6 players: R1 P1+P2, P3+P4, P5+P6, P2+P3, P6+P1, P4+P5;
+// R2 P2+P3, P6+P1, P4+P5, P1+P2, P3+P4, P5+P6 - every player rests 1-3
+// games between games. Mirrored in site/index.html.
+var RELAY_REST_ORDERS = {
+  3: [[0, 1, 2], [0, 1, 2]],
+  4: [[0, 2, 1, 3], [1, 3, 0, 2]],
+  5: [[0, 2, 4, 1, 3], [0, 2, 4, 1, 3]],
+  6: [[0, 2, 4, 1, 5, 3], [1, 5, 3, 0, 2, 4]],
+  7: [[0, 2, 4, 6, 1, 3, 5], [0, 2, 4, 6, 1, 3, 5]],
+  8: [[0, 2, 6, 4, 1, 7, 3, 5], [1, 7, 3, 5, 0, 2, 6, 4]]
+};
+
+// Default order for n pairs: the table above, else even pairs then odd
+// ones (round 2: odd then even).
+function relayDefaultOrder(n, round) {
+  var t = RELAY_REST_ORDERS[n];
+  if (t) return t[round === 2 ? 1 : 0].slice();
+  var evens = [], odds = [];
+  for (var k = 0; k < n; k++) (k % 2 ? odds : evens).push(k);
+  return round === 2 ? odds.concat(evens) : evens.concat(odds);
+}
+
 // The captain's playing order for a round: a permutation of pair indices,
-// falling back to P1+P2 first, P2+P3 next, ... when unset or stale (e.g.
-// the team's size changed since it was saved).
+// falling back to the rest-spreading default (relayDefaultOrder) when unset
+// or stale (e.g. the team's size changed since it was saved).
 function relayOrder(team, round) {
   var n = relayPairs(relayLineup(team, round)).length;
   var o = team.order && team.order[round];
@@ -2685,9 +2712,7 @@ function relayOrder(team, round) {
     }
   }
   if (ok) return o.slice();
-  var ident = [];
-  for (var k = 0; k < n; k++) ident.push(k);
-  return ident;
+  return relayDefaultOrder(n, round);
 }
 
 function relayTieCount(state) {
