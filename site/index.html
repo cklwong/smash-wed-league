@@ -194,10 +194,14 @@
   .relay-game:last-child{border-bottom:none;}
   .relay-game.now{background:var(--amber-tint); border-radius:6px; padding:8px; border-bottom-color:transparent;}
   .relay-game .gnum{font-family:'IBM Plex Mono',monospace; color:var(--text-mute); width:24px; flex-shrink:0; font-size:12px;}
-  .relay-game .match-up{flex:1; min-width:200px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .relay-game .match-up{flex:1; min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto; align-items:center; gap:8px;}
+  .relay-game .match-up.tb{display:flex; flex-wrap:wrap;}
+  .relay-game .match-up:not(.tb) > :first-child{text-align:right;}
   .relay-game .pair{min-width:0;}
-  .relay-game .sc{font-family:'IBM Plex Mono',monospace; font-weight:500; white-space:nowrap;}
-  .relay-game .win{color:var(--win); font-weight:600;}
+  .relay-game .sc{font-family:'IBM Plex Mono',monospace; font-size:16px; font-weight:600; white-space:nowrap; background:var(--ink); color:#fff; border-radius:6px; padding:3px 9px; letter-spacing:.02em;}
+  .relay-game .sc .lose{opacity:.6; font-weight:500;}
+  .relay-game .sc .dash{opacity:.6; margin:0 2px;}
+  .relay-game .pair.win{color:var(--win); font-weight:600;}
   .relay-game .acts{display:flex; gap:6px; align-items:center; flex-wrap:wrap;}
   .round-head{display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin:14px 0 2px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-mute); font-weight:500;}
   .round-head .res{text-transform:none; letter-spacing:0; font-size:12px; color:var(--text-soft);}
@@ -294,14 +298,14 @@
       </div>
       <div id="schedule-relay" style="display:none;">
         <div class="subnav" id="relay-subnav">
-          <button data-rsub="live" class="active">Live</button>
-          <button data-rsub="teams">Teams</button>
           <button data-rsub="checkin">Check-in</button>
-          <button data-rsub="players">Players</button>
+          <button data-rsub="teams">Teams</button>
+          <button data-rsub="live" class="active">Live</button>
+          <button data-rsub="players">Results</button>
         </div>
-        <div id="relay-live" class="subview active"></div>
-        <div id="relay-teams" class="subview"></div>
         <div id="relay-checkin" class="subview"></div>
+        <div id="relay-teams" class="subview"></div>
+        <div id="relay-live" class="subview active"></div>
         <div id="relay-players" class="subview"></div>
       </div>
     </div>
@@ -2325,7 +2329,8 @@ function relayRoundHtml(v, r, admin, readOnly){
 
 function relayPairHtml(pair, won){
   if(!pair) return '<span class="game-note">— no pair —</span>';
-  const txt = pair.map(escHtml).join(' + ');
+  // Each name stays on one line; on a narrow phone the pair wraps at the "+".
+  const txt = pair.map(n=>`<span style="white-space:nowrap;">${escHtml(n)}</span>`).join(' + ');
   return won ? `<span class="pair win">${txt}</span>` : `<span class="pair">${txt}</span>`;
 }
 
@@ -2347,7 +2352,7 @@ function relayGameRow(v, round, g, admin, readOnly, upNext){
       + (g.done ? `<button class="btn small ghost" onclick="relayClearClick(${call}, true)">Delete</button>` : '')
       + (RELAY_OPEN_EDIT===key ? `<button class="btn small ghost" onclick="RELAY_OPEN_EDIT=null; paintSchedule(LAST_WEEK);">Cancel</button>` : '');
   } else if(g.done){
-    mid = `<span class="sc"><span class="${g.sa>g.sb?'win':''}">${g.sa}</span>–<span class="${g.sb>g.sa?'win':''}">${g.sb}</span></span>`;
+    mid = `<span class="sc" title="Team ${v.a.id} ${g.sa} – ${g.sb} Team ${v.b.id}"><span class="${g.sa>g.sb?'':'lose'}">${g.sa}</span><span class="dash">–</span><span class="${g.sb>g.sa?'':'lose'}">${g.sb}</span></span>`;
     if(admin && !readOnly) acts = `<button class="btn small ghost" onclick="RELAY_OPEN_EDIT='${key}'; paintSchedule(LAST_WEEK);">Edit</button>`;
   } else {
     mid = '<span class="game-note">vs</span>';
@@ -2377,7 +2382,7 @@ function relayTiebreakHtml(v, admin, readOnly){
     <option value="">Team ${team.id} player ${n}…</option>${team.players.map(p=>`<option value="${escAttr(p)}">${escHtml(p)}</option>`).join('')}</select>`;
   return head + `<div class="relay-game now" style="gap:6px;">
     <span class="gnum">TB</span>
-    <span class="match-up">${sel('a', v.a, 1)} + ${sel('a', v.a, 2)} <span class="game-note">vs</span> ${sel('b', v.b, 1)} + ${sel('b', v.b, 2)}</span>
+    <span class="match-up tb">${sel('a', v.a, 1)} + ${sel('a', v.a, 2)} <span class="game-note">vs</span> ${sel('b', v.b, 1)} + ${sel('b', v.b, 2)}</span>
     <span class="acts">
       <span class="score-entry">
         <input type="number" inputmode="numeric" min="0" id="relay-sa-${v.tie}-3-0" placeholder="${v.a.id}">
@@ -2501,7 +2506,7 @@ function relayPlayersCard(state, ev){
       <td class="num-col num">${p.guest || !p.played ? '–' : p.rp}</td>
     </tr>`).join('');
   return `<div class="card">
-    <div class="pool-head"><h3>Players</h3><span class="pool-status ${ranked?'full':''}" ${ranked?'':'style="background:var(--amber-tint); color:var(--amber-deep);"'}>${ranked ? 'Ranked night' : 'Exhibition — not counted'}</span></div>
+    <div class="pool-head"><h3>Results</h3><span class="pool-status ${ranked?'full':''}" ${ranked?'':'style="background:var(--amber-tint); color:var(--amber-deep);"'}>${ranked ? 'Ranked night' : 'Exhibition — not counted'}</span></div>
     <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">Doubles won–lost over the two rounds (the tiebreak game only decides the match). ${ranked ? 'Rank pts' : 'Pts <em>would be</em>'} = doubles won + ${(ev && ev.teamBonus) || 2} for a team win.</p>
     <table class="standings">
       <thead><tr><th style="width:30px;">#</th><th>Player</th><th>Team</th><th class="num-col" style="width:56px;">W–L</th><th class="num-col" style="width:60px;">${ranked ? 'Rank pts' : 'Pts'}</th></tr></thead>
