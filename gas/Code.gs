@@ -57,6 +57,9 @@
  *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team relay doubles night or back to singles)
  *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: snake-drafts eligible signups into teamCount teams by standings)
  *   POST { action:'relaySaveTeams', date, teams, guests, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, guests, removals, captain, positions, playing order; guests = names marked as guests)
+ *   POST { action:'addWalkIn', date, name, team, secret|pin } -> { ok, name, position, waitlisted, walkIn, seated|relay } (any night: signs a walk-in up without an email and checks them in; team = relay team index, optional)
+ *   POST { action:'editWalkIn', date, oldName, newName, secret|pin } -> { ok, name } (fixes a desk walk-in's name tonight everywhere it appears)
+ *   POST { action:'removeWalkIn', date, name, secret|pin } -> { ok } (removes a desk walk-in added by mistake; refused once they have a pool seat or a relay game)
  *   POST { action:'relayAddPlayer', date, name, team, secret|pin } -> { ok, relay, position, waitlisted } (relay night: signs a walk-in up and checks them in, and adds them to team index `team` if given)
  *   POST { action:'relayStartGame', date, tie, round, seq, aPair, bPair, secret|pin } -> { ok, relay } (relay night: marks a game on court; aPair/bPair only for the tiebreak, round 3)
  *   POST { action:'relayScore', date, tie, round, seq, scoreA, scoreB, aPair, bPair, secret|pin } -> { ok, relay } (relay night: records or corrects a game's score)
@@ -129,6 +132,9 @@ function doPost(e) {
     else if (body.action === 'setEventFormat') result = setEventFormat(body.date, body.format, body.rpMode, body.secret);
     else if (body.action === 'drawTeams') result = drawTeams(body.date, body.teamCount, body.redraw, body.secret, body.pin);
     else if (body.action === 'relaySaveTeams') result = relaySaveTeams(body.date, body.teams, body.rev, body.secret, body.pin, body.guests);
+    else if (body.action === 'addWalkIn') result = addWalkIn(body.date, body.name, body.team, body.secret, body.pin);
+    else if (body.action === 'editWalkIn') result = editWalkIn(body.date, body.oldName, body.newName, body.secret, body.pin);
+    else if (body.action === 'removeWalkIn') result = removeWalkIn(body.date, body.name, body.secret, body.pin);
     else if (body.action === 'relayAddPlayer') result = relayAddPlayer(body.date, body.name, body.team, body.secret, body.pin);
     else if (body.action === 'relayStartGame') result = relayStartGame(body.date, body.tie, body.round, body.seq, body.aPair, body.bPair, body.secret, body.pin);
     else if (body.action === 'relayScore') result = relayScore(body.date, body.tie, body.round, body.seq, body.scoreA, body.scoreB, body.aPair, body.bPair, body.secret, body.pin);
@@ -295,7 +301,7 @@ function computeWeek(dateISO) {
   var week = {
     date: dateISO, exists: true, hasScores: anyScoresEntered(data),
     signups: signups, pools: pools,
-    live: { matches: live.matches, checkins: live.checkins }
+    live: { matches: live.matches, checkins: live.checkins, walkins: Object.keys(live.walkins) }
   };
   // Relay nights only - a singles payload is exactly what it always was.
   var ev = getEventSettings(dateISO);
@@ -736,7 +742,9 @@ function computeHeadToHead(key) {
   return { opponents: opponents };
 }
 
-function addJoin(dateISO, name, contact) {
+// quiet skips the "you're on the list" email - used for walk-ins added at
+// the desk (addWalkIn), who are standing right there.
+function addJoin(dateISO, name, contact, quiet) {
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var ban = activeBanFor(name, dateISO);
@@ -763,7 +771,7 @@ function addJoin(dateISO, name, contact) {
     sheet.getRange(1, CONTACT_COL).setValue('Contact');
     sheet.getRange(targetRow, CONTACT_COL).setValue(contact);
   }
-  var email = isEmail(contact) ? contact.trim() : getRegisteredEmail(name);
+  var email = quiet ? '' : (isEmail(contact) ? contact.trim() : getRegisteredEmail(name));
   if (email) {
     try { emailAddedNotification(email, name, dateISO); }
     catch (err) { Logger.log('emailAddedNotification failed: ' + err); }
@@ -807,23 +815,7 @@ function removeJoin(dateISO, name) {
 
   var contact = (data[target.row - 1][CONTACT_COL - 1] || '').toString();
 
-  var lastRow = sheet.getLastRow();
-  var colA = sheet.getRange(1, 1, lastRow, 1).getValues();
-  var listEndRow = lastRow;
-  for (var r = target.row; r < colA.length; r++) {
-    if ((colA[r][0] || '').toString().trim() === '') { listEndRow = r + 1; break; }
-  }
-
-  var cols = [1, 2, CONTACT_COL, NOSHOW_GUEST_COL];
-  for (var c = 0; c < cols.length; c++) {
-    var col = cols[c];
-    var shiftRows = listEndRow - target.row;
-    if (shiftRows > 0) {
-      var block = sheet.getRange(target.row + 1, col, shiftRows, 1).getValues();
-      sheet.getRange(target.row, col, shiftRows, 1).setValues(block);
-    }
-    sheet.getRange(listEndRow, col).clearContent();
-  }
+  shiftOutSignupRow(sheet, target.row);
 
   try { emailOrganizersOnRemoval(dateISO, name); }
   catch (err) { Logger.log('emailOrganizersOnRemoval failed: ' + err); }
@@ -833,6 +825,28 @@ function removeJoin(dateISO, name) {
     catch (err) { Logger.log('emailRemovedNotification failed: ' + err); }
   }
   return { ok: true };
+}
+
+// Removes one signup-list row by shifting the rows below it up in the
+// signup columns only (name, status, contact, no-show guest label) - see
+// removeJoin for why the sheet row itself is never deleted.
+function shiftOutSignupRow(sheet, row) {
+  var lastRow = sheet.getLastRow();
+  var colA = sheet.getRange(1, 1, lastRow, 1).getValues();
+  var listEndRow = lastRow;
+  for (var r = row; r < colA.length; r++) {
+    if ((colA[r][0] || '').toString().trim() === '') { listEndRow = r + 1; break; }
+  }
+  var cols = [1, 2, CONTACT_COL, NOSHOW_GUEST_COL];
+  for (var c = 0; c < cols.length; c++) {
+    var col = cols[c];
+    var shiftRows = listEndRow - row;
+    if (shiftRows > 0) {
+      var block = sheet.getRange(row + 1, col, shiftRows, 1).getValues();
+      sheet.getRange(row, col, shiftRows, 1).setValues(block);
+    }
+    sheet.getRange(listEndRow, col).clearContent();
+  }
 }
 
 // Players with an email on file (this signup's contact, or the registered
@@ -1709,6 +1723,7 @@ function getLiveState(dateISO) {
   if (raw) { try { state = JSON.parse(raw) || {}; } catch (err) { state = {}; } }
   if (!state.matches) state.matches = [];
   if (!state.checkins) state.checkins = {};
+  if (!state.walkins) state.walkins = {}; // lowercased name -> true, see addWalkIn
   return state;
 }
 
@@ -2982,24 +2997,47 @@ function relaySaveTeams(dateISO, teams, rev, secret, pin, guests) {
 function relayAddPlayer(dateISO, name, teamIndex, secret, pin) {
   var g = relayGuard(dateISO, secret, pin);
   if (!g.ok) return g;
+  return addWalkIn(dateISO, name, teamIndex, secret, pin);
+}
+
+// ---- Walk-ins (singles and relay nights) ----
+//
+// Someone who turns up without signing up is added at the desk: appended to
+// the signup list (addJoin, no email) and checked in, and remembered as a
+// walk-in in the live state so a desk typo can be fixed (editWalkIn) or
+// undone (removeWalkIn) - only for walk-ins, never for people who signed up
+// themselves. Adding someone already signed up just checks them in. On a
+// singles night after the draw, a walk-in has no pool seat until a redraw
+// (the Check-in tab already flags "checked in but not seated"); on a relay
+// night teamIndex also puts them on that team.
+function addWalkIn(dateISO, name, teamIndex, secret, pin) {
+  var auth = checkRunAuth(dateISO, secret, pin);
+  if (!auth.ok) return auth;
+  var sheet = getWeekSheet(dateISO);
+  if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
+  var relay = isRelayDate(dateISO);
   name = String(name || '').trim().slice(0, 40);
   if (!name) return { ok: false, error: 'Enter the player\'s name.' };
-  if (isRelayGuest(name, getRelayState(dateISO))) return { ok: false, error: name + ' is on a team as a guest — take them off first to add them as a player.' };
-  var signups = parseSignups(getWeekSheet(dateISO).getDataRange().getValues());
+  if (relay && isRelayGuest(name, getRelayState(dateISO))) return { ok: false, error: name + ' is on a team as a guest — take them off first to add them as a player.' };
+  var signups = parseSignups(sheet.getDataRange().getValues());
   var existing = findSignup(signups, name);
-  var position;
+  var position, isNew = false;
   if (existing) {
     name = existing.name;
     position = signups.indexOf(existing) + 1;
   } else {
-    var joined = addJoin(dateISO, name, '');
+    var joined = addJoin(dateISO, name, '', true);
     if (!joined.ok) return joined;
     position = joined.position;
+    isNew = true;
+    updateLiveState(dateISO, function (state) { state.walkins[name.toLowerCase()] = true; return { ok: true }; });
   }
   var ci = setCheckin(dateISO, name, secret, pin);
   if (!ci.ok) return ci;
   var result;
-  if (teamIndex === null || teamIndex === undefined || teamIndex === '') {
+  if (!relay) {
+    result = { ok: true, seated: ci.seated };
+  } else if (teamIndex === null || teamIndex === undefined || teamIndex === '') {
     result = { ok: true, relay: getRelayState(dateISO) };
   } else {
     var ti = Number(teamIndex);
@@ -3012,15 +3050,108 @@ function relayAddPlayer(dateISO, name, teamIndex, secret, pin) {
         if (hit) return { ok: false, error: name + ' is already on Team ' + state.teams[i].id + '.' };
       }
       state.teams[ti].players.push(name);
-      state.teams[ti].order = {}; // pair indices changed - back to P1+P2 first
+      state.teams[ti].order = {}; // pair indices changed - back to the default order
       return { ok: true };
     });
   }
   bustWeekCache(dateISO);
   result.position = position;
-  result.waitlisted = position > RELAY_CAP;
+  result.waitlisted = position > capFor(dateISO);
   result.name = name;
+  result.walkIn = isNew;
   return result;
+}
+
+function walkInGuard(dateISO, name, secret, pin) {
+  var auth = checkRunAuth(dateISO, secret, pin);
+  if (!auth.ok) return auth;
+  var sheet = getWeekSheet(dateISO);
+  if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
+  var key = String(name || '').trim().toLowerCase();
+  if (!getLiveState(dateISO).walkins[key]) return { ok: false, error: 'Only walk-ins added at the desk can be changed here.' };
+  var data = sheet.getDataRange().getValues();
+  var target = findSignup(parseSignups(data), name);
+  if (!target) return { ok: false, error: 'Signup not found for ' + name };
+  return { ok: true, sheet: sheet, data: data, target: target, key: key };
+}
+
+// Fixes a walk-in's name everywhere tonight: the signup list, a singles pool
+// seat and match log, or relay teams/captain/lineups/recorded games.
+function editWalkIn(dateISO, oldName, newName, secret, pin) {
+  var g = walkInGuard(dateISO, oldName, secret, pin);
+  if (!g.ok) return g;
+  newName = String(newName || '').trim().slice(0, 40);
+  if (!newName) return { ok: false, error: 'Enter the corrected name.' };
+  var oldKey = g.key, newKey = newName.toLowerCase(), old = g.target.name;
+  if (newKey !== oldKey && findSignup(parseSignups(g.data), newName)) return { ok: false, error: newName + ' is already signed up tonight.' };
+  var relay = isRelayDate(dateISO);
+  if (relay && newKey !== oldKey && isRelayGuest(newName, getRelayState(dateISO))) return { ok: false, error: newName + ' is on a team as a guest.' };
+
+  g.sheet.getRange(g.target.row, 1).setValue(newName);
+  if (!relay) {
+    var slot = findSlotByValue(g.data, old);
+    if (slot) g.sheet.getRange(slot.row, SLOT_COL).setValue(newName);
+  }
+  var swap = function (n) { return String(n || '').trim().toLowerCase() === oldKey ? newName : n; };
+  updateLiveState(dateISO, function (state) {
+    delete state.walkins[oldKey];
+    state.walkins[newKey] = true;
+    if (state.checkins[oldKey] !== undefined) { state.checkins[newKey] = state.checkins[oldKey]; if (newKey !== oldKey) delete state.checkins[oldKey]; }
+    state.matches.forEach(function (m) { m.a = swap(m.a); m.b = swap(m.b); });
+    return { ok: true };
+  });
+  if (relay) {
+    updateRelayState(dateISO, function (state) {
+      state.teams.forEach(function (t) {
+        t.players = t.players.map(swap);
+        t.captain = swap(t.captain);
+        if (t.lineup2) t.lineup2 = t.lineup2.map(swap);
+      });
+      state.games.forEach(function (gm) { gm.a = (gm.a || []).map(swap); gm.b = (gm.b || []).map(swap); });
+      return { ok: true };
+    });
+  }
+  bustWeekCache(dateISO);
+  return { ok: true, name: newName };
+}
+
+// Takes a walk-in added by mistake back off tonight's list (and off their
+// relay team). Refused once they've played - a relay game on record, or a
+// singles pool seat (mark them No show instead, or remove before the draw).
+function removeWalkIn(dateISO, name, secret, pin) {
+  var g = walkInGuard(dateISO, name, secret, pin);
+  if (!g.ok) return g;
+  var key = g.key, relay = isRelayDate(dateISO);
+  if (relay) {
+    var st = getRelayState(dateISO);
+    var played = st.games.some(function (gm) {
+      return (gm.a || []).concat(gm.b || []).some(function (n) { return String(n).toLowerCase() === key; });
+    });
+    if (played) return { ok: false, error: g.target.name + ' has already played a game tonight — take them off their team instead.' };
+  } else {
+    var slot = findSlotByValue(g.data, g.target.name);
+    if (slot) return { ok: false, error: g.target.name + ' has a seat in Pool ' + slot.letter + ' — mark them No show instead, or redraw after removing.' };
+  }
+  shiftOutSignupRow(g.sheet, g.target.row);
+  updateLiveState(dateISO, function (state) {
+    delete state.walkins[key];
+    delete state.checkins[key];
+    return { ok: true };
+  });
+  if (relay) {
+    updateRelayState(dateISO, function (state) {
+      state.teams.forEach(function (t) {
+        var before = t.players.length;
+        t.players = t.players.filter(function (p) { return p.toLowerCase() !== key; });
+        if (t.players.length !== before) t.order = {};
+        if (String(t.captain || '').toLowerCase() === key) t.captain = '';
+        if (t.lineup2) t.lineup2 = t.lineup2.filter(function (p) { return p.toLowerCase() !== key; });
+      });
+      return { ok: true };
+    });
+  }
+  bustWeekCache(dateISO);
+  return { ok: true };
 }
 
 // Resolves which pairs play a (tie, round, seq) game: scheduled from the

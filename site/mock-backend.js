@@ -68,7 +68,7 @@
     pools: {},   // letter -> [names / seat labels]
     grids: {},   // letter -> NxN score matrix
     guestMap: {},// lowercased no-show name -> the guest label covering their seat
-    live: { matches: [], checkins: {} },
+    live: { matches: [], checkins: {}, walkins: {} },
     createdWeeks: [], // ISO dates created via the mock createWeek() action this session
     bans: {}, // lowercased name -> {name, until} - mirrors PLAYER_BANS in gas/Code.gs
     events: {}, // ISO date -> {format:'relay', rpMode} - mirrors EVENT_<date> script properties
@@ -331,19 +331,31 @@
   // and add to a team when a team index is given.
   function relayAddPlayer(date, name, team) {
     if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
+    return addWalkIn(date, name, team);
+  }
+
+  // Mirrors addWalkIn()/editWalkIn()/removeWalkIn() in gas/Code.gs - walk-ins
+  // added at the desk, on singles and relay nights.
+  function addWalkIn(date, name, team) {
     name = String(name || '').trim().slice(0, 40);
     if (!name) return { ok: false, error: "Enter the player's name." };
-    const st = relayState(date);
-    if ((st.guests || []).some((g) => key(g) === key(name))) return { ok: false, error: name + ' is on a team as a guest — take them off first to add them as a player.' };
+    const relay = isRelay(date);
+    const st = relay ? relayState(date) : null;
+    if (relay && (st.guests || []).some((g) => key(g) === key(name))) return { ok: false, error: name + ' is on a team as a guest — take them off first to add them as a player.' };
     let idx = STATE.signups.findIndex((s) => key(s.name) === key(name));
+    let isNew = false;
     if (idx < 0) {
       const j = join(date, name, '');
       if (!j.ok) return j;
       idx = STATE.signups.length - 1;
+      isNew = true;
+      STATE.live.walkins[key(name)] = true;
     }
     name = STATE.signups[idx].name;
-    checkin(name);
+    const ci = checkin(name);
     const position = idx + 1;
+    const cap = eventFor(date).cap;
+    if (!relay) return { ok: true, name, position, waitlisted: position > cap, walkIn: isNew, seated: ci.seated };
     let result = { ok: true };
     if (team !== null && team !== undefined && team !== '') {
       const ti = Number(team);
@@ -353,8 +365,59 @@
       if (on < 0) { st.teams[ti].players.push(name); st.teams[ti].order = {}; }
     }
     result = relayReply(date, result);
-    result.position = position; result.waitlisted = position > RELAY_CAP; result.name = name;
+    result.position = position; result.waitlisted = position > cap; result.name = name; result.walkIn = isNew;
     return result;
+  }
+  function walkInTarget(name) {
+    if (!STATE.live.walkins[key(name)]) return { ok: false, error: 'Only walk-ins added at the desk can be changed here.' };
+    const idx = STATE.signups.findIndex((s) => key(s.name) === key(name));
+    if (idx < 0) return { ok: false, error: 'Signup not found for ' + name };
+    return { ok: true, idx };
+  }
+  function editWalkIn(date, oldName, newName) {
+    const t = walkInTarget(oldName);
+    if (!t.ok) return t;
+    newName = String(newName || '').trim().slice(0, 40);
+    if (!newName) return { ok: false, error: 'Enter the corrected name.' };
+    const oldKey = key(oldName), newKey = key(newName);
+    if (newKey !== oldKey && STATE.signups.some((s) => key(s.name) === newKey)) return { ok: false, error: newName + ' is already signed up tonight.' };
+    const swap = (n) => (key(n) === oldKey ? newName : n);
+    STATE.signups[t.idx].name = newName;
+    Object.keys(STATE.pools).forEach((L) => { STATE.pools[L] = STATE.pools[L].map(swap); });
+    STATE.live.matches.forEach((m) => { m.a = swap(m.a); m.b = swap(m.b); });
+    delete STATE.live.walkins[oldKey]; STATE.live.walkins[newKey] = true;
+    if (oldKey in STATE.live.checkins && newKey !== oldKey) { STATE.live.checkins[newKey] = STATE.live.checkins[oldKey]; delete STATE.live.checkins[oldKey]; }
+    if (isRelay(date)) {
+      const st = relayState(date);
+      st.teams.forEach((tm) => { tm.players = tm.players.map(swap); tm.captain = swap(tm.captain); if (tm.lineup2) tm.lineup2 = tm.lineup2.map(swap); });
+      st.games.forEach((g) => { g.a = (g.a || []).map(swap); g.b = (g.b || []).map(swap); });
+      st.rev++;
+    }
+    return { ok: true, name: newName };
+  }
+  function removeWalkIn(date, name) {
+    const t = walkInTarget(name);
+    if (!t.ok) return t;
+    const k = key(name), nm = STATE.signups[t.idx].name;
+    if (isRelay(date)) {
+      const st = relayState(date);
+      if (st.games.some((g) => (g.a || []).concat(g.b || []).some((n) => key(n) === k))) return { ok: false, error: nm + ' has already played a game tonight — take them off their team instead.' };
+      st.teams.forEach((tm) => {
+        const before = tm.players.length;
+        tm.players = tm.players.filter((p) => key(p) !== k);
+        if (tm.players.length !== before) tm.order = {};
+        if (key(tm.captain) === k) tm.captain = '';
+        if (tm.lineup2) tm.lineup2 = tm.lineup2.filter((p) => key(p) !== k);
+      });
+      st.rev++;
+    } else {
+      const slot = findSlot(nm);
+      if (slot) return { ok: false, error: nm + ' has a seat in Pool ' + slot.L + ' — mark them No show instead, or redraw after removing.' };
+    }
+    STATE.signups.splice(t.idx, 1);
+    delete STATE.live.walkins[k];
+    delete STATE.live.checkins[k];
+    return { ok: true };
   }
 
   // Mirrors relayResolvePairs() in gas/Code.gs.
@@ -667,7 +730,7 @@
       hasScores: hasAnyScoresAnywhere(),
       signups: STATE.signups,
       pools,
-      live: { matches: STATE.live.matches, checkins: STATE.live.checkins },
+      live: { matches: STATE.live.matches, checkins: STATE.live.checkins, walkins: Object.keys(STATE.live.walkins) },
       now: Date.now()
     };
     // Like gas/Code.gs computeWeek: event + relay only on a relay night.
@@ -807,6 +870,9 @@
       case 'drawTeams': return drawTeams(body.date, body.teamCount, body.redraw);
       case 'relaySaveTeams': return relaySaveTeams(body.date, body.teams, body.rev, body.guests);
       case 'relayAddPlayer': return relayAddPlayer(body.date, body.name, body.team);
+      case 'addWalkIn': return addWalkIn(body.date, body.name, body.team);
+      case 'editWalkIn': return editWalkIn(body.date, body.oldName, body.newName);
+      case 'removeWalkIn': return removeWalkIn(body.date, body.name);
       case 'relayStartGame': return relayStartGame(body.date, body.tie, body.round, body.seq, body.aPair, body.bPair);
       case 'relayScore': return relayScore(body.date, body.tie, body.round, body.seq, body.scoreA, body.scoreB, body.aPair, body.bPair);
       case 'relayClearGame': return relayClearGame(body.date, body.tie, body.round, body.seq);

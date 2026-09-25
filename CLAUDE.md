@@ -125,6 +125,14 @@ Google Apps Script file, edited directly.
   `removeSignupLabelsFromUpcomingWeeks()` once from the editor (only tabs
   dated today or later; it shifts rows up so the list stays contiguous).
   The Rankings tab's own Sorted Name/Rank columns are unrelated and stay.
+- **Walk-ins** (both formats): the organizer adds someone who didn't sign up
+  from the "Walk-ins" card (returning-player dropdown or a typed new name)
+  via `addWalkIn` - appended to the signup list with no email and checked
+  in, and remembered in `LIVE_<date>.walkins` so `editWalkIn` can fix a
+  typo'd name (signup list, pool seat, match log, relay teams/games) and
+  `removeWalkIn` can undo one added by mistake (refused once they hold a
+  singles pool seat or have played a relay game). Only desk walk-ins can
+  be edited/removed this way.
 - **Doubles (team relay) nights** (code calls them "relay"): any date can be
   switched from singles to a doubles (team relay) night on the Admin tab (`setEventFormat`, stored as an
   `EVENT_<YYYY-MM-DD>` script property; no property = singles, so singles
@@ -143,8 +151,8 @@ Google Apps Script file, edited directly.
   points per relay night: exhibition (nothing written to Rankings) or ranked
   (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label `T<team>`).
   The team draw takes checked-in players once check-in has started. Walk-ins
-  and late players are added through `relayAddPlayer` (signs them up + checks
-  them in, optionally onto a team); guests (named, or "Guest N") are
+  and late players are added through `relayAddPlayer` (= `addWalkIn` plus
+  an optional team); guests (named, or "Guest N") are
   team-only, listed in the relay state's `guests`, and never get rank points.
   Test with `site/index.html?mock=1&relay=1`.
 - **One-time environment setup** on a fresh spreadsheet binding: set the
