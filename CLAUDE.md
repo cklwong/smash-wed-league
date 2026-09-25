@@ -150,7 +150,10 @@ Google Apps Script file, edited directly.
   `recordScore`, `editScore`, `cancelMatch`) refuse on relay dates. Ranking
   points per relay night: exhibition (nothing written to Rankings) or ranked
   (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label `T<team>`).
-  The team draw takes checked-in players once check-in has started. Walk-ins
+  The team draw (`drawTeams`) takes every confirmed signup except no-shows
+  and fills teams in standings tiers - the top group snake-split between A
+  and B, the next between C and D, ... (`relayTeamSizes` keeps each matchup
+  even; mirrored in `index.html`). Walk-ins
   and late players are added through `relayAddPlayer` (= `addWalkIn` plus
   an optional team); guests (named, or "Guest N") are
   team-only, listed in the relay state's `guests`, and never get rank points.
