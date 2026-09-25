@@ -143,8 +143,9 @@ Google Apps Script file, edited directly.
 - **One-time environment setup** on a fresh spreadsheet binding: set the
   `ADMIN_EMAILS` and `ADMIN_SECRET` script properties (Project Settings →
   Script Properties) - optionally also `SHEET_EDITORS` (comma-separated emails
-  allowed to hand-edit protected week/relay tabs; run
-  `applySheetEditorsToProtectedTabs()` once after setting it), then run `setupTriggers()` once to authorize `MailApp`
+  allowed to hand-edit protected week/relay tabs; easiest set from the site's
+  Admin tab "Sheet editors" box, which also adds them to already-protected
+  tabs - the Project Settings panel can fail to save on this project), then run `setupTriggers()` once to authorize `MailApp`
   (also used for the new-player welcome email on signup) and install the
   Wednesday-9:30pm `autoFinalizeWeekly` trigger. It does not install a
   recurring PIN email - the PIN is retrieved on demand from the Admin tab.

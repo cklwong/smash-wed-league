@@ -9,8 +9,9 @@
  *        ADMIN_SECRET  - passphrase organizers type on the site to retrieve an event PIN
  *        SHEET_EDITORS - optional, comma-separated emails that may still edit protected
  *                        week/relay tabs by hand (share the spreadsheet with them as
- *                        Editors too); run applySheetEditorsToProtectedTabs() once after
- *                        setting it so already-protected tabs pick them up
+ *                        Editors too). Easiest to set from the site's Admin tab
+ *                        ("Sheet editors"), which also applies it to already-protected
+ *                        tabs; if set here instead, run applySheetEditorsToProtectedTabs()
  *   2. Run setupTriggers() once (authorizes MailApp - also needed for the
  *      new-player welcome email on signup - and installs the Wednesday
  *      9:30pm auto-finalize/cleanup check, see autoFinalizeWeekly). The PIN
@@ -51,6 +52,8 @@
  *   POST { action:'banPlayer', name, until, secret } -> { ok } (admin passphrase; blocks name from signing up for any week dated on or before until [YYYY-MM-DD] - see activeBanFor(), checked by addJoin)
  *   POST { action:'unbanPlayer', name, secret } -> { ok } (admin passphrase; lifts a ban early)
  *   POST { action:'listBans', secret } -> { ok, bans: [{name, until}, ...] } (admin passphrase; every currently-active ban, soonest-expiring first)
+ *   POST { action:'getSheetEditors', secret } -> { ok, emails } (admin passphrase; the SHEET_EDITORS list)
+ *   POST { action:'setSheetEditors', emails, secret } -> { ok, emails, updated, warnings } (admin passphrase; saves SHEET_EDITORS and adds them to every protected tab)
  *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team relay doubles night or back to singles)
  *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: snake-drafts eligible signups into teamCount teams by standings)
  *   POST { action:'relaySaveTeams', date, teams, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, late adds/guests, removals, captain, positions, playing order)
@@ -120,6 +123,8 @@ function doPost(e) {
     else if (body.action === 'banPlayer') result = banPlayer(body.name, body.until, body.secret);
     else if (body.action === 'unbanPlayer') result = unbanPlayer(body.name, body.secret);
     else if (body.action === 'listBans') result = listBans(body.secret);
+    else if (body.action === 'getSheetEditors') result = getSheetEditors(body.secret);
+    else if (body.action === 'setSheetEditors') result = setSheetEditors(body.emails, body.secret);
     else if (body.action === 'setEventFormat') result = setEventFormat(body.date, body.format, body.rpMode, body.secret);
     else if (body.action === 'drawTeams') result = drawTeams(body.date, body.teamCount, body.redraw, body.secret, body.pin);
     else if (body.action === 'relaySaveTeams') result = relaySaveTeams(body.date, body.teams, body.rev, body.secret, body.pin);
@@ -3007,23 +3012,63 @@ function clearRelayState(dateISO) {
 // SHEET_EDITORS (script property, comma-separated emails) are people who may
 // still edit protected week/relay tabs by hand in Sheets. They must also be
 // shared as Editors on the spreadsheet itself. protectWeekSheet() adds them
-// to every newly protected tab; run applySheetEditorsToProtectedTabs() once
-// from the editor to add them to tabs that are already protected.
+// to every newly protected tab. The site's Admin tab sets the list
+// (setSheetEditors) and applies it to already-protected tabs in one go -
+// the Apps Script Project Settings panel can fail to save properties on a
+// project holding this many, so the site is the reliable way in.
+// applySheetEditorsToProtectedTabs() does the same backfill from the editor.
 
 function sheetEditorEmails() {
   var raw = PropertiesService.getScriptProperties().getProperty('SHEET_EDITORS') || '';
   return raw.split(',').map(function (s) { return s.trim(); }).filter(isEmail);
 }
 
+// Adds every SHEET_EDITORS email to every protected tab. One address that
+// can't be added (typically: not shared on the spreadsheet yet) doesn't stop
+// the rest - it comes back as a warning instead.
 function applySheetEditorsToProtectedTabs() {
   var emails = sheetEditorEmails();
-  if (!emails.length) { Logger.log('SHEET_EDITORS is not set.'); return; }
-  var updated = 0;
+  if (!emails.length) { Logger.log('SHEET_EDITORS is not set.'); return { updated: 0, emails: [], warnings: [] }; }
+  var updated = 0, failed = {};
   SpreadsheetApp.getActiveSpreadsheet().getSheets().forEach(function (sheet) {
     sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (p) {
-      p.addEditors(emails);
+      emails.forEach(function (e) {
+        try { p.addEditor(e); }
+        catch (err) { failed[e] = String(err); }
+      });
       updated++;
     });
   });
-  Logger.log('Added ' + emails.join(', ') + ' to ' + updated + ' protected tab(s).');
+  var warnings = Object.keys(failed).map(function (e) {
+    return 'Could not add ' + e + ' — share the spreadsheet with them as Editor first, then save again.';
+  });
+  Logger.log('Added ' + emails.join(', ') + ' to ' + updated + ' protected tab(s).' + (warnings.length ? ' ' + warnings.join(' ') : ''));
+  return { updated: updated, emails: emails, warnings: warnings };
+}
+
+function getSheetEditors(secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  return { ok: true, emails: sheetEditorEmails() };
+}
+
+// Admin tab: saves the SHEET_EDITORS list (comma/newline separated) and
+// applies it to every already-protected tab right away. An empty list
+// clears the property (existing tabs keep whoever was added before).
+function setSheetEditors(emails, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  var list = String(emails || '').split(/[\s,;]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+  var bad = list.filter(function (e) { return !isEmail(e); });
+  if (bad.length) return { ok: false, error: 'Not a valid email: ' + bad.join(', ') };
+  var seen = {}, clean = [];
+  list.forEach(function (e) { var k = e.toLowerCase(); if (!seen[k]) { seen[k] = true; clean.push(e); } });
+  var props = PropertiesService.getScriptProperties();
+  if (!clean.length) {
+    props.deleteProperty('SHEET_EDITORS');
+    return { ok: true, emails: [], updated: 0, warnings: [] };
+  }
+  props.setProperty('SHEET_EDITORS', clean.join(', '));
+  var applied = applySheetEditorsToProtectedTabs();
+  return { ok: true, emails: clean, updated: applied.updated, warnings: applied.warnings };
 }

@@ -483,6 +483,10 @@
       <div id="noshow-summary" style="margin-top:8px;"></div>
       <p class="note" style="margin:16px 0 8px;">Currently banned players.</p>
       <div id="ban-list">—</div>
+      <p class="note" style="margin:16px 0 8px;"><strong>Sheet editors</strong> — people who can still edit the protected week/relay tabs by hand in Google Sheets. Share the spreadsheet with them as Editor first. One email per line (or comma-separated); saving also adds them to every tab that's already protected.</p>
+      <textarea id="sheet-editors" rows="3" class="week-select" style="max-width:100%; font-family:inherit; resize:vertical;" placeholder="name@gmail.com" aria-label="Sheet editor emails"></textarea>
+      <button type="button" class="btn ghost small" onclick="saveSheetEditors()">Save sheet editors</button>
+      <p class="note" id="sheet-editors-out" style="display:none; margin-top:8px;"></p>
     </div>
   </section>
 
@@ -1110,6 +1114,7 @@ async function fetchEventPin(){
   populateRenameSelect();
   fetchPlayerEmails(secret);
   populateEventFormat();
+  loadSheetEditors();
 }
 
 async function createNextWeek(){
@@ -2649,6 +2654,23 @@ async function relayClearClick(tie, round, seq, done){
   const res = await postAction({action:'relayClearGame', date:WEEK_DATE, tie, round, seq, ...relayCreds()});
   if(!res.ok) alert(res.error || 'Could not update the game — please try again.');
   relayAdopt(res);
+}
+
+// ---- Admin: sheet editors (SHEET_EDITORS script property) ----
+async function loadSheetEditors(){
+  const res = await postAction({action:'getSheetEditors', secret: adminSecret()});
+  if(res.ok) document.getElementById('sheet-editors').value = (res.emails || []).join('\n');
+}
+async function saveSheetEditors(){
+  const out = document.getElementById('sheet-editors-out');
+  out.style.display = 'block'; out.style.color = ''; out.textContent = 'Saving…';
+  const res = await postAction({action:'setSheetEditors', emails: document.getElementById('sheet-editors').value, secret: adminSecret()});
+  if(!res.ok){ out.style.color = 'var(--loss)'; out.textContent = res.error || 'Could not save sheet editors.'; return; }
+  document.getElementById('sheet-editors').value = res.emails.join('\n');
+  out.textContent = res.emails.length
+    ? `Saved ${res.emails.length} editor${res.emails.length===1?'':'s'} — added to ${res.updated} protected tab${res.updated===1?'':'s'}.`
+    : 'Cleared — new tabs won\'t add anyone. (People already added to existing tabs stay until removed in Sheets.)';
+  if(res.warnings && res.warnings.length){ out.style.color = 'var(--loss)'; out.textContent += ' ' + res.warnings.join(' '); }
 }
 
 // ---- Admin: event format (singles vs team relay doubles) ----

@@ -72,7 +72,8 @@
     createdWeeks: [], // ISO dates created via the mock createWeek() action this session
     bans: {}, // lowercased name -> {name, until} - mirrors PLAYER_BANS in gas/Code.gs
     events: {}, // ISO date -> {format:'relay', rpMode} - mirrors EVENT_<date> script properties
-    relay: {}   // ISO date -> {rev, teams, games} - mirrors the "Relay M/D/YY" tab's JSON
+    relay: {},  // ISO date -> {rev, teams, games} - mirrors the "Relay M/D/YY" tab's JSON
+    sheetEditors: [] // mirrors the SHEET_EDITORS script property
   };
   // ?relay=1 starts the sandbox with tonight already set up as a team relay
   // doubles night (otherwise switch it on the Admin tab like the real site).
@@ -747,6 +748,14 @@
       case 'banPlayer': return banPlayer(body.name, body.until);
       case 'unbanPlayer': return unbanPlayer(body.name);
       case 'listBans': return listBans();
+      case 'getSheetEditors': return { ok: true, emails: STATE.sheetEditors };
+      case 'setSheetEditors': { // mirrors setSheetEditors() in gas/Code.gs (no real tabs to protect here)
+        const list = String(body.emails || '').split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+        const bad = list.filter((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+        if (bad.length) return { ok: false, error: 'Not a valid email: ' + bad.join(', ') };
+        STATE.sheetEditors = [...new Map(list.map((e) => [key(e), e])).values()];
+        return { ok: true, emails: STATE.sheetEditors, updated: STATE.sheetEditors.length ? 3 : 0, warnings: [] };
+      }
       case 'setEventFormat': return setEventFormat(body.date, body.format, body.rpMode);
       case 'drawTeams': return drawTeams(body.date, body.teamCount, body.redraw);
       case 'relaySaveTeams': return relaySaveTeams(body.date, body.teams, body.rev);
