@@ -757,6 +757,17 @@ const POOL_LETTERS = ['A','B','C','D'];
 const MIN_PLAYERS = 12;
 let PAD_STATE = {}; // remembers guest-padding checkbox taps across live refreshes
 
+// Who a singles (re)draw seats (Code.gs singlesDrawEligible): the first CAP
+// non-no-show signups, topped up from checked-in players past the cap
+// (walk-ins / waitlisters who turned up) when no-shows freed spots.
+function singlesDrawEligible(signups){
+  const eligible = signups.slice(0, CAP).filter(s=>!s.noShow);
+  for(let i=CAP; i<signups.length && eligible.length<CAP; i++){
+    if(signups[i].checkedIn && !signups[i].noShow) eligible.push(signups[i]);
+  }
+  return eligible;
+}
+
 // Always >= 2 pools: <=16 -> 2, <=21 -> 3, else 4. Extras go to earlier pools.
 function poolSplitSizes(n){
   const k = n<=16 ? 2 : (n<=21 ? 3 : 4);
@@ -848,7 +859,7 @@ function paintSchedule(week, dateISO){
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Signups are open until <strong>noon Pacific</strong> on match day. First ${CAP} in are confirmed — everyone else is on the waitlist.</p>
       <button class="btn small" onclick="showView('join')">Add/remove a player</button>
     </div>`;
-    predrawHtml += generateCard(dateISO, confirmed, admin);
+    predrawHtml += generateCard(dateISO, week.signups, admin);
     predrawHtml += walkInCard(week, admin);
     predrawHtml += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Confirmed (${confirmed.length}/${CAP})</h3>
       <ul class="roster-list">${confirmed.length ? confirmed.map((s,i)=>rosterRow(s,i+1,'confirmed')).join('') : '<li class="empty-row">No signups yet — be the first.</li>'}</ul>
@@ -866,12 +877,16 @@ function paintSchedule(week, dateISO){
     // Alphabetical is easier to scan at the door, but the join-order number
     // (who signed up first / first off the waitlist) still needs to show,
     // so it's captured before the sort rather than derived from position.
-    const checkinList = confirmed.map((s,i)=>({s, joinNum:i+1})).sort((a,b)=>a.s.name.localeCompare(b.s.name));
+    // Confirmed signups plus anyone checked in from past the cap (a walk-in,
+    // or a waitlister who turned up) - they fill no-show spots at a redraw.
+    const checkinList = week.signups.map((s,i)=>({s, joinNum:i+1}))
+      .filter(({s,joinNum})=>joinNum<=CAP || s.checkedIn)
+      .sort((a,b)=>a.s.name.localeCompare(b.s.name));
     checkinHtml += `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in</h3>
       <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">${admin
         ? 'Tap <strong>Check in</strong> as players arrive. A no-show\'s pool spot goes to a Guest; if they turn up before the guest plays, checking them in puts them back.'
         : 'Sign in above to check players in or mark no-shows.'}</p>
-      <ul class="roster-list">${checkinList.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO,admin)).join('')}</ul>
+      <ul class="roster-list">${checkinList.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO,admin).replace('</span><span class="checkin-actions">', joinNum>CAP ? ' <span class="mine-badge">waitlist</span></span><span class="checkin-actions">' : '</span><span class="checkin-actions">')).join('')}</ul>
     </div>`;
     model.pools.forEach(mp=>{ poolsHtml += poolLiveCard(mp, model, admin); });
   }
@@ -945,8 +960,8 @@ function splitPreviewAndPadding(n){
   return {sizes, preview, padOptions};
 }
 
-function generateCard(dateISO, confirmed, admin){
-  const eligible = confirmed.filter(s=>!s.noShow);
+function generateCard(dateISO, signups, admin){
+  const eligible = singlesDrawEligible(signups);
   const n = eligible.length;
   let body;
   if(n < MIN_PLAYERS){
@@ -967,7 +982,7 @@ function generateCard(dateISO, confirmed, admin){
 // redraw (with the same guest-padding options as the initial draw) any time
 // scores haven't started, and call out exactly why one might be needed.
 function poolStatusCard(dateISO, week, confirmed, drawnPools, admin){
-  const eligible = confirmed.filter(s=>!s.noShow);
+  const eligible = singlesDrawEligible(week.signups);
   const crowded = drawnPools.filter(p=>p.players.filter(pl=>isNoShowGuest(pl.name)).length >= 2);
   const seatedNames = new Set(drawnPools.flatMap(p=>p.players.map(pl=>pl.name)));
   const unseated = eligible.filter(s=>!seatedNames.has(s.name));
@@ -1309,7 +1324,9 @@ async function walkInAddClick(){
   if(!res.ok){ alert(res.error || 'Could not add the walk-in — please try again.'); return; }
   if(pick) pick.value = ''; if(inp) inp.value = '';
   if(res.waitlisted){
-    alert(`${res.name} is checked in, but tonight is already full, so they're on the waitlist${isRelayWeek(LAST_WEEK) ? ' — add them to a team from the "not on a team" list after the draw.' : '.'}`);
+    alert(isRelayWeek(LAST_WEEK)
+      ? `${res.name} is checked in, but tonight is already full, so they're on the waitlist — add them to a team from the "not on a team" list after the draw.`
+      : `${res.name} is checked in on the waitlist (tonight is full). They get a pool seat if a confirmed player is marked No show — draw or Redraw pools to seat them.`);
   } else if(res.seated === false){
     alert(`${res.name} is checked in. Pools are already drawn, so use "Redraw pools" to give them a seat.`);
   }
