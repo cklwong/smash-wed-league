@@ -194,10 +194,14 @@
   .relay-game:last-child{border-bottom:none;}
   .relay-game.now{background:var(--amber-tint); border-radius:6px; padding:8px; border-bottom-color:transparent;}
   .relay-game .gnum{font-family:'IBM Plex Mono',monospace; color:var(--text-mute); width:24px; flex-shrink:0; font-size:12px;}
-  .relay-game .match-up{flex:1; min-width:200px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .relay-game .match-up{flex:1; min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto; align-items:center; gap:8px;}
+  .relay-game .match-up.tb{display:flex; flex-wrap:wrap;}
+  .relay-game .match-up:not(.tb) > :first-child{text-align:right;}
   .relay-game .pair{min-width:0;}
-  .relay-game .sc{font-family:'IBM Plex Mono',monospace; font-weight:500; white-space:nowrap;}
-  .relay-game .win{color:var(--win); font-weight:600;}
+  .relay-game .sc{font-family:'IBM Plex Mono',monospace; font-size:16px; font-weight:600; white-space:nowrap; background:var(--ink); color:#fff; border-radius:6px; padding:3px 9px; letter-spacing:.02em;}
+  .relay-game .sc .lose{opacity:.6; font-weight:500;}
+  .relay-game .sc .dash{opacity:.6; margin:0 2px;}
+  .relay-game .pair.win{color:var(--win); font-weight:600;}
   .relay-game .acts{display:flex; gap:6px; align-items:center; flex-wrap:wrap;}
   .round-head{display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin:14px 0 2px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-mute); font-weight:500;}
   .round-head .res{text-transform:none; letter-spacing:0; font-size:12px; color:var(--text-soft);}
@@ -294,14 +298,14 @@
       </div>
       <div id="schedule-relay" style="display:none;">
         <div class="subnav" id="relay-subnav">
-          <button data-rsub="live" class="active">Live</button>
-          <button data-rsub="teams">Teams</button>
           <button data-rsub="checkin">Check-in</button>
-          <button data-rsub="players">Players</button>
+          <button data-rsub="teams">Teams</button>
+          <button data-rsub="live" class="active">Live</button>
+          <button data-rsub="players">Results</button>
         </div>
-        <div id="relay-live" class="subview active"></div>
-        <div id="relay-teams" class="subview"></div>
         <div id="relay-checkin" class="subview"></div>
+        <div id="relay-teams" class="subview"></div>
+        <div id="relay-live" class="subview active"></div>
         <div id="relay-players" class="subview"></div>
       </div>
     </div>
@@ -398,11 +402,11 @@
       </details>
       <details>
         <summary>How are teams formed?</summary>
-        <p>Teams are drawn from the standings "snake" style (1st pick to Team A, 2nd to B, … then back the other way), so every team gets a similar mix. Teams are split as evenly as possible, so a team can have fewer than 6 players. The organizer can move players between teams and add late arrivals or guests. Each team picks a <strong>captain</strong>.</p>
+        <p>Teams are drawn from the checked-in players by standings, "snake" style (1st pick to Team A, 2nd to B, … then back the other way), so every team gets a similar mix. Teams are split as evenly as possible, so a team can have fewer than 6 players. The organizer can move players between teams and add late arrivals (they're signed in at the desk) or guests — a guest plays for a team but doesn't earn ranking points. Each team picks a <strong>captain</strong>.</p>
       </details>
       <details>
         <summary>Who plays with whom?</summary>
-        <p>The captain puts the team in order P1, P2, P3 … and the doubles pairs rotate: <strong>P1+P2, P2+P3, P3+P4, P4+P5, P5+P6 and P6+P1</strong>. With 6 players that's 6 pairs, and everyone plays in exactly 2 of them each round. The captain also decides the order the pairs play in.</p>
+        <p>The captain puts the team in order P1, P2, P3 … and the doubles pairs rotate: <strong>P1+P2, P2+P3, P3+P4, P4+P5, P5+P6 and P6+P1</strong>. With 6 players that's 6 pairs, and everyone plays in exactly 2 of them each round. The captain also decides the order the pairs play in — the site starts every team on an order that spreads out rest, so nobody plays two games in a row (with 5 or more players) or waits too long between games. Round 2 is played in the same order as round 1.</p>
         <p>Between rounds the captain can <strong>change the pairings for round 2</strong> by putting the team in a new P1, P2, P3 … order (and a new playing order) before round 2's first game.</p>
       </details>
       <details>
@@ -1979,7 +1983,21 @@ function relayRpText(ev){
     : 'Exhibition — doesn\'t count toward standings';
 }
 
-function isRelayGuest(n){ return /^guest\b/i.test((n||'').trim()); }
+// Guests: unnamed "Guest 3" placeholders or names added as guests
+// (state.guests) - no signup, no check-in, no rank points (Code.gs isRelayGuest).
+function isRelayGuest(n, state){
+  if(/^guest\b/i.test((n||'').trim())) return true;
+  return !!(state && state.guests && state.guests.some(g=>playerKey(g)===playerKey(n)));
+}
+// Who a draw takes: checked-in players once check-in has started, else every
+// confirmed signup who isn't a no-show (Code.gs drawTeams).
+function relayDrawEligible(confirmed){
+  const anyIn = confirmed.some(s=>s.checkedIn);
+  return confirmed.filter(s=>anyIn ? s.checkedIn : !s.noShow);
+}
+function relayNamesDatalist(){
+  return `<datalist id="relay-player-names">${PLAYERS.map(p=>`<option value="${escAttr(p.name)}"></option>`).join('')}</datalist>`;
+}
 function relayPairs(players){
   const n = players.length;
   if(n < 2) return [];
@@ -1997,11 +2015,34 @@ function relayLineup(team, round){
   players.forEach(p=>{ if(!used.has(playerKey(p))) out.push(p); });
   return out;
 }
+// Rest-spreading default playing order per team size, used for both rounds
+// (Code.gs RELAY_REST_ORDERS).
+const RELAY_REST_ORDERS = {
+  3: [0,1,2],
+  4: [0,2,1,3],
+  5: [0,2,4,1,3],
+  6: [0,2,4,1,5,3],
+  7: [0,2,4,6,1,3,5],
+  8: [0,2,6,4,1,7,3,5]
+};
+function relayDefaultOrder(n){
+  const t = RELAY_REST_ORDERS[n];
+  if(t) return t.slice();
+  const evens = [], odds = [];
+  for(let k=0;k<n;k++) (k%2 ? odds : evens).push(k);
+  return evens.concat(odds);
+}
+function relayValidOrder(o, n){
+  return !!o && o.length===n && new Set(o).size===n && o.every(x=>Number.isInteger(x) && x>=0 && x<n);
+}
+// Round 1: saved order, else the default. Round 2: its own order if the
+// captain set one, else round 1's order (Code.gs relayOrder).
 function relayOrder(team, round){
   const n = relayPairs(relayLineup(team, round)).length;
   const o = team.order && team.order[round];
-  if(o && o.length===n && new Set(o).size===n && o.every(x=>Number.isInteger(x) && x>=0 && x<n)) return o.slice();
-  return Array.from({length:n}, (_,i)=>i);
+  if(relayValidOrder(o, n)) return o.slice();
+  if(round === 2){ const r1 = relayOrder(team, 1); if(r1.length === n) return r1; }
+  return relayDefaultOrder(n);
 }
 function relayTieCount(state){ return Math.floor(state.teams.length/2); }
 function relayFindGame(state, tie, round, seq){
@@ -2065,7 +2106,7 @@ function relayPlayerStats(state, bonus){
   }
   const entry = name=>{
     const k = playerKey(name);
-    if(!byKey[k]) byKey[k] = {name:name.trim(), team:teamOf[k]||'', played:0, won:0, guest:isRelayGuest(name)};
+    if(!byKey[k]) byKey[k] = {name:name.trim(), team:teamOf[k]||'', played:0, won:0, guest:isRelayGuest(name, state)};
     return byKey[k];
   };
   state.teams.forEach(t=>t.players.forEach(entry));
@@ -2177,7 +2218,8 @@ document.getElementById('relay-subnav').addEventListener('click', e=>{
 });
 
 function relayDrawCard(dateISO, week, confirmed, admin, redraw){
-  const eligible = confirmed.filter(s=>!s.noShow).length;
+  const eligible = relayDrawEligible(confirmed).length;
+  const anyIn = confirmed.some(s=>s.checkedIn);
   const counts = (week.event && week.event.teamCounts) || [4, 6];
   if(!RELAY_TEAM_COUNT_PICK || !counts.includes(RELAY_TEAM_COUNT_PICK)) RELAY_TEAM_COUNT_PICK = relayDefaultTeamCount(eligible, counts);
   const k = RELAY_TEAM_COUNT_PICK;
@@ -2192,34 +2234,44 @@ function relayDrawCard(dateISO, week, confirmed, admin, redraw){
   return `<div class="card">${head}
     <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">${redraw
       ? 'No games have started yet, so teams can still be redrawn from scratch — any moves or added players are lost.'
-      : 'Snake draft by standings (1st pick to Team A, 2nd to B, … then back the other way). Confirmed signups minus no-shows are included; you can move, add and remove players afterwards.'}</p>
+      : 'Snake draft by standings (1st pick to Team A, 2nd to B, … then back the other way). Checked-in players are drawn (or every confirmed signup if nobody\'s checked in yet); you can move, add and remove players afterwards.'}</p>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
       <select id="relay-team-count" class="mini-select" style="padding:8px 10px; font-size:13px;" onchange="RELAY_TEAM_COUNT_PICK=Number(this.value); paintSchedule(LAST_WEEK);">
         ${counts.map(c=>`<option value="${c}" ${c===k?'selected':''}>${c} teams</option>`).join('')}
       </select>
       <button class="btn" id="relay-draw-btn" onclick="drawTeamsClick('${dateISO}', ${redraw})" ${eligible < k*2 ? 'disabled' : ''}>${redraw ? 'Redraw teams' : 'Draw teams'}</button>
     </div>
-    <p style="margin:0; font-size:13px; color:var(--text-soft);">${eligible} eligible → ${preview}</p>
+    <p style="margin:0; font-size:13px; color:var(--text-soft);">${eligible} ${anyIn ? 'checked in' : 'confirmed'} → ${preview}</p>
     ${uneven.length ? `<p style="margin:6px 0 0; font-size:13px; color:var(--loss);">Uneven match-up${uneven.length>1?'s':''}: ${uneven.join(', ')} — add a guest or late player to even it out after the draw.</p>` : ''}
     ${eligible < k*2 ? `<p style="margin:6px 0 0; font-size:13px; color:var(--loss);">Need at least ${k*2} players for ${k} teams.</p>` : ''}
   </div>`;
 }
 
 function relayCheckinCard(dateISO, week, confirmed, admin){
-  const list = confirmed.map((s,i)=>({s, joinNum:i+1})).sort((a,b)=>a.s.name.localeCompare(b.s.name));
-  return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in (${confirmed.length}/${weekCap(week)})</h3>
+  // Confirmed signups, plus any walk-in checked in past the cap.
+  const cap = weekCap(week);
+  const list = week.signups.map((s,i)=>({s, joinNum:i+1})).filter(({s,joinNum})=>joinNum<=cap || s.checkedIn)
+    .sort((a,b)=>a.s.name.localeCompare(b.s.name));
+  const walkIn = admin ? `<div class="search-row" style="margin:0 0 10px; gap:6px; flex-wrap:wrap;">
+      <input type="text" id="relay-walkin" list="relay-player-names" placeholder="Walk-in's name" style="min-width:160px;" autocomplete="off">
+      <button class="btn small" onclick="relayWalkInClick()">Add &amp; check in</button>
+    </div>${relayNamesDatalist()}` : '';
+  return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in (${confirmed.length}/${cap})</h3>
     <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">${admin
-      ? 'Tap <strong>Check in</strong> as players arrive. No-shows are left out of the team draw.'
+      ? 'Tap <strong>Check in</strong> as players arrive — only checked-in players are drawn into teams. Someone who didn\'t sign up? Add them here (pick a returning player\'s name from the list so their standings match).'
       : 'Sign in above to check players in or mark no-shows.'}</p>
+    ${walkIn}
     <ul class="roster-list">${list.length ? list.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO,admin)).join('') : '<li class="empty-row">No signups yet.</li>'}</ul>
   </div>`;
 }
 
-// Confirmed, not-no-show signups who aren't on any team - late arrivals
-// after the draw, or someone removed from a team.
+// Players the draw would include (relayDrawEligible - plus any walk-in
+// checked in past the cap) who aren't on a team: late arrivals after the
+// draw, or someone taken off a team.
 function relayUnassignedCard(week, confirmed, state, admin){
   const onTeam = new Set(state.teams.flatMap(t=>t.players.map(playerKey)));
-  const loose = confirmed.filter(s=>!s.noShow && !onTeam.has(playerKey(s.name)));
+  const pool = relayDrawEligible(confirmed).concat(week.signups.slice(weekCap(week)).filter(s=>s.checkedIn));
+  const loose = pool.filter(s=>!onTeam.has(playerKey(s.name)));
   if(!loose.length) return '';
   const rows = loose.map(s=>`<div class="team-row"><span class="rname">${escHtml(s.name)}${statusBadge(s)}</span>
     ${admin ? `<select class="mini-select" aria-label="Add ${escAttr(s.name)} to a team" onchange="if(this.value!=='') relayAddExisting(this.dataset.name, Number(this.value))" data-name="${escAttr(s.name)}">
@@ -2277,7 +2329,8 @@ function relayRoundHtml(v, r, admin, readOnly){
 
 function relayPairHtml(pair, won){
   if(!pair) return '<span class="game-note">— no pair —</span>';
-  const txt = pair.map(escHtml).join(' + ');
+  // Each name stays on one line; on a narrow phone the pair wraps at the "+".
+  const txt = pair.map(n=>`<span style="white-space:nowrap;">${escHtml(n)}</span>`).join(' + ');
   return won ? `<span class="pair win">${txt}</span>` : `<span class="pair">${txt}</span>`;
 }
 
@@ -2299,7 +2352,7 @@ function relayGameRow(v, round, g, admin, readOnly, upNext){
       + (g.done ? `<button class="btn small ghost" onclick="relayClearClick(${call}, true)">Delete</button>` : '')
       + (RELAY_OPEN_EDIT===key ? `<button class="btn small ghost" onclick="RELAY_OPEN_EDIT=null; paintSchedule(LAST_WEEK);">Cancel</button>` : '');
   } else if(g.done){
-    mid = `<span class="sc"><span class="${g.sa>g.sb?'win':''}">${g.sa}</span>–<span class="${g.sb>g.sa?'win':''}">${g.sb}</span></span>`;
+    mid = `<span class="sc" title="Team ${v.a.id} ${g.sa} – ${g.sb} Team ${v.b.id}"><span class="${g.sa>g.sb?'':'lose'}">${g.sa}</span><span class="dash">–</span><span class="${g.sb>g.sa?'':'lose'}">${g.sb}</span></span>`;
     if(admin && !readOnly) acts = `<button class="btn small ghost" onclick="RELAY_OPEN_EDIT='${key}'; paintSchedule(LAST_WEEK);">Edit</button>`;
   } else {
     mid = '<span class="game-note">vs</span>';
@@ -2329,7 +2382,7 @@ function relayTiebreakHtml(v, admin, readOnly){
     <option value="">Team ${team.id} player ${n}…</option>${team.players.map(p=>`<option value="${escAttr(p)}">${escHtml(p)}</option>`).join('')}</select>`;
   return head + `<div class="relay-game now" style="gap:6px;">
     <span class="gnum">TB</span>
-    <span class="match-up">${sel('a', v.a, 1)} + ${sel('a', v.a, 2)} <span class="game-note">vs</span> ${sel('b', v.b, 1)} + ${sel('b', v.b, 2)}</span>
+    <span class="match-up tb">${sel('a', v.a, 1)} + ${sel('a', v.a, 2)} <span class="game-note">vs</span> ${sel('b', v.b, 1)} + ${sel('b', v.b, 2)}</span>
     <span class="acts">
       <span class="score-entry">
         <input type="number" inputmode="numeric" min="0" id="relay-sa-${v.tie}-3-0" placeholder="${v.a.id}">
@@ -2361,7 +2414,7 @@ function relayTeamCard(week, state, ti, admin){
   const rows = t.players.map((p,pi)=>{
     const s = signup[playerKey(p)];
     const badges = (playerKey(p)===playerKey(t.captain) ? ' <span class="mine-badge">captain</span>' : '')
-      + (isRelayGuest(p) ? ' <span class="mine-badge">guest</span>' : '')
+      + (isRelayGuest(p, state) ? ' <span class="mine-badge">guest</span>' : '')
       + (s && s.noShow ? ' <span class="mine-badge ns">No show</span>' : '');
     const tools = admin ? `<span class="tools">
       <button class="icon-btn" title="Move up" onclick="relayMovePos(${ti},${pi},-1)" ${pi===0||r1Locked?'disabled':''}>▲</button>
@@ -2376,9 +2429,9 @@ function relayTeamCard(week, state, ti, admin){
   }).join('');
 
   const addHtml = admin ? `<div class="search-row" style="margin:10px 0 0; gap:6px; flex-wrap:wrap;">
-      <input type="text" id="relay-add-${ti}" placeholder="Late player's name" style="min-width:140px;">
-      <button class="btn small ghost" onclick="relayAddTyped(${ti})">Add</button>
-      <button class="btn small ghost" onclick="relayAddGuest(${ti})">+ Guest</button>
+      <input type="text" id="relay-add-${ti}" list="relay-player-names" placeholder="Late player or guest name" style="min-width:140px;" autocomplete="off">
+      <button class="btn small ghost" title="Signs them up, checks them in and adds them to this team" onclick="relayAddTyped(${ti})">Add player</button>
+      <button class="btn small ghost" title="Adds this name as a guest (no ranking points) — leave the box empty for Guest 1, 2, …" onclick="relayAddGuest(${ti})">+ Guest</button>
     </div>` : '';
 
   const orderHtml = [1,2].map(r=>{
@@ -2394,7 +2447,20 @@ function relayTeamCard(week, state, ti, admin){
         </span>` : '';
       return `<div class="team-row" style="font-size:13px;"><span class="pos">G${k+1}</span><span class="rname"><span class="pool-tag">${posLabel}</span> ${pr.map(escHtml).join(' + ')}</span>${tools}</div>`;
     }).join('');
-    const copyBtn = (admin && r===2 && !locked) ? ` <button class="icon-btn" onclick="relayCopyOrder(${ti})">same as round 1</button>` : '';
+    const n2 = order.length;
+    const note = txt=>` <span class="game-note" style="text-transform:none; letter-spacing:0;">· ${txt}</span>`;
+    let copyBtn;
+    if(r===1){
+      const isDefault = order.join(',') === relayDefaultOrder(n2).join(',');
+      copyBtn = (admin && !locked && !isDefault)
+        ? ` <button class="icon-btn" title="Back to the order that spreads out everyone's rest" onclick="relayRecommendedOrder(${ti})">recommended order</button>`
+        : (isDefault && n2 > 2 ? note('spreads out rest') : '');
+    } else {
+      const own = relayValidOrder(t.order && t.order[2], n2) && t.order[2].join(',') !== relayOrder(t, 1).join(',');
+      copyBtn = own
+        ? (admin && !locked ? ` <button class="icon-btn" title="Play round 2 in round 1's order again" onclick="relayRound2FollowsRound1(${ti})">same as round 1</button>` : note('changed for round 2'))
+        : note('same as round 1');
+    }
     return (r===2 ? relayLineup2Html(t, ti, admin, locked) : '')
       + `<div class="relay-sub">Round ${r} playing order${locked ? ' · locked (round under way)' : ''}${copyBtn}</div>${items || '<p class="game-note">Needs at least 2 players.</p>'}`;
   }).join('');
@@ -2440,7 +2506,7 @@ function relayPlayersCard(state, ev){
       <td class="num-col num">${p.guest || !p.played ? '–' : p.rp}</td>
     </tr>`).join('');
   return `<div class="card">
-    <div class="pool-head"><h3>Players</h3><span class="pool-status ${ranked?'full':''}" ${ranked?'':'style="background:var(--amber-tint); color:var(--amber-deep);"'}>${ranked ? 'Ranked night' : 'Exhibition — not counted'}</span></div>
+    <div class="pool-head"><h3>Results</h3><span class="pool-status ${ranked?'full':''}" ${ranked?'':'style="background:var(--amber-tint); color:var(--amber-deep);"'}>${ranked ? 'Ranked night' : 'Exhibition — not counted'}</span></div>
     <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">Doubles won–lost over the two rounds (the tiebreak game only decides the match). ${ranked ? 'Rank pts' : 'Pts <em>would be</em>'} = doubles won + ${(ev && ev.teamBonus) || 2} for a team win.</p>
     <table class="standings">
       <thead><tr><th style="width:30px;">#</th><th>Player</th><th>Team</th><th class="num-col" style="width:56px;">W–L</th><th class="num-col" style="width:60px;">${ranked ? 'Rank pts' : 'Pts'}</th></tr></thead>
@@ -2497,7 +2563,7 @@ function relayCommitTeams(){
   RELAY_SAVE_CHAIN = RELAY_SAVE_CHAIN.then(async ()=>{
     if(!LAST_WEEK || !LAST_WEEK.relay) return;
     const relay = LAST_WEEK.relay;
-    const res = await postAction({action:'relaySaveTeams', date:WEEK_DATE, teams:relay.teams, rev:relay.rev, ...relayCreds()});
+    const res = await postAction({action:'relaySaveTeams', date:WEEK_DATE, teams:relay.teams, guests:relay.guests||[], rev:relay.rev, ...relayCreds()});
     if(!res.ok){
       alert(res.error || 'Could not save the team change — please try again.');
       relayAdopt(res);
@@ -2538,28 +2604,56 @@ function relayRemove(ti, pi){
   relayResetOrder(t);
   relayCommitTeams();
 }
-function relayAddName(ti, name){
+// Real players added on the night go through the backend (relayAddPlayer):
+// signed up if needed, checked in, and - with a team index - put on that
+// team, so they show on the Check-in tab like everyone else.
+async function relayAddPlayerClick(name, ti, inputEl){
   name = (name||'').trim().slice(0,40);
-  if(!name) return false;
-  const teams = relayTeams();
-  const clash = teams.find(t=>t.players.some(p=>playerKey(p)===playerKey(name)));
-  if(clash){ alert(`${name} is already on Team ${clash.id}.`); return false; }
-  teams[ti].players.push(name);
-  relayResetOrder(teams[ti]);
-  relayCommitTeams();
-  return true;
+  if(!name){ alert('Enter the player\'s name.'); return; }
+  if(ti !== null){
+    const clash = relayTeams().find(t=>t.players.some(p=>playerKey(p)===playerKey(name)));
+    if(clash){ alert(`${name} is already on Team ${clash.id}.`); return; }
+  }
+  if(inputEl) inputEl.value = '';
+  const res = await postAction({action:'relayAddPlayer', date:WEEK_DATE, name, team: ti, ...relayCreds()});
+  if(!res.ok){ alert(res.error || 'Could not add the player — please try again.'); if(inputEl) inputEl.value = name; }
+  else if(res.waitlisted && ti === null){
+    alert(`${res.name} is checked in, but tonight is already full (${RELAY_CAP}), so they're past the draw cut-off — add them to a team from the "not on a team" list after the draw.`);
+  }
+  renderSchedule(true, true); // signups + teams both changed
+}
+function relayWalkInClick(){
+  const inp = document.getElementById('relay-walkin');
+  relayAddPlayerClick(inp ? inp.value : '', null, inp);
 }
 function relayAddTyped(ti){
   const inp = document.getElementById('relay-add-'+ti);
-  if(inp && relayAddName(ti, inp.value)) inp.value = '';
+  relayAddPlayerClick(inp ? inp.value : '', ti, inp);
 }
+// Guests stay team-only (no signup/check-in, no rank points). A typed name
+// becomes a named guest; an empty box gives "Guest 1", "Guest 2", ...
 function relayAddGuest(ti){
-  const used = new Set(relayTeams().flatMap(t=>t.players.map(playerKey)));
-  let n = 1;
-  while(used.has('guest '+n)) n++;
-  relayAddName(ti, 'Guest '+n);
+  const inp = document.getElementById('relay-add-'+ti);
+  const relay = LAST_WEEK.relay, teams = relay.teams;
+  let name = (inp ? inp.value : '').trim().slice(0,40);
+  if(!name){
+    const used = new Set(teams.flatMap(t=>t.players.map(playerKey)));
+    let n = 1;
+    while(used.has('guest '+n)) n++;
+    name = 'Guest '+n;
+  }
+  const clash = teams.find(t=>t.players.some(p=>playerKey(p)===playerKey(name)));
+  if(clash){ alert(`${name} is already on Team ${clash.id}.`); return; }
+  if(LAST_WEEK.signups.some(s=>playerKey(s.name)===playerKey(name))){
+    alert(`${name} signed up for tonight — use "Add player" instead so they're checked in and get ranking points.`); return;
+  }
+  teams[ti].players.push(name);
+  relay.guests = (relay.guests||[]).concat([name]);
+  relayResetOrder(teams[ti]);
+  if(inp) inp.value = '';
+  relayCommitTeams();
 }
-function relayAddExisting(name, ti){ relayAddName(ti, name); }
+function relayAddExisting(name, ti){ relayAddPlayerClick(name, ti, null); }
 function relayMoveOrder(ti, round, k, dir){
   const t = relayTeams()[ti];
   const order = relayOrder(t, round), j = k+dir;
@@ -2580,9 +2674,16 @@ function relayResetLineup2(ti){
   delete relayTeams()[ti].lineup2;
   relayCommitTeams();
 }
-function relayCopyOrder(ti){
+function relayRecommendedOrder(ti){
   const t = relayTeams()[ti];
-  t.order = Object.assign({}, t.order, {2: relayOrder(t, 1)});
+  t.order = Object.assign({}, t.order, {1: relayDefaultOrder(relayPairs(relayLineup(t, 1)).length)});
+  relayCommitTeams();
+}
+function relayRound2FollowsRound1(ti){
+  const t = relayTeams()[ti];
+  const order = Object.assign({}, t.order);
+  delete order[2];
+  t.order = order;
   relayCommitTeams();
 }
 

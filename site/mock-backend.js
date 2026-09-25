@@ -255,7 +255,9 @@
     if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
     const k = Number(teamCount);
     if (!RELAY_TEAM_COUNTS.includes(k)) return { ok: false, error: 'Pick ' + RELAY_TEAM_COUNTS.join(' or ') + ' teams.' };
-    const eligible = STATE.signups.slice(0, RELAY_CAP).filter((s) => !s.noShow);
+    const confirmed = STATE.signups.slice(0, RELAY_CAP);
+    const anyIn = confirmed.some((s) => s.checkedIn);
+    const eligible = confirmed.filter((s) => (anyIn ? s.checkedIn : !s.noShow));
     if (eligible.length < k * 2) return { ok: false, error: 'Only ' + eligible.length + ' eligible players — need at least ' + (k * 2) + ' for ' + k + ' teams.' };
     const st = relayState(date);
     if (st.teams.length) {
@@ -272,11 +274,12 @@
     teams.forEach((t) => { t.captain = t.players[0] || ''; });
     st.teams = teams;
     st.games = [];
+    st.guests = [];
     return relayReply(date, { ok: true });
   }
 
   // Mirrors relaySaveTeams() in gas/Code.gs.
-  function relaySaveTeams(date, teams, rev) {
+  function relaySaveTeams(date, teams, rev, guests) {
     if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
     const st = relayState(date);
     if (!st.teams.length) return relayReply(date, { ok: false, error: 'Draw teams first.' });
@@ -300,14 +303,58 @@
       let lineup2 = Array.isArray(t.lineup2) ? relayLineup(tmp, 2) : null;
       if (lineup2 && lineup2.join('\n') === players.join('\n')) lineup2 = null; // same as round 1
       tmp.lineup2 = lineup2;
-      const order = {};
-      for (let r = 1; r <= RELAY_ROUNDS; r++) order[r] = relayOrder(tmp, r);
+      // Mirrors gas/Code.gs: round 2's order only kept when it differs from round 1's.
+      const order = { 1: relayOrder(tmp, 1) };
+      const o2 = tmp.order[2];
+      const n2 = relayPairs(relayLineup(tmp, 2)).length;
+      if (Array.isArray(o2) && o2.length === n2 && new Set(o2).size === n2 && o2.every((x) => Number.isInteger(x) && x >= 0 && x < n2) && o2.join(',') !== order[1].join(',')) order[2] = o2.slice();
       const cleanTeam = { id: t.id, captain, players, order };
       if (lineup2) cleanTeam.lineup2 = lineup2;
       clean.push(cleanTeam);
     }
+    // Mirrors the guests clean-up in gas/Code.gs relaySaveTeams.
+    const onTeam = {};
+    clean.forEach((t) => t.players.forEach((p) => { onTeam[key(p)] = p; }));
+    const cleanGuests = [];
+    for (const g of (Array.isArray(guests) ? guests : [])) {
+      const k = key(g);
+      if (!k || !onTeam[k] || cleanGuests.some((x) => key(x) === k)) continue;
+      if (STATE.signups.some((s) => key(s.name) === k)) return relayReply(date, { ok: false, error: onTeam[k] + ' is signed up for tonight — add them as a player, not a guest.' });
+      cleanGuests.push(onTeam[k]);
+    }
     st.teams = clean;
+    st.guests = cleanGuests;
     return relayReply(date, { ok: true });
+  }
+
+  // Mirrors relayAddPlayer() in gas/Code.gs: sign up (if needed) + check in,
+  // and add to a team when a team index is given.
+  function relayAddPlayer(date, name, team) {
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
+    name = String(name || '').trim().slice(0, 40);
+    if (!name) return { ok: false, error: "Enter the player's name." };
+    const st = relayState(date);
+    if ((st.guests || []).some((g) => key(g) === key(name))) return { ok: false, error: name + ' is on a team as a guest — take them off first to add them as a player.' };
+    let idx = STATE.signups.findIndex((s) => key(s.name) === key(name));
+    if (idx < 0) {
+      const j = join(date, name, '');
+      if (!j.ok) return j;
+      idx = STATE.signups.length - 1;
+    }
+    name = STATE.signups[idx].name;
+    checkin(name);
+    const position = idx + 1;
+    let result = { ok: true };
+    if (team !== null && team !== undefined && team !== '') {
+      const ti = Number(team);
+      if (!st.teams[ti]) return relayReply(date, { ok: false, error: 'Unknown team.' });
+      const on = st.teams.findIndex((t) => t.players.some((p) => key(p) === key(name)));
+      if (on >= 0 && on !== ti) return relayReply(date, { ok: false, error: name + ' is already on Team ' + st.teams[on].id + '.' });
+      if (on < 0) { st.teams[ti].players.push(name); st.teams[ti].order = {}; }
+    }
+    result = relayReply(date, result);
+    result.position = position; result.waitlisted = position > RELAY_CAP; result.name = name;
+    return result;
   }
 
   // Mirrors relayResolvePairs() in gas/Code.gs.
@@ -758,7 +805,8 @@
       }
       case 'setEventFormat': return setEventFormat(body.date, body.format, body.rpMode);
       case 'drawTeams': return drawTeams(body.date, body.teamCount, body.redraw);
-      case 'relaySaveTeams': return relaySaveTeams(body.date, body.teams, body.rev);
+      case 'relaySaveTeams': return relaySaveTeams(body.date, body.teams, body.rev, body.guests);
+      case 'relayAddPlayer': return relayAddPlayer(body.date, body.name, body.team);
       case 'relayStartGame': return relayStartGame(body.date, body.tie, body.round, body.seq, body.aPair, body.bPair);
       case 'relayScore': return relayScore(body.date, body.tie, body.round, body.seq, body.scoreA, body.scoreB, body.aPair, body.bPair);
       case 'relayClearGame': return relayClearGame(body.date, body.tie, body.round, body.seq);

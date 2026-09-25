@@ -56,7 +56,8 @@
  *   POST { action:'setSheetEditors', emails, secret } -> { ok, emails, updated, warnings } (admin passphrase; saves SHEET_EDITORS and adds them to the protected tabs of today's and upcoming events - never past ones)
  *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team relay doubles night or back to singles)
  *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: snake-drafts eligible signups into teamCount teams by standings)
- *   POST { action:'relaySaveTeams', date, teams, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, late adds/guests, removals, captain, positions, playing order)
+ *   POST { action:'relaySaveTeams', date, teams, guests, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, guests, removals, captain, positions, playing order; guests = names marked as guests)
+ *   POST { action:'relayAddPlayer', date, name, team, secret|pin } -> { ok, relay, position, waitlisted } (relay night: signs a walk-in up and checks them in, and adds them to team index `team` if given)
  *   POST { action:'relayStartGame', date, tie, round, seq, aPair, bPair, secret|pin } -> { ok, relay } (relay night: marks a game on court; aPair/bPair only for the tiebreak, round 3)
  *   POST { action:'relayScore', date, tie, round, seq, scoreA, scoreB, aPair, bPair, secret|pin } -> { ok, relay } (relay night: records or corrects a game's score)
  *   POST { action:'relayClearGame', date, tie, round, seq, secret|pin } -> { ok, relay } (relay night: cancels an on-court game or deletes a recorded score)
@@ -127,7 +128,8 @@ function doPost(e) {
     else if (body.action === 'setSheetEditors') result = setSheetEditors(body.emails, body.secret);
     else if (body.action === 'setEventFormat') result = setEventFormat(body.date, body.format, body.rpMode, body.secret);
     else if (body.action === 'drawTeams') result = drawTeams(body.date, body.teamCount, body.redraw, body.secret, body.pin);
-    else if (body.action === 'relaySaveTeams') result = relaySaveTeams(body.date, body.teams, body.rev, body.secret, body.pin);
+    else if (body.action === 'relaySaveTeams') result = relaySaveTeams(body.date, body.teams, body.rev, body.secret, body.pin, body.guests);
+    else if (body.action === 'relayAddPlayer') result = relayAddPlayer(body.date, body.name, body.team, body.secret, body.pin);
     else if (body.action === 'relayStartGame') result = relayStartGame(body.date, body.tie, body.round, body.seq, body.aPair, body.bPair, body.secret, body.pin);
     else if (body.action === 'relayScore') result = relayScore(body.date, body.tie, body.round, body.seq, body.scoreA, body.scoreB, body.aPair, body.bPair, body.secret, body.pin);
     else if (body.action === 'relayClearGame') result = relayClearGame(body.date, body.tie, body.round, body.seq, body.secret, body.pin);
@@ -2586,7 +2588,7 @@ function writeRelayMirror(sheet, state) {
   rows.push(['TEAMS']);
   rows.push(['Team', 'Captain', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8']);
   state.teams.forEach(function (t) {
-    rows.push(['Team ' + t.id, t.captain || ''].concat(t.players));
+    rows.push(['Team ' + t.id, t.captain || ''].concat(t.players.map(function (p) { return isRelayGuest(p, state) ? p + ' (guest)' : p; })));
     if (t.lineup2) rows.push(['Team ' + t.id + ' round 2', ''].concat(relayLineup(t, 2)));
   });
   rows.push(['']);
@@ -2630,8 +2632,14 @@ function writeRelayMirror(sheet, state) {
 
 // ---- Relay rules (pure - mirrored by relay* helpers in site/index.html) ----
 
-function isRelayGuest(name) {
-  return /^guest\b/i.test((name || '').toString().trim());
+// Guests fill a team spot but aren't league players: no signup, no
+// check-in, no rank points. Either an unnamed "Guest 3" placeholder, or a
+// real name the organizer added as a guest (state.guests).
+function isRelayGuest(name, state) {
+  var n = (name || '').toString().trim();
+  if (/^guest\b/i.test(n)) return true;
+  var k = n.toLowerCase();
+  return !!(state && state.guests && state.guests.some(function (g) { return String(g).trim().toLowerCase() === k; }));
 }
 
 function relayPairs(players) {
@@ -2662,24 +2670,55 @@ function relayLineup(team, round) {
   return out;
 }
 
-// The captain's playing order for a round: a permutation of pair indices,
-// falling back to P1+P2 first, P2+P3 next, ... when unset or stale (e.g.
-// the team's size changed since it was saved).
+// Recommended playing order per team size (pair index k = Pk+1 with Pk+2),
+// played in both rounds, found by brute force over the two rounds back to
+// back to spread each player's rest: no player plays two games in a row
+// (except 3-4 players, where it's unavoidable), including across the
+// round break. E.g. 6 players, both rounds: P1+P2, P3+P4, P5+P6, P2+P3,
+// P6+P1, P4+P5 - every player rests 1-3 games between games. Mirrored in
+// site/index.html.
+var RELAY_REST_ORDERS = {
+  3: [0, 1, 2],
+  4: [0, 2, 1, 3],
+  5: [0, 2, 4, 1, 3],
+  6: [0, 2, 4, 1, 5, 3],
+  7: [0, 2, 4, 6, 1, 3, 5],
+  8: [0, 2, 6, 4, 1, 7, 3, 5]
+};
+
+// Default order for n pairs: the table above, else even pairs then odd.
+function relayDefaultOrder(n) {
+  var t = RELAY_REST_ORDERS[n];
+  if (t) return t.slice();
+  var evens = [], odds = [];
+  for (var k = 0; k < n; k++) (k % 2 ? odds : evens).push(k);
+  return evens.concat(odds);
+}
+
+function relayValidOrder(o, n) {
+  if (!o || o.length !== n) return false;
+  var seen = {};
+  for (var i = 0; i < o.length; i++) {
+    if (typeof o[i] !== 'number' || o[i] < 0 || o[i] >= n || seen[o[i]]) return false;
+    seen[o[i]] = true;
+  }
+  return true;
+}
+
+// The captain's playing order for a round: a permutation of pair indices.
+// Round 1 falls back to the rest-spreading default (relayDefaultOrder) when
+// unset or stale (e.g. the team's size changed since it was saved). Round 2
+// plays in round 1's order - whatever the captain made it - unless the
+// captain gave round 2 its own order.
 function relayOrder(team, round) {
   var n = relayPairs(relayLineup(team, round)).length;
   var o = team.order && team.order[round];
-  var ok = o && o.length === n;
-  if (ok) {
-    var seen = {};
-    for (var i = 0; i < o.length; i++) {
-      if (typeof o[i] !== 'number' || o[i] < 0 || o[i] >= n || seen[o[i]]) { ok = false; break; }
-      seen[o[i]] = true;
-    }
+  if (relayValidOrder(o, n)) return o.slice();
+  if (round === 2) {
+    var r1 = relayOrder(team, 1);
+    if (r1.length === n) return r1;
   }
-  if (ok) return o.slice();
-  var ident = [];
-  for (var k = 0; k < n; k++) ident.push(k);
-  return ident;
+  return relayDefaultOrder(n);
 }
 
 function relayTieCount(state) {
@@ -2779,7 +2818,7 @@ function relayPlayerStats(state) {
   }
   function entry(name) {
     var k = name.trim().toLowerCase();
-    if (!byKey[k]) byKey[k] = { name: name.trim(), team: teamOf[k] || '', played: 0, won: 0, guest: isRelayGuest(name) };
+    if (!byKey[k]) byKey[k] = { name: name.trim(), team: teamOf[k] || '', played: 0, won: 0, guest: isRelayGuest(name, state) };
     return byKey[k];
   }
   state.teams.forEach(function (t) { t.players.forEach(entry); });
@@ -2839,7 +2878,11 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
     return { ok: false, error: 'Pick ' + RELAY_TEAM_COUNTS.join(' or ') + ' teams.' };
   }
   var data = getWeekSheet(dateISO).getDataRange().getValues();
-  var eligible = parseSignups(data).slice(0, RELAY_CAP).filter(function (s) { return !s.noShow; });
+  // Checked-in players only, once check-in has started; before that (e.g. a
+  // test draw ahead of the night) every confirmed signup who isn't a no-show.
+  var confirmed = parseSignups(data).slice(0, RELAY_CAP);
+  var anyCheckedIn = confirmed.some(function (s) { return s.checkedIn; });
+  var eligible = confirmed.filter(function (s) { return anyCheckedIn ? s.checkedIn : !s.noShow; });
   if (eligible.length < teamCount * 2) {
     return { ok: false, error: 'Only ' + eligible.length + ' eligible players — need at least ' + (teamCount * 2) + ' for ' + teamCount + ' teams.' };
   }
@@ -2863,6 +2906,7 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
     }
     state.teams = teams;
     state.games = [];
+    state.guests = [];
     return { ok: true };
   });
 }
@@ -2872,10 +2916,12 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
 // edits a local copy and posts every team back. rev guards against two
 // devices overwriting each other's edits. Already-recorded games keep the
 // names they were played with; changes only affect games not yet started.
-function relaySaveTeams(dateISO, teams, rev, secret, pin) {
+function relaySaveTeams(dateISO, teams, rev, secret, pin, guests) {
   var g = relayGuard(dateISO, secret, pin);
   if (!g.ok) return g;
   if (!Array.isArray(teams)) return { ok: false, error: 'Missing teams.' };
+  var signupKeys = {};
+  parseSignups(getWeekSheet(dateISO).getDataRange().getValues()).forEach(function (s) { signupKeys[s.name.toLowerCase()] = true; });
   return updateRelayState(dateISO, function (state) {
     if (!state.teams.length) return { ok: false, error: 'Draw teams first.' };
     if (Number(rev) !== state.rev) return { ok: false, stale: true, error: 'Teams were changed on another device — showing the latest now; please redo your change.' };
@@ -2901,15 +2947,80 @@ function relaySaveTeams(dateISO, teams, rev, secret, pin) {
       var lineup2 = Array.isArray(t.lineup2) ? relayLineup(tmp, 2) : null;
       if (lineup2 && lineup2.join('\n') === players.join('\n')) lineup2 = null; // same as round 1
       tmp.lineup2 = lineup2;
-      var order = {};
-      for (var r = 1; r <= RELAY_ROUNDS; r++) order[r] = relayOrder(tmp, r);
+      // Round 2's order is only kept when the captain set one that differs
+      // from round 1 - otherwise it follows round 1 (see relayOrder).
+      var order = { 1: relayOrder(tmp, 1) };
+      var o2 = tmp.order[2];
+      if (relayValidOrder(o2, relayPairs(relayLineup(tmp, 2)).length) && o2.join(',') !== order[1].join(',')) order[2] = o2.slice();
       var cleanTeam = { id: t.id, captain: captain, players: players, order: order };
       if (lineup2) cleanTeam.lineup2 = lineup2;
       clean.push(cleanTeam);
     }
+    // Guests: only names still on a team, and never a signed-up player.
+    var onTeam = {};
+    clean.forEach(function (t) { t.players.forEach(function (p) { onTeam[p.toLowerCase()] = p; }); });
+    var cleanGuests = [], gSeen = {};
+    for (var gi = 0; gi < (Array.isArray(guests) ? guests.length : 0); gi++) {
+      var gk = String(guests[gi] || '').trim().toLowerCase();
+      if (!gk || gSeen[gk] || !onTeam[gk]) continue;
+      if (signupKeys[gk]) return { ok: false, error: onTeam[gk] + ' is signed up for tonight — add them as a player, not a guest.' };
+      gSeen[gk] = true;
+      cleanGuests.push(onTeam[gk]);
+    }
     state.teams = clean;
+    state.guests = cleanGuests;
     return { ok: true };
   });
+}
+
+// Adds someone on the night: signs them up (addJoin) if they aren't on the
+// list yet, checks them in, and - with a team index - puts them on that
+// team. So every real player on a team is also on the signup/check-in list
+// (guests are added through relaySaveTeams instead). waitlisted means they
+// landed past RELAY_CAP, so a (re)draw won't pick them up - add them to a
+// team directly.
+function relayAddPlayer(dateISO, name, teamIndex, secret, pin) {
+  var g = relayGuard(dateISO, secret, pin);
+  if (!g.ok) return g;
+  name = String(name || '').trim().slice(0, 40);
+  if (!name) return { ok: false, error: 'Enter the player\'s name.' };
+  if (isRelayGuest(name, getRelayState(dateISO))) return { ok: false, error: name + ' is on a team as a guest — take them off first to add them as a player.' };
+  var signups = parseSignups(getWeekSheet(dateISO).getDataRange().getValues());
+  var existing = findSignup(signups, name);
+  var position;
+  if (existing) {
+    name = existing.name;
+    position = signups.indexOf(existing) + 1;
+  } else {
+    var joined = addJoin(dateISO, name, '');
+    if (!joined.ok) return joined;
+    position = joined.position;
+  }
+  var ci = setCheckin(dateISO, name, secret, pin);
+  if (!ci.ok) return ci;
+  var result;
+  if (teamIndex === null || teamIndex === undefined || teamIndex === '') {
+    result = { ok: true, relay: getRelayState(dateISO) };
+  } else {
+    var ti = Number(teamIndex);
+    result = updateRelayState(dateISO, function (state) {
+      if (!state.teams[ti]) return { ok: false, error: 'Unknown team.' };
+      var key = name.toLowerCase();
+      for (var i = 0; i < state.teams.length; i++) {
+        var hit = state.teams[i].players.some(function (p) { return p.toLowerCase() === key; });
+        if (hit && i === ti) return { ok: true, unchanged: true };
+        if (hit) return { ok: false, error: name + ' is already on Team ' + state.teams[i].id + '.' };
+      }
+      state.teams[ti].players.push(name);
+      state.teams[ti].order = {}; // pair indices changed - back to P1+P2 first
+      return { ok: true };
+    });
+  }
+  bustWeekCache(dateISO);
+  result.position = position;
+  result.waitlisted = position > RELAY_CAP;
+  result.name = name;
+  return result;
 }
 
 // Resolves which pairs play a (tie, round, seq) game: scheduled from the

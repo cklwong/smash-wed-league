@@ -133,12 +133,19 @@ Google Apps Script file, edited directly.
   never in the weekly tab's pool geometry. The site's This week page renders
   relay nights via `paintRelay` in `index.html`; the pure relay rules
   (`relayLineup`/`relayPairs`/`relayOrder`/`relayTieView`/`relayPlayerStats`;
-  a team's optional `lineup2` holds the captain's round-2 positions) exist in both
+  a team's optional `lineup2` holds the captain's round-2 positions; unset
+  round-1 playing orders default to `RELAY_REST_ORDERS`, a per-team-size
+  table that spreads each player's rest across both rounds, and round 2
+  plays in round 1's order unless given its own `order[2]`) exist in both
   `Code.gs` and `index.html` and must stay in sync (the mock reuses the
   page's copies). Singles-only actions (`generatePools`, `startMatch`,
   `recordScore`, `editScore`, `cancelMatch`) refuse on relay dates. Ranking
   points per relay night: exhibition (nothing written to Rankings) or ranked
   (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label `T<team>`).
+  The team draw takes checked-in players once check-in has started. Walk-ins
+  and late players are added through `relayAddPlayer` (signs them up + checks
+  them in, optionally onto a team); guests (named, or "Guest N") are
+  team-only, listed in the relay state's `guests`, and never get rank points.
   Test with `site/index.html?mock=1&relay=1`.
 - **One-time environment setup** on a fresh spreadsheet binding: set the
   `ADMIN_EMAILS` and `ADMIN_SECRET` script properties (Project Settings →
