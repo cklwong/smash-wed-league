@@ -165,12 +165,11 @@ function getWeekSheet(dateISO) {
 }
 
 // Column A is the signup list, in order, down to the first truly blank row.
-// "Max limit (24ppl)" / "Wait List Below" are inline labels the organizer drops
-// into that same column - they're not people and must be skipped, not treated
-// as the end of the list, since real waitlisted names continue after them.
-// Past the first blank row the sheet reuses column A for a stray rankings copy
-// (a "Sorted Name" header at A33) - a long relay-night list can run into it,
-// so that header is skipped like the inline labels (isSignupLabel).
+// Older tabs (from when the list was counted by hand) still carry inline
+// labels in that column - "Max limit (24ppl)" / "Wait List Below" - and a
+// stray "Sorted Name"/"Sorted Rank" rankings copy below the list. New tabs
+// don't (see clearSignupsForNewWeek), but past weeks keep them, so they're
+// still skipped here rather than treated as people or as the end of the list.
 function isSignupLabel(name) {
   return /max limit/i.test(name) || /wait list/i.test(name) || /^sorted (name|rank)$/i.test(name);
 }
@@ -738,8 +737,8 @@ function addJoin(dateISO, name, contact) {
   var data = sheet.getDataRange().getValues();
 
   // Position is the count of real signups already parsed (labels skipped),
-  // not derived from the raw row number - inline labels like "Max limit
-  // (24ppl)" would otherwise inflate it.
+  // not derived from the raw row number - an older tab's inline labels like
+  // "Max limit (24ppl)" would otherwise inflate it.
   var existing = parseSignups(data);
   if (findSignup(existing, name)) return { ok: false, error: 'Already signed up' };
   var position = existing.length + 1;
@@ -1164,20 +1163,90 @@ function addDaysISO(dateISO, days) {
   return y + '-' + (mo < 10 ? '0' : '') + mo + '-' + (da < 10 ? '0' : '') + da;
 }
 
-// Wipes every real signup name, status, and contact from a freshly
-// duplicated week tab, leaving the organizer's inline template labels
-// ("Max limit (24ppl)", "Wait List Below") in place - same skip rule
-// parseSignups() uses to tell labels from real signups.
+// Wipes the whole signup section of a freshly duplicated week tab - every
+// name, status, contact and no-show guest label, plus the hand-counting
+// labels ("Max limit (24ppl)", "Wait List Below") older tabs carried: the
+// site enforces the cap and waitlist by position now. Also drops the stray
+// "Sorted Name"/"Sorted Rank" copy below the list (clearStraySortedBlock).
 function clearSignupsForNewWeek(sheet) {
   var lastRow = sheet.getLastRow();
   for (var r = 2; r <= lastRow; r++) {
     var name = (sheet.getRange(r, 1).getValue() || '').toString().trim();
     if (!name) break; // first truly blank row ends the signup section
-    if (isSignupLabel(name)) continue;
     sheet.getRange(r, 1).clearContent();
     sheet.getRange(r, 2).clearContent();
     sheet.getRange(r, CONTACT_COL).clearContent();
+    sheet.getRange(r, NOSHOW_GUEST_COL).clearContent();
   }
+  clearStraySortedBlock(sheet);
+}
+
+// Older week tabs keep a leftover rankings copy in columns A/B below the
+// signup list: a "Sorted Name"/"Sorted Rank" header (A33 in the template),
+// sometimes with a name/rank list under it. Nothing reads it - standings
+// come from the Rankings tab's own Sorted Name/Rank columns, which this
+// never touches - and a long signup list would run into it. Clears the
+// header and everything under it down to the next blank A cell.
+function clearStraySortedBlock(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  var colA = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  var start = -1;
+  for (var i = 0; i < colA.length; i++) {
+    if (/^sorted name$/i.test((colA[i][0] || '').toString().trim())) { start = i; break; }
+  }
+  if (start === -1) return 0;
+  var end = start + 1;
+  while (end < colA.length && (colA[end][0] || '').toString().trim()) end++;
+  sheet.getRange(start + 2, 1, end - start, 2).clearContent();
+  return end - start;
+}
+
+// Removes the hand-counting labels (and a "Sorted Name"/"Sorted Rank" row
+// a long list may have run into) from a tab's signup section, shifting the
+// rows below up - same column shift removeJoin uses - so the list stays
+// contiguous (parseSignups stops at the first blank row) and every
+// signup's order, status, contact and no-show guest label are preserved.
+function compactSignupList(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  var cols = [1, 2, CONTACT_COL, NOSHOW_GUEST_COL];
+  var blocks = cols.map(function (c) { return sheet.getRange(2, c, lastRow - 1, 1).getValues(); });
+  var end = 0;
+  while (end < blocks[0].length && (blocks[0][end][0] || '').toString().trim()) end++;
+  var keep = [];
+  for (var i = 0; i < end; i++) {
+    if (!isSignupLabel((blocks[0][i][0] || '').toString().trim())) keep.push(i);
+  }
+  var removed = end - keep.length;
+  if (!removed) return 0;
+  cols.forEach(function (c, ci) {
+    var vals = keep.map(function (k) { return [blocks[ci][k][0]]; });
+    while (vals.length < end) vals.push(['']);
+    sheet.getRange(2, c, end, 1).setValues(vals);
+  });
+  return removed;
+}
+
+// One-time cleanup, run from the Apps Script editor after deploying: strips
+// the hand-counting labels and the stray "Sorted Name" block from every week
+// tab dated today or later (e.g. a tab created before this change). Past
+// weeks are left exactly as they were.
+function removeSignupLabelsFromUpcomingWeeks() {
+  var today = Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd');
+  var log = [];
+  SpreadsheetApp.getActiveSpreadsheet().getSheets().forEach(function (sheet) {
+    var iso = headerToISODate(sheet.getName());
+    if (!iso || iso < today) return;
+    var labels = compactSignupList(sheet);
+    var sorted = clearStraySortedBlock(sheet);
+    if (labels || sorted) {
+      bustWeekCache(iso);
+      log.push(sheet.getName() + ': removed ' + labels + ' label row(s), ' + sorted + ' stray sorted row(s)');
+    }
+  });
+  Logger.log(log.length ? log.join('\n') : 'No upcoming week tabs needed cleaning.');
+  return log;
 }
 
 // Finds the most recently dated weekly tab (by parsing every sheet name as

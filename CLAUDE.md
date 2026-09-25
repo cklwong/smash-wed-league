@@ -116,6 +116,15 @@ Google Apps Script file, edited directly.
   what a finalize would write without touching the sheet) or
   `runFinalizeDate()` (runs it for real). `fixAvgFormulas()` force-rewrites
   the Rankings Avg column if its formulas get mangled.
+- **Signup column A**: new week tabs (`createWeek` → `clearSignupsForNewWeek`)
+  start with an empty signup list - no "Max limit (24ppl)"/"Wait List Below"
+  labels and no stray "Sorted Name"/"Sorted Rank" copy below it; the site
+  enforces the cap/waitlist by position. Past tabs still have them, so
+  `parseSignups` keeps skipping them (`isSignupLabel`). Tabs already created
+  before this change are cleaned by running
+  `removeSignupLabelsFromUpcomingWeeks()` once from the editor (only tabs
+  dated today or later; it shifts rows up so the list stays contiguous).
+  The Rankings tab's own Sorted Name/Rank columns are unrelated and stay.
 - **Team relay doubles nights**: any date can be switched from singles to a
   team relay doubles night on the Admin tab (`setEventFormat`, stored as an
   `EVENT_<YYYY-MM-DD>` script property; no property = singles, so singles
