@@ -2471,7 +2471,7 @@ function listEventFormats() {
 }
 
 function relayNightError() {
-  return { ok: false, error: 'This is a team relay night — use the team relay desk on the This week page.' };
+  return { ok: false, error: 'This is a doubles (team relay) night — use the team relay desk on the This week page.' };
 }
 
 function bustWeekCache(dateISO) {
@@ -2578,7 +2578,10 @@ function writeRelayMirror(sheet, state) {
   rows.push(['']);
   rows.push(['TEAMS']);
   rows.push(['Team', 'Captain', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8']);
-  state.teams.forEach(function (t) { rows.push(['Team ' + t.id, t.captain || ''].concat(t.players)); });
+  state.teams.forEach(function (t) {
+    rows.push(['Team ' + t.id, t.captain || ''].concat(t.players));
+    if (t.lineup2) rows.push(['Team ' + t.id + ' round 2', ''].concat(relayLineup(t, 2)));
+  });
   rows.push(['']);
   rows.push(['GAMES']);
   rows.push(['Tie', 'Round', 'Game', 'Pair (first team)', 'Score', 'Pair (second team)', 'Result']);
@@ -2633,11 +2636,30 @@ function relayPairs(players) {
   return out;
 }
 
+// A team's positions P1..Pn for a round. Round 1 is the team list itself;
+// round 2 uses the captain's separate round-2 lineup (lineup2) when one is
+// set, so pairings can change between rounds. lineup2 is reconciled with the
+// current roster: names no longer on the team drop out, new ones are
+// appended at the end.
+function relayLineup(team, round) {
+  var players = team.players || [];
+  if (round !== 2 || !Array.isArray(team.lineup2)) return players.slice();
+  var byKey = {};
+  players.forEach(function (p) { byKey[p.toLowerCase()] = p; });
+  var out = [], used = {};
+  team.lineup2.forEach(function (n) {
+    var k = String(n || '').trim().toLowerCase();
+    if (byKey[k] && !used[k]) { out.push(byKey[k]); used[k] = true; }
+  });
+  players.forEach(function (p) { if (!used[p.toLowerCase()]) out.push(p); });
+  return out;
+}
+
 // The captain's playing order for a round: a permutation of pair indices,
 // falling back to P1+P2 first, P2+P3 next, ... when unset or stale (e.g.
 // the team's size changed since it was saved).
 function relayOrder(team, round) {
-  var n = relayPairs(team.players || []).length;
+  var n = relayPairs(relayLineup(team, round)).length;
   var o = team.order && team.order[round];
   var ok = o && o.length === n;
   if (ok) {
@@ -2677,7 +2699,7 @@ function relayTieView(state, tie) {
   var uneven = ta.players.length !== tb.players.length;
   var rounds = [];
   for (var r = 1; r <= RELAY_ROUNDS; r++) {
-    var pa = relayPairs(ta.players), pb = relayPairs(tb.players);
+    var pa = relayPairs(relayLineup(ta, r)), pb = relayPairs(relayLineup(tb, r));
     var oa = relayOrder(ta, r), ob = relayOrder(tb, r);
     var count = Math.max(pa.length, pb.length);
     state.games.forEach(function (g) { if (g.tie === tie && g.round === r && g.seq + 1 > count) count = g.seq + 1; });
@@ -2789,7 +2811,7 @@ function computeRelayResults(state) {
 function relayGuard(dateISO, secret, pin) {
   var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
-  if (!isRelayDate(dateISO)) return { ok: false, error: dateISO + ' is not a team relay night.' };
+  if (!isRelayDate(dateISO)) return { ok: false, error: dateISO + ' is not a doubles (team relay) night.' };
   if (!getWeekSheet(dateISO)) return { ok: false, error: 'No tab exists for ' + dateISO };
   return { ok: true };
 }
@@ -2839,7 +2861,7 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
 }
 
 // Saves the organizer's team edits (moves, late adds, guests, removals,
-// captain, P1..Pn positions, per-round playing order) as a whole - the site
+// captain, P1..Pn positions, round-2 pairings, per-round playing order) as a whole - the site
 // edits a local copy and posts every team back. rev guards against two
 // devices overwriting each other's edits. Already-recorded games keep the
 // names they were played with; changes only affect games not yet started.
@@ -2868,10 +2890,15 @@ function relaySaveTeams(dateISO, teams, rev, secret, pin) {
       }
       var captain = String(t.captain || '').trim();
       if (players.map(function (p) { return p.toLowerCase(); }).indexOf(captain.toLowerCase()) === -1) captain = '';
+      var tmp = { players: players, order: t.order || {}, lineup2: t.lineup2 };
+      var lineup2 = Array.isArray(t.lineup2) ? relayLineup(tmp, 2) : null;
+      if (lineup2 && lineup2.join('\n') === players.join('\n')) lineup2 = null; // same as round 1
+      tmp.lineup2 = lineup2;
       var order = {};
-      var tmp = { players: players, order: t.order || {} };
       for (var r = 1; r <= RELAY_ROUNDS; r++) order[r] = relayOrder(tmp, r);
-      clean.push({ id: t.id, captain: captain, players: players, order: order });
+      var cleanTeam = { id: t.id, captain: captain, players: players, order: order };
+      if (lineup2) cleanTeam.lineup2 = lineup2;
+      clean.push(cleanTeam);
     }
     state.teams = clean;
     return { ok: true };

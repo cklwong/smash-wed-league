@@ -322,7 +322,7 @@
       <p id="join-sub">Loading…</p>
     </div>
     <div class="card" style="max-width:440px;">
-      <p class="note" style="margin:0 0 16px;">Smash charges $5/person for court rental, and please bring 2 good quality birds for league play.</p>
+      <p class="note" style="margin:0 0 16px;">Smash charges $5/person for court rental, and please bring 2 good quality birds for league play. New here? The <a href="#" onclick="showFaq(); return false;">FAQ</a> explains the weekly singles league and the monthly doubles (team relay) night.</p>
       <form id="join-form">
         <div class="field">
           <label>Which Wednesday?</label>
@@ -368,7 +368,7 @@
   <section id="view-faq" class="view">
     <div class="page-head">
       <h2>FAQ</h2>
-      <p>How Smash Wed works — the weekly singles league and the monthly team relay doubles night.</p>
+      <p>How Smash Wed works — the weekly singles league and the monthly doubles (team relay) night.</p>
     </div>
     <div class="card faq">
       <h3>Singles league <span class="event-tag">every Wednesday</span></h3>
@@ -390,11 +390,11 @@
         <p>Players tied on average are separated by rank points in the most recent week they all played, then by their most recent head-to-head result. Anyone still tied shares the rank.</p>
       </details>
     </div>
-    <div class="card faq">
-      <h3>Team relay doubles <span class="event-tag">last Wednesday of the month</span></h3>
+    <div class="card faq" id="faq-relay">
+      <h3>Doubles (team relay) <span class="event-tag">last Wednesday of the month</span></h3>
       <details>
         <summary>What is it?</summary>
-        <p>Once a month the singles league takes a break for a team night. Everyone who signs up is split into <strong>4 or 6 teams</strong> (up to 36 players), and teams play doubles relays against each other. Sign up on the <strong>Join</strong> tab the same way — relay nights are labelled there.</p>
+        <p>Once a month the singles league takes a break for a team night. Everyone who signs up is split into <strong>4 or 6 teams</strong> (up to 36 players), and teams play doubles relays against each other. Sign up on the <strong>Join</strong> tab the same way — doubles (team relay) nights are labelled there.</p>
       </details>
       <details>
         <summary>How are teams formed?</summary>
@@ -403,6 +403,7 @@
       <details>
         <summary>Who plays with whom?</summary>
         <p>The captain puts the team in order P1, P2, P3 … and the doubles pairs rotate: <strong>P1+P2, P2+P3, P3+P4, P4+P5, P5+P6 and P6+P1</strong>. With 6 players that's 6 pairs, and everyone plays in exactly 2 of them each round. The captain also decides the order the pairs play in.</p>
+        <p>Between rounds the captain can <strong>change the pairings for round 2</strong> by putting the team in a new P1, P2, P3 … order (and a new playing order) before round 2's first game.</p>
       </details>
       <details>
         <summary>How does a match between two teams work?</summary>
@@ -445,12 +446,12 @@
       <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Organizer tools</h3>
       <p class="note" style="margin:0 0 8px;">Duplicate the most recent week's tab as a new blank tab one week later — pool grids and formatting carried over, signups/draw/scores wiped.</p>
       <button type="button" class="btn ghost small" onclick="createNextWeek()">Create next week</button>
-      <p class="note" style="margin:12px 0 8px;">Event format — make a date a <strong>team relay doubles</strong> night (planned for the last Wednesday of each month) or keep it a regular singles night, and pick whether a relay night counts toward the standings.</p>
+      <p class="note" style="margin:12px 0 8px;">Event format — make a date a <strong>doubles (team relay)</strong> night (planned for the last Wednesday of each month) or keep it a regular singles night, and pick whether a relay night counts toward the standings.</p>
       <div id="event-format-box">
         <select id="ef-date" class="week-select" aria-label="Event date" onchange="syncEventFormatForm()"></select>
         <select id="ef-format" class="week-select" aria-label="Event format" onchange="syncEventFormatForm(true)">
           <option value="singles">Singles league (regular)</option>
-          <option value="relay">Team relay doubles</option>
+          <option value="relay">Doubles (team relay)</option>
         </select>
         <select id="ef-rp" class="week-select" aria-label="Ranking points">
           <option value="exhibition">Exhibition — no ranking points</option>
@@ -723,6 +724,20 @@ function showView(name){
   if(name==='admin') renderAdmin();
 }
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click', ()=>showView(b.dataset.view)));
+// Opens the FAQ tab, optionally jumping to one section (e.g. 'faq-relay')
+// with its questions expanded.
+function showFaq(sectionId){
+  showView('faq');
+  const nb = document.querySelector('nav button[data-view="faq"]');
+  if(nb) nb.scrollIntoView({block:'nearest', inline:'center'});
+  const sec = sectionId && document.getElementById(sectionId);
+  if(sec){
+    sec.querySelectorAll('details').forEach(d=>{ d.open = true; });
+    sec.scrollIntoView({block:'start'});
+  } else {
+    window.scrollTo(0, 0);
+  }
+}
 document.getElementById('standings-search').addEventListener('input', e=>renderStandings(e.target.value));
 
 const POOL_CAPACITY = {A:9, B:8, C:7, D:7};
@@ -1628,7 +1643,7 @@ async function renderHistory(){
   sel.innerHTML = dates.map(d=>{
     const f = WEEK_FORMATS[d];
     const tag = f && f.format==='relay'
-      ? ' · team relay' + (f.rpMode==='ranked' ? (pending.includes(d) ? ' · not yet finalized' : '') : ' (exhibition)')
+      ? ' · doubles (team relay)' + (f.rpMode==='ranked' ? (pending.includes(d) ? ' · not yet finalized' : '') : ' (exhibition)')
       : (pending.includes(d) ? ' · not yet finalized' : '');
     return `<option value="${d}">Wed, ${fmtDateFull(d)}${tag}</option>`;
   }).join('');
@@ -1966,8 +1981,19 @@ function relayPairs(players){
   if(n === 2) return [[players[0], players[1]]];
   return players.map((p,i)=>[p, players[(i+1)%n]]);
 }
+// Positions P1..Pn for a round: the team list for round 1, the captain's
+// round-2 lineup (lineup2) for round 2 when set - reconciled with the roster.
+function relayLineup(team, round){
+  const players = team.players || [];
+  if(round !== 2 || !Array.isArray(team.lineup2)) return players.slice();
+  const byKey = {}, used = new Set(), out = [];
+  players.forEach(p=>{ byKey[playerKey(p)] = p; });
+  team.lineup2.forEach(n=>{ const k = playerKey(n); if(byKey[k] && !used.has(k)){ out.push(byKey[k]); used.add(k); } });
+  players.forEach(p=>{ if(!used.has(playerKey(p))) out.push(p); });
+  return out;
+}
 function relayOrder(team, round){
-  const n = relayPairs(team.players||[]).length;
+  const n = relayPairs(relayLineup(team, round)).length;
   const o = team.order && team.order[round];
   if(o && o.length===n && new Set(o).size===n && o.every(x=>Number.isInteger(x) && x>=0 && x<n)) return o.slice();
   return Array.from({length:n}, (_,i)=>i);
@@ -1982,7 +2008,7 @@ function relayTieView(state, tie){
   const uneven = ta.players.length !== tb.players.length;
   const rounds = [];
   for(let r=1; r<=RELAY_ROUNDS; r++){
-    const pa = relayPairs(ta.players), pb = relayPairs(tb.players);
+    const pa = relayPairs(relayLineup(ta, r)), pb = relayPairs(relayLineup(tb, r));
     const oa = relayOrder(ta, r), ob = relayOrder(tb, r);
     let count = Math.max(pa.length, pb.length);
     state.games.forEach(g=>{ if(g.tie===tie && g.round===r && g.seq+1 > count) count = g.seq+1; });
@@ -2079,11 +2105,11 @@ function paintRelay(week, dateISO){
   const waitlist = week.signups.slice(cap);
   const admin = hasRunAccess();
   const drawn = state.teams.length > 0;
-  document.getElementById('schedule-sub').textContent = `Wed, ${fmtDate(dateISO)} · team relay doubles night`;
+  document.getElementById('schedule-sub').textContent = `Wed, ${fmtDate(dateISO)} · doubles (team relay) night`;
 
   const bannerHtml = `<div class="session-banner">
-    <div><div class="date">Wed, ${fmtDate(dateISO)} · Team Relay Doubles</div>
-    <div class="meta">${escHtml(relayRpText(ev))} · <a href="#" onclick="showView('faq'); return false;" style="color:#fff;">how it works</a></div></div>
+    <div><div class="date">Wed, ${fmtDate(dateISO)} · Doubles (team relay)</div>
+    <div class="meta">${escHtml(relayRpText(ev))} · <a href="#" onclick="showFaq('faq-relay'); return false;" style="color:#fff;">how it works</a></div></div>
     <div style="display:flex; gap:8px;">
       <div class="cap-pill"><div class="n">${confirmed.length}/${cap}</div><div class="l">Confirmed</div></div>
       ${drawn ? `<div class="cap-pill"><div class="n">${state.teams.length}</div><div class="l">Teams</div></div>`
@@ -2095,7 +2121,7 @@ function paintRelay(week, dateISO){
   let liveHtml = '', teamsHtml = '', checkinHtml = '', playersHtml = '';
   if(!drawn){
     predrawHtml = `<div class="card my-panel">
-      <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Tonight is a <strong>team relay doubles</strong> night. Signups are open until <strong>noon Pacific</strong>; the first ${cap} are confirmed and teams are drawn from the standings at check-in.</p>
+      <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Tonight is a <strong>doubles (team relay)</strong> night. Signups are open until <strong>noon Pacific</strong>; the first ${cap} are confirmed and teams are drawn from the standings at check-in.</p>
       <button class="btn small" onclick="showView('join')">Add/remove a player</button>
     </div>`;
     predrawHtml += relayDrawCard(dateISO, week, confirmed, admin, false);
@@ -2313,7 +2339,7 @@ function relayTiebreakHtml(v, admin, readOnly){
 
 function relayTeamsHtml(week, state, admin){
   const intro = admin
-    ? `<p class="note" style="margin:0 0 12px;">The captain's P1, P2, P3 … order sets the pairs (P1+P2, P2+P3, … and the last player with P1). Use ▲▼ to change positions, ★ for captain, the menu to move a player to another team, ✕ to take them off. Games already played keep the players who played them.</p>`
+    ? `<p class="note" style="margin:0 0 12px;">The captain's P1, P2, P3 … order sets the pairs (P1+P2, P2+P3, … and the last player with P1). Round 2 can use different positions — change them under <strong>Round 2 positions</strong> any time before round 2 starts. Use ▲▼ to change positions, ★ for captain, the menu to move a player to another team, ✕ to take them off. Games already played keep the players who played them.</p>`
     : '';
   return intro + `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:14px;">${state.teams.map((t,ti)=>relayTeamCard(week, state, ti, admin)).join('')}</div>`;
 }
@@ -2326,14 +2352,15 @@ function relayTeamCard(week, state, ti, admin){
   const signup = {};
   week.signups.forEach(s=>{ signup[playerKey(s.name)] = s; });
   const n = t.players.length;
+  const r1Locked = v.rounds[0].started;
   const rows = t.players.map((p,pi)=>{
     const s = signup[playerKey(p)];
     const badges = (playerKey(p)===playerKey(t.captain) ? ' <span class="mine-badge">captain</span>' : '')
       + (isRelayGuest(p) ? ' <span class="mine-badge">guest</span>' : '')
       + (s && s.noShow ? ' <span class="mine-badge ns">No show</span>' : '');
     const tools = admin ? `<span class="tools">
-      <button class="icon-btn" title="Move up" onclick="relayMovePos(${ti},${pi},-1)" ${pi===0?'disabled':''}>▲</button>
-      <button class="icon-btn" title="Move down" onclick="relayMovePos(${ti},${pi},1)" ${pi===n-1?'disabled':''}>▼</button>
+      <button class="icon-btn" title="Move up" onclick="relayMovePos(${ti},${pi},-1)" ${pi===0||r1Locked?'disabled':''}>▲</button>
+      <button class="icon-btn" title="Move down" onclick="relayMovePos(${ti},${pi},1)" ${pi===n-1||r1Locked?'disabled':''}>▼</button>
       <button class="icon-btn${playerKey(p)===playerKey(t.captain)?' on':''}" title="Make captain" onclick="relaySetCaptain(${ti},${pi})">★</button>
       <select class="mini-select" aria-label="Move ${escAttr(p)} to another team" onchange="if(this.value!=='') relayMoveTeam(${ti},${pi},Number(this.value))">
         <option value="">Move…</option>${state.teams.map((o,oi)=>oi===ti?'':`<option value="${oi}">Team ${o.id}</option>`).join('')}
@@ -2349,8 +2376,8 @@ function relayTeamCard(week, state, ti, admin){
       <button class="btn small ghost" onclick="relayAddGuest(${ti})">+ Guest</button>
     </div>` : '';
 
-  const pairs = relayPairs(t.players);
   const orderHtml = [1,2].map(r=>{
+    const pairs = relayPairs(relayLineup(t, r));
     const order = relayOrder(t, r);
     const locked = v.rounds[r-1].started;
     const items = order.map((pairIdx,k)=>{
@@ -2363,7 +2390,8 @@ function relayTeamCard(week, state, ti, admin){
       return `<div class="team-row" style="font-size:13px;"><span class="pos">G${k+1}</span><span class="rname"><span class="pool-tag">${posLabel}</span> ${pr.map(escHtml).join(' + ')}</span>${tools}</div>`;
     }).join('');
     const copyBtn = (admin && r===2 && !locked) ? ` <button class="icon-btn" onclick="relayCopyOrder(${ti})">same as round 1</button>` : '';
-    return `<div class="relay-sub">Round ${r} playing order${locked ? ' · locked (round under way)' : ''}${copyBtn}</div>${items || '<p class="game-note">Needs at least 2 players.</p>'}`;
+    return (r===2 ? relayLineup2Html(t, ti, admin, locked) : '')
+      + `<div class="relay-sub">Round ${r} playing order${locked ? ' · locked (round under way)' : ''}${copyBtn}</div>${items || '<p class="game-note">Needs at least 2 players.</p>'}`;
   }).join('');
 
   const sizeWarn = opp && opp.players.length !== n
@@ -2371,10 +2399,29 @@ function relayTeamCard(week, state, ti, admin){
     : `<span class="pool-status full">${n} players</span>`;
   return `<div class="card" style="margin-bottom:0;">
     <div class="pool-head"><h3>Team ${t.id} <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">vs Team ${opp ? opp.id : '—'}</span></h3>${sizeWarn}</div>
+    <div class="relay-sub" style="margin-top:4px;">Round 1 positions${r1Locked ? ' · locked (round under way)' : ''}</div>
     ${rows || '<p class="game-note">No players.</p>'}
     ${addHtml}
     ${orderHtml}
   </div>`;
+}
+
+// The captain's round-2 positions: follows round 1 until changed here, and
+// can be changed any time before round 2's first game.
+function relayLineup2Html(t, ti, admin, locked){
+  const lineup = relayLineup(t, 2);
+  const changed = Array.isArray(t.lineup2);
+  const n = lineup.length;
+  const rows = lineup.map((p,pi)=>{
+    const tools = (admin && !locked) ? `<span class="tools">
+      <button class="icon-btn" title="Move up" onclick="relayMoveLineup2(${ti},${pi},-1)" ${pi===0?'disabled':''}>▲</button>
+      <button class="icon-btn" title="Move down" onclick="relayMoveLineup2(${ti},${pi},1)" ${pi===n-1?'disabled':''}>▼</button>
+    </span>` : '';
+    return `<div class="team-row" style="font-size:13px;"><span class="pos">P${pi+1}</span><span class="rname">${escHtml(p)}</span>${tools}</div>`;
+  }).join('');
+  const resetBtn = (admin && !locked && changed) ? ` <button class="icon-btn" onclick="relayResetLineup2(${ti})">same as round 1</button>` : '';
+  const note = changed ? '' : '<p class="game-note" style="margin:2px 0 4px;">Same pairings as round 1 — use ▲▼ to change them for round 2.</p>';
+  return `<div class="relay-sub">Round 2 positions${changed ? ' · changed' : ''}${locked ? ' · locked (round under way)' : ''}${resetBtn}</div>${admin && !locked ? note : ''}${rows}`;
 }
 
 function relayPlayersCard(state, ev){
@@ -2400,10 +2447,10 @@ function relayPlayersCard(state, ev){
 function relayHistoryHtml(week, dateISO){
   const state = week.relay || {teams:[], games:[]};
   if(!state.teams.length){
-    return '<div class="card"><p style="margin:0; font-size:14px; color:var(--text-soft);">Team relay night — no teams were drawn.</p></div>';
+    return '<div class="card"><p style="margin:0; font-size:14px; color:var(--text-soft);">Doubles (team relay) night — no teams were drawn.</p></div>';
   }
   const ranked = week.event && week.event.rpMode==='ranked';
-  let html = `<div class="card my-panel"><p style="margin:0; font-size:13px; color:var(--text-soft);"><strong>Team relay doubles</strong> · ${escHtml(relayRpText(week.event))}</p></div>`;
+  let html = `<div class="card my-panel"><p style="margin:0; font-size:13px; color:var(--text-soft);"><strong>Doubles (team relay)</strong> · ${escHtml(relayRpText(week.event))}</p></div>`;
   for(let t=0; t<relayTieCount(state); t++) html += relayTieCard(state, t, false, true);
   html += relayPlayersCard(state, week.event);
   if(ranked) html += finalizeRankingsCard(dateISO);
@@ -2516,6 +2563,18 @@ function relayMoveOrder(ti, round, k, dir){
   t.order = Object.assign({}, t.order, {[round]: order});
   relayCommitTeams();
 }
+function relayMoveLineup2(ti, pi, dir){
+  const t = relayTeams()[ti];
+  const lineup = relayLineup(t, 2), j = pi+dir;
+  if(j<0 || j>=lineup.length) return;
+  [lineup[pi], lineup[j]] = [lineup[j], lineup[pi]];
+  t.lineup2 = lineup;
+  relayCommitTeams();
+}
+function relayResetLineup2(ti){
+  delete relayTeams()[ti].lineup2;
+  relayCommitTeams();
+}
 function relayCopyOrder(ti){
   const t = relayTeams()[ti];
   t.order = Object.assign({}, t.order, {2: relayOrder(t, 1)});
@@ -2603,7 +2662,7 @@ async function populateEventFormat(){
   const sel = document.getElementById('ef-date');
   const prev = sel.value;
   sel.innerHTML = upcoming.length
-    ? upcoming.map(d=>`<option value="${d}">Wed, ${fmtDateFull(d)}${WEEK_FORMATS[d] ? ' · team relay' : ''}</option>`).join('')
+    ? upcoming.map(d=>`<option value="${d}">Wed, ${fmtDateFull(d)}${WEEK_FORMATS[d] ? ' · doubles (team relay)' : ''}</option>`).join('')
     : '<option value="">No upcoming week tabs — create one first</option>';
   if(upcoming.includes(prev)) sel.value = prev;
   syncEventFormatForm();
@@ -2633,7 +2692,7 @@ async function saveEventFormat(){
   weekDatesPromise = null;
   delete WEEK_CACHE[date];
   out.textContent = format==='relay'
-    ? `Wed, ${fmtDate(date)} is now a team relay doubles night (${res.event.rpMode==='ranked' ? 'ranked' : 'exhibition'}).`
+    ? `Wed, ${fmtDate(date)} is now a doubles (team relay) night (${res.event.rpMode==='ranked' ? 'ranked' : 'exhibition'}).`
     : `Wed, ${fmtDate(date)} is a regular singles night.`;
   populateEventFormat();
   if(WEEK_DATE === date) renderSchedule(true, true);
@@ -2701,7 +2760,7 @@ function updateJoinSubForSelected(){
     sub.textContent = `Signups for Wed, ${fmtDate(dateISO)} are closed — pick another date below.`;
     btn.disabled = true; btn.textContent = 'Signups closed';
   } else if(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay'){
-    sub.textContent = `Wed, ${fmtDate(dateISO)} is a team relay doubles night — the first ${RELAY_CAP} signups are confirmed and teams are drawn at check-in. See the FAQ for how it works.`;
+    sub.innerHTML = `Wed, ${fmtDate(dateISO)} is a doubles (team relay) night — the first ${RELAY_CAP} signups are confirmed and teams are drawn at check-in. <a href="#" onclick="showFaq('faq-relay'); return false;">How it works</a>`;
     btn.disabled = false; btn.textContent = 'Request a spot';
   } else {
     sub.textContent = `New players get placed into a pool by the organizer once signups close.`;
@@ -2746,7 +2805,7 @@ async function renderJoinOptions(){
   container.innerHTML = statuses.map((s,i)=>`
     <label${s.closed?' style="opacity:.5;"':''}>
       <input type="radio" name="jf-date" value="${s.date}" ${s.closed?'disabled':''} ${i===firstOpenIdx?'checked':''}>
-      Wed, ${fmtDate(s.date)}${WEEK_FORMATS[s.date] && WEEK_FORMATS[s.date].format==='relay' ? ' · Team Relay' : ''}${s.closed?' · Closed':''}
+      Wed, ${fmtDate(s.date)}${WEEK_FORMATS[s.date] && WEEK_FORMATS[s.date].format==='relay' ? ' · Doubles (team relay)' : ''}${s.closed?' · Closed':''}
     </label>`).join('');
   container.querySelectorAll('input[name="jf-date"]').forEach(inp=>inp.addEventListener('change', ()=>{ updateJoinSubForSelected(); renderJoinedList(); }));
   updateJoinSubForSelected();
@@ -2790,7 +2849,7 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   document.getElementById('confirm-badge').className = 'ok-badge' + (confirmedSpot ? '' : ' wait');
   document.getElementById('confirm-name').textContent = 'You\'re in, ' + name;
   document.getElementById('confirm-detail').textContent = confirmedSpot
-    ? `Confirmed — spot #${position} for Wed, ${fmtDate(dateISO)}. ${relayNight ? 'Teams are drawn at check-in — it\'s a team relay doubles night.' : 'Pools go up once signups close.'}`
+    ? `Confirmed — spot #${position} for Wed, ${fmtDate(dateISO)}. ${relayNight ? 'Teams are drawn at check-in — it\'s a doubles (team relay) night.' : 'Pools go up once signups close.'}`
     : `Waitlisted — #${position-cap} in line for Wed, ${fmtDate(dateISO)}. You'll move up if a confirmed player drops.`;
   document.getElementById('join-form').style.display = 'none';
   document.getElementById('join-confirm').classList.add('active');

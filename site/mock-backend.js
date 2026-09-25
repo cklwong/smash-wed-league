@@ -251,7 +251,7 @@
 
   // Mirrors drawTeams() in gas/Code.gs (snake draft by standings).
   function drawTeams(date, teamCount, redraw) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team relay night.' };
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
     const k = Number(teamCount);
     if (!RELAY_TEAM_COUNTS.includes(k)) return { ok: false, error: 'Pick ' + RELAY_TEAM_COUNTS.join(' or ') + ' teams.' };
     const eligible = STATE.signups.slice(0, RELAY_CAP).filter((s) => !s.noShow);
@@ -276,7 +276,7 @@
 
   // Mirrors relaySaveTeams() in gas/Code.gs.
   function relaySaveTeams(date, teams, rev) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team relay night.' };
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
     const st = relayState(date);
     if (!st.teams.length) return relayReply(date, { ok: false, error: 'Draw teams first.' });
     if (Number(rev) !== st.rev) return relayReply(date, { ok: false, stale: true, error: 'Teams were changed on another device — showing the latest now; please redo your change.' });
@@ -295,10 +295,15 @@
         players.push(nm);
       }
       const captain = players.some((p) => key(p) === key(t.captain)) ? String(t.captain).trim() : '';
-      const tmp = { players, order: t.order || {} };
+      const tmp = { players, order: t.order || {}, lineup2: t.lineup2 };
+      let lineup2 = Array.isArray(t.lineup2) ? relayLineup(tmp, 2) : null;
+      if (lineup2 && lineup2.join('\n') === players.join('\n')) lineup2 = null; // same as round 1
+      tmp.lineup2 = lineup2;
       const order = {};
       for (let r = 1; r <= RELAY_ROUNDS; r++) order[r] = relayOrder(tmp, r);
-      clean.push({ id: t.id, captain, players, order });
+      const cleanTeam = { id: t.id, captain, players, order };
+      if (lineup2) cleanTeam.lineup2 = lineup2;
+      clean.push(cleanTeam);
     }
     st.teams = clean;
     return relayReply(date, { ok: true });
@@ -326,7 +331,7 @@
     return { ok: true, a: g.a, b: g.b };
   }
   function relayStartGame(date, tie, round, seq, aPair, bPair) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team relay night.' };
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
     const st = relayState(date);
     tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
     if (relayFindGame(st, tie, round, seq)) return relayReply(date, { ok: false, error: 'That game is already on court or scored.' });
@@ -336,7 +341,7 @@
     return relayReply(date, { ok: true });
   }
   function relayScore(date, tie, round, seq, scoreA, scoreB, aPair, bPair) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team relay night.' };
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
     const v = validateScores(scoreA, scoreB);
     if (!v.ok) return v;
     const st = relayState(date);
@@ -352,7 +357,7 @@
     return relayReply(date, { ok: true });
   }
   function relayClearGame(date, tie, round, seq) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team relay night.' };
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
     const st = relayState(date);
     tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
     const i = st.games.findIndex((g) => g.tie === tie && g.round === round && g.seq === seq);
@@ -715,7 +720,7 @@
   function handlePost(body) {
     seedRelayIfAsked();
     if (SINGLES_ONLY.includes(body.action) && isRelay(body.date)) {
-      return { ok: false, error: 'This is a team relay night — use the team relay desk on the This week page.' };
+      return { ok: false, error: 'This is a doubles (team relay) night — use the team relay desk on the This week page.' };
     }
     switch (body.action) {
       case 'join': return join(body.date, body.name, body.contact);

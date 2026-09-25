@@ -125,14 +125,15 @@ Google Apps Script file, edited directly.
   `removeSignupLabelsFromUpcomingWeeks()` once from the editor (only tabs
   dated today or later; it shifts rows up so the list stays contiguous).
   The Rankings tab's own Sorted Name/Rank columns are unrelated and stay.
-- **Team relay doubles nights**: any date can be switched from singles to a
-  team relay doubles night on the Admin tab (`setEventFormat`, stored as an
+- **Doubles (team relay) nights** (code calls them "relay"): any date can be
+  switched from singles to a doubles (team relay) night on the Admin tab (`setEventFormat`, stored as an
   `EVENT_<YYYY-MM-DD>` script property; no property = singles, so singles
   weeks are untouched). Relay teams/games live as JSON in cell A1 of a
   separate `Relay M/D/YY` tab (rows below are a read-only readable copy) -
   never in the weekly tab's pool geometry. The site's This week page renders
   relay nights via `paintRelay` in `index.html`; the pure relay rules
-  (`relayPairs`/`relayOrder`/`relayTieView`/`relayPlayerStats`) exist in both
+  (`relayLineup`/`relayPairs`/`relayOrder`/`relayTieView`/`relayPlayerStats`;
+  a team's optional `lineup2` holds the captain's round-2 positions) exist in both
   `Code.gs` and `index.html` and must stay in sync (the mock reuses the
   page's copies). Singles-only actions (`generatePools`, `startMatch`,
   `recordScore`, `editScore`, `cancelMatch`) refuse on relay dates. Ranking
