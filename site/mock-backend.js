@@ -303,8 +303,11 @@
       let lineup2 = Array.isArray(t.lineup2) ? relayLineup(tmp, 2) : null;
       if (lineup2 && lineup2.join('\n') === players.join('\n')) lineup2 = null; // same as round 1
       tmp.lineup2 = lineup2;
-      const order = {};
-      for (let r = 1; r <= RELAY_ROUNDS; r++) order[r] = relayOrder(tmp, r);
+      // Mirrors gas/Code.gs: round 2's order only kept when it differs from round 1's.
+      const order = { 1: relayOrder(tmp, 1) };
+      const o2 = tmp.order[2];
+      const n2 = relayPairs(relayLineup(tmp, 2)).length;
+      if (Array.isArray(o2) && o2.length === n2 && new Set(o2).size === n2 && o2.every((x) => Number.isInteger(x) && x >= 0 && x < n2) && o2.join(',') !== order[1].join(',')) order[2] = o2.slice();
       const cleanTeam = { id: t.id, captain, players, order };
       if (lineup2) cleanTeam.lineup2 = lineup2;
       clean.push(cleanTeam);

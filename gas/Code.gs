@@ -2671,48 +2671,54 @@ function relayLineup(team, round) {
 }
 
 // Recommended playing order per team size (pair index k = Pk+1 with Pk+2),
-// one per round, found by brute force to spread each player's rest across
-// both rounds back to back: no player plays two games in a row (except
-// 3-4 players, where it's unavoidable once a round), and round 2 is
-// arranged so nobody plays the last game of round 1 and the first of
-// round 2. E.g. 6 players: R1 P1+P2, P3+P4, P5+P6, P2+P3, P6+P1, P4+P5;
-// R2 P2+P3, P6+P1, P4+P5, P1+P2, P3+P4, P5+P6 - every player rests 1-3
-// games between games. Mirrored in site/index.html.
+// played in both rounds, found by brute force over the two rounds back to
+// back to spread each player's rest: no player plays two games in a row
+// (except 3-4 players, where it's unavoidable), including across the
+// round break. E.g. 6 players, both rounds: P1+P2, P3+P4, P5+P6, P2+P3,
+// P6+P1, P4+P5 - every player rests 1-3 games between games. Mirrored in
+// site/index.html.
 var RELAY_REST_ORDERS = {
-  3: [[0, 1, 2], [0, 1, 2]],
-  4: [[0, 2, 1, 3], [1, 3, 0, 2]],
-  5: [[0, 2, 4, 1, 3], [0, 2, 4, 1, 3]],
-  6: [[0, 2, 4, 1, 5, 3], [1, 5, 3, 0, 2, 4]],
-  7: [[0, 2, 4, 6, 1, 3, 5], [0, 2, 4, 6, 1, 3, 5]],
-  8: [[0, 2, 6, 4, 1, 7, 3, 5], [1, 7, 3, 5, 0, 2, 6, 4]]
+  3: [0, 1, 2],
+  4: [0, 2, 1, 3],
+  5: [0, 2, 4, 1, 3],
+  6: [0, 2, 4, 1, 5, 3],
+  7: [0, 2, 4, 6, 1, 3, 5],
+  8: [0, 2, 6, 4, 1, 7, 3, 5]
 };
 
-// Default order for n pairs: the table above, else even pairs then odd
-// ones (round 2: odd then even).
-function relayDefaultOrder(n, round) {
+// Default order for n pairs: the table above, else even pairs then odd.
+function relayDefaultOrder(n) {
   var t = RELAY_REST_ORDERS[n];
-  if (t) return t[round === 2 ? 1 : 0].slice();
+  if (t) return t.slice();
   var evens = [], odds = [];
   for (var k = 0; k < n; k++) (k % 2 ? odds : evens).push(k);
-  return round === 2 ? odds.concat(evens) : evens.concat(odds);
+  return evens.concat(odds);
 }
 
-// The captain's playing order for a round: a permutation of pair indices,
-// falling back to the rest-spreading default (relayDefaultOrder) when unset
-// or stale (e.g. the team's size changed since it was saved).
+function relayValidOrder(o, n) {
+  if (!o || o.length !== n) return false;
+  var seen = {};
+  for (var i = 0; i < o.length; i++) {
+    if (typeof o[i] !== 'number' || o[i] < 0 || o[i] >= n || seen[o[i]]) return false;
+    seen[o[i]] = true;
+  }
+  return true;
+}
+
+// The captain's playing order for a round: a permutation of pair indices.
+// Round 1 falls back to the rest-spreading default (relayDefaultOrder) when
+// unset or stale (e.g. the team's size changed since it was saved). Round 2
+// plays in round 1's order - whatever the captain made it - unless the
+// captain gave round 2 its own order.
 function relayOrder(team, round) {
   var n = relayPairs(relayLineup(team, round)).length;
   var o = team.order && team.order[round];
-  var ok = o && o.length === n;
-  if (ok) {
-    var seen = {};
-    for (var i = 0; i < o.length; i++) {
-      if (typeof o[i] !== 'number' || o[i] < 0 || o[i] >= n || seen[o[i]]) { ok = false; break; }
-      seen[o[i]] = true;
-    }
+  if (relayValidOrder(o, n)) return o.slice();
+  if (round === 2) {
+    var r1 = relayOrder(team, 1);
+    if (r1.length === n) return r1;
   }
-  if (ok) return o.slice();
-  return relayDefaultOrder(n, round);
+  return relayDefaultOrder(n);
 }
 
 function relayTieCount(state) {
@@ -2941,8 +2947,11 @@ function relaySaveTeams(dateISO, teams, rev, secret, pin, guests) {
       var lineup2 = Array.isArray(t.lineup2) ? relayLineup(tmp, 2) : null;
       if (lineup2 && lineup2.join('\n') === players.join('\n')) lineup2 = null; // same as round 1
       tmp.lineup2 = lineup2;
-      var order = {};
-      for (var r = 1; r <= RELAY_ROUNDS; r++) order[r] = relayOrder(tmp, r);
+      // Round 2's order is only kept when the captain set one that differs
+      // from round 1 - otherwise it follows round 1 (see relayOrder).
+      var order = { 1: relayOrder(tmp, 1) };
+      var o2 = tmp.order[2];
+      if (relayValidOrder(o2, relayPairs(relayLineup(tmp, 2)).length) && o2.join(',') !== order[1].join(',')) order[2] = o2.slice();
       var cleanTeam = { id: t.id, captain: captain, players: players, order: order };
       if (lineup2) cleanTeam.lineup2 = lineup2;
       clean.push(cleanTeam);

@@ -134,8 +134,9 @@ Google Apps Script file, edited directly.
   relay nights via `paintRelay` in `index.html`; the pure relay rules
   (`relayLineup`/`relayPairs`/`relayOrder`/`relayTieView`/`relayPlayerStats`;
   a team's optional `lineup2` holds the captain's round-2 positions; unset
-  playing orders default to `RELAY_REST_ORDERS`, a per-team-size table that
-  spreads each player's rest across both rounds) exist in both
+  round-1 playing orders default to `RELAY_REST_ORDERS`, a per-team-size
+  table that spreads each player's rest across both rounds, and round 2
+  plays in round 1's order unless given its own `order[2]`) exist in both
   `Code.gs` and `index.html` and must stay in sync (the mock reuses the
   page's copies). Singles-only actions (`generatePools`, `startMatch`,
   `recordScore`, `editScore`, `cancelMatch`) refuse on relay dates. Ranking
