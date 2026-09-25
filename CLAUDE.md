@@ -116,9 +116,39 @@ Google Apps Script file, edited directly.
   what a finalize would write without touching the sheet) or
   `runFinalizeDate()` (runs it for real). `fixAvgFormulas()` force-rewrites
   the Rankings Avg column if its formulas get mangled.
+- **Signup column A**: new week tabs (`createWeek` → `clearSignupsForNewWeek`)
+  start with an empty signup list - no "Max limit (24ppl)"/"Wait List Below"
+  labels and no stray "Sorted Name"/"Sorted Rank" copy below it; the site
+  enforces the cap/waitlist by position. Past tabs still have them, so
+  `parseSignups` keeps skipping them (`isSignupLabel`). Tabs already created
+  before this change are cleaned by running
+  `removeSignupLabelsFromUpcomingWeeks()` once from the editor (only tabs
+  dated today or later; it shifts rows up so the list stays contiguous).
+  The Rankings tab's own Sorted Name/Rank columns are unrelated and stay.
+- **Doubles (team relay) nights** (code calls them "relay"): any date can be
+  switched from singles to a doubles (team relay) night on the Admin tab (`setEventFormat`, stored as an
+  `EVENT_<YYYY-MM-DD>` script property; no property = singles, so singles
+  weeks are untouched). Relay teams/games live as JSON in cell A1 of a
+  separate `Relay M/D/YY` tab (rows below are a read-only readable copy) -
+  never in the weekly tab's pool geometry. The site's This week page renders
+  relay nights via `paintRelay` in `index.html`; the pure relay rules
+  (`relayLineup`/`relayPairs`/`relayOrder`/`relayTieView`/`relayPlayerStats`;
+  a team's optional `lineup2` holds the captain's round-2 positions) exist in both
+  `Code.gs` and `index.html` and must stay in sync (the mock reuses the
+  page's copies). Singles-only actions (`generatePools`, `startMatch`,
+  `recordScore`, `editScore`, `cancelMatch`) refuse on relay dates. Ranking
+  points per relay night: exhibition (nothing written to Rankings) or ranked
+  (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label `T<team>`).
+  Test with `site/index.html?mock=1&relay=1`.
 - **One-time environment setup** on a fresh spreadsheet binding: set the
   `ADMIN_EMAILS` and `ADMIN_SECRET` script properties (Project Settings →
-  Script Properties), then run `setupTriggers()` once to authorize `MailApp`
+  Script Properties) - optionally also `SHEET_EDITORS` (comma-separated emails
+  allowed to hand-edit protected week/relay tabs; easiest set from the site's
+  Admin tab "Sheet editors" box, which also adds them to already-protected
+  tabs of today's/upcoming events only - past events stay owner-only, and
+  `autoFinalizeWeekly` calls `removeSheetEditorsFromPastTabs()` to take them
+  back off once an event's date has passed; the
+  Project Settings panel can fail to save on this project), then run `setupTriggers()` once to authorize `MailApp`
   (also used for the new-player welcome email on signup) and install the
   Wednesday-9:30pm `autoFinalizeWeekly` trigger. It does not install a
   recurring PIN email - the PIN is retrieved on demand from the Admin tab.

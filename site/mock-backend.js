@@ -70,8 +70,16 @@
     guestMap: {},// lowercased no-show name -> the guest label covering their seat
     live: { matches: [], checkins: {} },
     createdWeeks: [], // ISO dates created via the mock createWeek() action this session
-    bans: {} // lowercased name -> {name, until} - mirrors PLAYER_BANS in gas/Code.gs
+    bans: {}, // lowercased name -> {name, until} - mirrors PLAYER_BANS in gas/Code.gs
+    events: {}, // ISO date -> {format:'relay', rpMode} - mirrors EVENT_<date> script properties
+    relay: {},  // ISO date -> {rev, teams, games} - mirrors the "Relay M/D/YY" tab's JSON
+    sheetEditors: [] // mirrors the SHEET_EDITORS script property
   };
+  // ?relay=1 starts the sandbox with tonight already set up as a team relay
+  // doubles night (otherwise switch it on the Admin tab like the real site).
+  // The date isn't known yet (the page script defines getSessionDateISO
+  // after this file runs), so the seed is applied on the first request.
+  STATE.pendingRelaySeed = new URLSearchParams(location.search).get('relay') === '1';
   STATE.signups[STATE.signups.length - 1].checkedIn = false; // waitlist isn't "at the venue"
   STATE.signups[STATE.signups.length - 2].checkedIn = false;
 
@@ -155,7 +163,8 @@
   // Mirrors resetWeek() in gas/Code.gs: wipes tonight's draw, every score,
   // and every signup's check-in/no-show status back to undrawn, for testing
   // pool generation/scoring flows against the mock's live "This week" state.
-  function resetWeek() {
+  function resetWeek(date) {
+    if (date && STATE.relay[date]) { STATE.relay[date].teams = []; STATE.relay[date].games = []; STATE.relay[date].rev++; }
     STATE.drawn = false;
     STATE.pools = {};
     STATE.grids = {};
@@ -195,7 +204,167 @@
     const base = (typeof getSessionDateISO === 'function' ? getSessionDateISO() : null);
     const dates = base ? [base] : [];
     STATE.createdWeeks.forEach((d) => { if (!dates.includes(d)) dates.push(d); });
-    return { dates: dates.sort() };
+    const formats = {};
+    Object.keys(STATE.events).forEach((d) => { formats[d] = { format: 'relay', rpMode: STATE.events[d].rpMode }; });
+    return { dates: dates.sort(), formats };
+  }
+
+  // ---- Team relay doubles (mirrors the "Team relay doubles" section of gas/Code.gs) ----
+  // The pure rules (pairs, playing order, round/tie results, player totals)
+  // are the page's own relay* functions - by the time any request arrives
+  // the page script has defined them globally, the same way this mock
+  // already borrows getSessionDateISO().
+  const RELAY_CAP = 36, RELAY_TEAM_COUNTS = [4, 6], RELAY_TEAM_BONUS = 2, RELAY_ROUNDS = 2, RELAY_TB = 3;
+  const TEAM_IDS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+  function sessionDate() { return (typeof getSessionDateISO === 'function') ? getSessionDateISO() : ''; }
+  function seedRelayIfAsked() {
+    if (!STATE.pendingRelaySeed) return;
+    STATE.pendingRelaySeed = false;
+    const d = sessionDate();
+    if (d) STATE.events[d] = { format: 'relay', rpMode: 'exhibition' };
+  }
+  function eventFor(date) {
+    const ev = STATE.events[date];
+    if (!ev) return { format: 'singles', cap: 24 };
+    return { format: 'relay', rpMode: ev.rpMode, cap: RELAY_CAP, teamBonus: RELAY_TEAM_BONUS, teamCounts: RELAY_TEAM_COUNTS };
+  }
+  function isRelay(date) { return !!STATE.events[date]; }
+  function relayState(date) {
+    if (!STATE.relay[date]) STATE.relay[date] = { rev: 0, teams: [], games: [] };
+    return STATE.relay[date];
+  }
+  function relayReply(date, result) { const st = relayState(date); if (result.ok !== false) st.rev++; result.relay = st; return result; }
+
+  // Mirrors setEventFormat() in gas/Code.gs.
+  function setEventFormat(date, format, rpMode) {
+    if (!date) return { ok: false, error: 'Missing date.' };
+    if (format === 'relay') {
+      if (!isRelay(date) && STATE.drawn && date === sessionDate()) return { ok: false, error: 'Singles pools are already drawn for ' + date + ' — reset the week first.' };
+      STATE.events[date] = { format: 'relay', rpMode: rpMode === 'ranked' ? 'ranked' : 'exhibition' };
+    } else if (format === 'singles') {
+      if (isRelay(date) && relayState(date).teams.length) return { ok: false, error: 'Relay teams are already drawn for ' + date + ' — reset the week first.' };
+      delete STATE.events[date];
+    } else {
+      return { ok: false, error: 'Unknown format: ' + format };
+    }
+    return { ok: true, event: eventFor(date) };
+  }
+
+  // Mirrors drawTeams() in gas/Code.gs (snake draft by standings).
+  function drawTeams(date, teamCount, redraw) {
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
+    const k = Number(teamCount);
+    if (!RELAY_TEAM_COUNTS.includes(k)) return { ok: false, error: 'Pick ' + RELAY_TEAM_COUNTS.join(' or ') + ' teams.' };
+    const eligible = STATE.signups.slice(0, RELAY_CAP).filter((s) => !s.noShow);
+    if (eligible.length < k * 2) return { ok: false, error: 'Only ' + eligible.length + ' eligible players — need at least ' + (k * 2) + ' for ' + k + ' teams.' };
+    const st = relayState(date);
+    if (st.teams.length) {
+      if (!redraw) return relayReply(date, { ok: false, error: 'Teams are already drawn.' });
+      if (st.games.length) return relayReply(date, { ok: false, error: 'Games have started — teams can no longer be redrawn.' });
+    }
+    const sorted = eligible.map((s, i) => ({ name: s.name, rank: rankFor(s.name), idx: i }))
+      .sort((a, b) => a.rank - b.rank || a.idx - b.idx);
+    const teams = Array.from({ length: k }, (_, t) => ({ id: TEAM_IDS[t], captain: '', players: [], order: {} }));
+    sorted.forEach((p, i) => {
+      const lap = Math.floor(i / k), pos = i % k;
+      teams[lap % 2 === 0 ? pos : k - 1 - pos].players.push(p.name);
+    });
+    teams.forEach((t) => { t.captain = t.players[0] || ''; });
+    st.teams = teams;
+    st.games = [];
+    return relayReply(date, { ok: true });
+  }
+
+  // Mirrors relaySaveTeams() in gas/Code.gs.
+  function relaySaveTeams(date, teams, rev) {
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
+    const st = relayState(date);
+    if (!st.teams.length) return relayReply(date, { ok: false, error: 'Draw teams first.' });
+    if (Number(rev) !== st.rev) return relayReply(date, { ok: false, stale: true, error: 'Teams were changed on another device — showing the latest now; please redo your change.' });
+    if (!Array.isArray(teams) || teams.length !== st.teams.length) return relayReply(date, { ok: false, error: 'The number of teams cannot change after the draw — redraw instead.' });
+    const seen = {};
+    const clean = [];
+    for (let i = 0; i < teams.length; i++) {
+      const t = teams[i] || {};
+      if (t.id !== st.teams[i].id) return relayReply(date, { ok: false, error: 'Team order mismatch — refresh and try again.' });
+      const players = [];
+      for (const raw of (t.players || [])) {
+        const nm = String(raw || '').trim().slice(0, 40);
+        if (!nm) continue;
+        if (seen[key(nm)]) return relayReply(date, { ok: false, error: nm + ' is listed on more than one team.' });
+        seen[key(nm)] = true;
+        players.push(nm);
+      }
+      const captain = players.some((p) => key(p) === key(t.captain)) ? String(t.captain).trim() : '';
+      const tmp = { players, order: t.order || {}, lineup2: t.lineup2 };
+      let lineup2 = Array.isArray(t.lineup2) ? relayLineup(tmp, 2) : null;
+      if (lineup2 && lineup2.join('\n') === players.join('\n')) lineup2 = null; // same as round 1
+      tmp.lineup2 = lineup2;
+      const order = {};
+      for (let r = 1; r <= RELAY_ROUNDS; r++) order[r] = relayOrder(tmp, r);
+      const cleanTeam = { id: t.id, captain, players, order };
+      if (lineup2) cleanTeam.lineup2 = lineup2;
+      clean.push(cleanTeam);
+    }
+    st.teams = clean;
+    return relayReply(date, { ok: true });
+  }
+
+  // Mirrors relayResolvePairs() in gas/Code.gs.
+  function relayResolve(st, tie, round, seq, aPair, bPair) {
+    if (tie < 0 || tie >= relayTieCount(st)) return { ok: false, error: 'Unknown tie.' };
+    const v = relayTieView(st, tie);
+    if (round === RELAY_TB) {
+      if (!v.needsTiebreak) return { ok: false, error: "This tie doesn't need a tiebreak game." };
+      const pick = (pair, team) => {
+        if (!Array.isArray(pair) || pair.length !== 2) return null;
+        const out = pair.map((n) => team.players.find((p) => key(p) === key(n)));
+        return out.every(Boolean) && out[0] !== out[1] ? out : null;
+      };
+      const a = pick(aPair, v.a), b = pick(bPair, v.b);
+      if (!a || !b) return { ok: false, error: 'Pick two different players from each team for the tiebreak.' };
+      return { ok: true, a, b };
+    }
+    if (round < 1 || round > RELAY_ROUNDS) return { ok: false, error: 'Unknown round.' };
+    if (v.uneven) return { ok: false, error: 'Team ' + v.a.id + ' has ' + v.a.players.length + ' players and Team ' + v.b.id + ' has ' + v.b.players.length + ' — even them out (add a guest or a late player) before playing.' };
+    const g = v.rounds[round - 1].games[seq];
+    if (!g || !g.a || !g.b) return { ok: false, error: 'Unknown game.' };
+    return { ok: true, a: g.a, b: g.b };
+  }
+  function relayStartGame(date, tie, round, seq, aPair, bPair) {
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
+    const st = relayState(date);
+    tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
+    if (relayFindGame(st, tie, round, seq)) return relayReply(date, { ok: false, error: 'That game is already on court or scored.' });
+    const p = relayResolve(st, tie, round, seq, aPair, bPair);
+    if (!p.ok) return relayReply(date, p);
+    st.games.push({ tie, round, seq, a: p.a, b: p.b, startedAt: Date.now() });
+    return relayReply(date, { ok: true });
+  }
+  function relayScore(date, tie, round, seq, scoreA, scoreB, aPair, bPair) {
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
+    const v = validateScores(scoreA, scoreB);
+    if (!v.ok) return v;
+    const st = relayState(date);
+    tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
+    let g = relayFindGame(st, tie, round, seq);
+    if (!g) {
+      const p = relayResolve(st, tie, round, seq, aPair, bPair);
+      if (!p.ok) return relayReply(date, p);
+      g = { tie, round, seq, a: p.a, b: p.b };
+      st.games.push(g);
+    }
+    g.sa = v.a; g.sb = v.b; g.finishedAt = Date.now();
+    return relayReply(date, { ok: true });
+  }
+  function relayClearGame(date, tie, round, seq) {
+    if (!isRelay(date)) return { ok: false, error: date + ' is not a doubles (team relay) night.' };
+    const st = relayState(date);
+    tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
+    const i = st.games.findIndex((g) => g.tie === tie && g.round === round && g.seq === seq);
+    if (i < 0) return relayReply(date, { ok: false, error: 'Game not found — it may already be cleared.' });
+    st.games.splice(i, 1);
+    return relayReply(date, { ok: true });
   }
 
   function checkin(name) {
@@ -262,13 +431,13 @@
     return { ok: true };
   }
 
-  function join(name, contact) {
+  function join(date, name, contact) {
     if (!name) return { ok: false, error: 'Missing name' };
     const ban = STATE.bans[key(name)];
     if (ban) return { ok: false, error: ban.name + ' is banned from signing up through ' + ban.until + '.' };
     if (STATE.signups.some((s) => key(s.name) === key(name))) return { ok: false, error: 'Already signed up' };
     STATE.signups.push({ name, checkedIn: false, noShow: false });
-    return { ok: true, row: STATE.signups.length, position: STATE.signups.length };
+    return { ok: true, row: STATE.signups.length, position: STATE.signups.length, cap: eventFor(date).cap };
   }
   function leave(name) {
     const i = STATE.signups.findIndex((s) => key(s.name) === key(name));
@@ -444,8 +613,9 @@
           grid: STATE.grids[L].map((row) => row.map((v) => (isMarker(v) ? '' : v)))
         }))
       : [];
-    return {
-      date: (typeof getSessionDateISO === 'function' ? getSessionDateISO() : ''),
+    const date = sessionDate();
+    const week = {
+      date,
       exists: true,
       hasScores: hasAnyScoresAnywhere(),
       signups: STATE.signups,
@@ -453,6 +623,9 @@
       live: { matches: STATE.live.matches, checkins: STATE.live.checkins },
       now: Date.now()
     };
+    // Like gas/Code.gs computeWeek: event + relay only on a relay night.
+    if (isRelay(date)) { week.event = eventFor(date); week.relay = relayState(date); }
+    return week;
   }
 
   // ---- Past weeks: canned, fully-scored sessions for the Past weeks tab ----
@@ -544,9 +717,14 @@
     return { opponents };
   }
 
+  const SINGLES_ONLY = ['generatePools', 'startMatch', 'recordScore', 'editScore', 'cancelMatch'];
   function handlePost(body) {
+    seedRelayIfAsked();
+    if (SINGLES_ONLY.includes(body.action) && isRelay(body.date)) {
+      return { ok: false, error: 'This is a doubles (team relay) night — use the team relay desk on the This week page.' };
+    }
     switch (body.action) {
-      case 'join': return join(body.name, body.contact);
+      case 'join': return join(body.date, body.name, body.contact);
       case 'leave': return leave(body.name);
       case 'getpin': return { ok: true, pin: '123456' }; // dev sandbox: any passphrase works
       case 'verifyPin': return { ok: true }; // dev sandbox: any PIN works
@@ -558,8 +736,10 @@
       case 'recordScore': return recordScore(body.matchId, body.scoreA, body.scoreB);
       case 'editScore': return editScore(body.a, body.b, body.scoreA, body.scoreB, body.matchId);
       case 'cancelMatch': return cancelMatch(body.matchId);
-      case 'finalizeRankings': return { ok: true, finalized: true, date: body.date, updated: RANKINGS.length, added: [], skipped: [] }; // dev sandbox: any passphrase works
-      case 'resetWeek': return resetWeek();
+      case 'finalizeRankings': // dev sandbox: any passphrase works
+        if (isRelay(body.date) && STATE.events[body.date].rpMode !== 'ranked') return { ok: true, exhibition: true, date: body.date };
+        return { ok: true, finalized: true, date: body.date, updated: RANKINGS.length, added: [], skipped: [] };
+      case 'resetWeek': return resetWeek(body.date);
       case 'createWeek': return createWeek(body.date);
       case 'peekNextWeekDate': return peekNextWeekDate();
       case 'renamePlayer': return renamePlayer(body.oldName, body.newName, body.email);
@@ -568,6 +748,20 @@
       case 'banPlayer': return banPlayer(body.name, body.until);
       case 'unbanPlayer': return unbanPlayer(body.name);
       case 'listBans': return listBans();
+      case 'getSheetEditors': return { ok: true, emails: STATE.sheetEditors };
+      case 'setSheetEditors': { // mirrors setSheetEditors() in gas/Code.gs (no real tabs to protect here)
+        const list = String(body.emails || '').split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+        const bad = list.filter((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+        if (bad.length) return { ok: false, error: 'Not a valid email: ' + bad.join(', ') };
+        STATE.sheetEditors = [...new Map(list.map((e) => [key(e), e])).values()];
+        return { ok: true, emails: STATE.sheetEditors, updated: STATE.sheetEditors.length ? 3 : 0, warnings: [] };
+      }
+      case 'setEventFormat': return setEventFormat(body.date, body.format, body.rpMode);
+      case 'drawTeams': return drawTeams(body.date, body.teamCount, body.redraw);
+      case 'relaySaveTeams': return relaySaveTeams(body.date, body.teams, body.rev);
+      case 'relayStartGame': return relayStartGame(body.date, body.tie, body.round, body.seq, body.aPair, body.bPair);
+      case 'relayScore': return relayScore(body.date, body.tie, body.round, body.seq, body.scoreA, body.scoreB, body.aPair, body.bPair);
+      case 'relayClearGame': return relayClearGame(body.date, body.tie, body.round, body.seq);
       default: return { ok: false, error: 'mock: unhandled action ' + body.action };
     }
   }
@@ -580,6 +774,7 @@
   window.fetch = async function (url, opts) {
     try {
       const isPost = opts && (opts.method || 'GET').toUpperCase() === 'POST';
+      seedRelayIfAsked();
       if (!isPost) {
         const qs = String(url).split('?')[1] || '';
         const action = new URLSearchParams(qs).get('action');
