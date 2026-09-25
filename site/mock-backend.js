@@ -125,7 +125,12 @@
   }
 
   function generatePools(padGuests, redraw) {
+    // Mirrors singlesDrawEligible() in gas/Code.gs: first 24 non-no-shows,
+    // topped up from checked-in players past the cap when no-shows freed spots.
     const eligible = STATE.signups.slice(0, 24).filter((s) => !s.noShow);
+    for (let i = 24; i < STATE.signups.length && eligible.length < 24; i++) {
+      if (STATE.signups[i].checkedIn && !STATE.signups[i].noShow) eligible.push(STATE.signups[i]);
+    }
     if (eligible.length < 12) {
       return { ok: false, error: 'Only ' + eligible.length + ' eligible players — the session is cancelled below 12.' };
     }

@@ -132,7 +132,10 @@ Google Apps Script file, edited directly.
   typo'd name (signup list, pool seat, match log, relay teams/games) and
   `removeWalkIn` can undo one added by mistake (refused once they hold a
   singles pool seat or have played a relay game). Only desk walk-ins can
-  be edited/removed this way.
+  be edited/removed this way. On singles nights `singlesDrawEligible` seats
+  the first 24 non-no-shows, then fills spots freed by no-shows with
+  checked-in players from past the cap (walk-ins, waitlisters who turned
+  up); the Check-in list shows those past-cap check-ins with a waitlist tag.
 - **Doubles (team relay) nights** (code calls them "relay"): any date can be
   switched from singles to a doubles (team relay) night on the Admin tab (`setEventFormat`, stored as an
   `EVENT_<YYYY-MM-DD>` script property; no property = singles, so singles

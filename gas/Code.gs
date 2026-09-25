@@ -1054,6 +1054,19 @@ function poolSplitSizes(n) {
   return sizes;
 }
 
+// Who a singles (re)draw seats: the first CAP signups who aren't no-shows,
+// then - only if no-shows freed spots - checked-in players from past the
+// cap (walk-ins and waitlisted players who turned up), in signup order, up
+// to CAP. Waitlisted players who haven't checked in are never promoted;
+// any spots still open are padded with guests. Mirrored in site/index.html.
+function singlesDrawEligible(signups) {
+  var eligible = signups.slice(0, CAP).filter(function (s) { return !s.noShow; });
+  for (var i = CAP; i < signups.length && eligible.length < CAP; i++) {
+    if (signups[i].checkedIn && !signups[i].noShow) eligible.push(signups[i]);
+  }
+  return eligible;
+}
+
 function generatePools(dateISO, pin, padGuests, redraw, secret) {
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
@@ -1062,9 +1075,7 @@ function generatePools(dateISO, pin, padGuests, redraw, secret) {
   if (isRelayDate(dateISO)) return relayNightError();
 
   var data = sheet.getDataRange().getValues();
-  // Confirmed slice only, minus no-shows. The waitlist is never promoted here -
-  // by pool time it's too late; missing spots are filled by guests instead.
-  var eligible = parseSignups(data).slice(0, CAP).filter(function (s) { return !s.noShow; });
+  var eligible = singlesDrawEligible(parseSignups(data));
   if (eligible.length < 12) {
     return { ok: false, error: 'Only ' + eligible.length + ' eligible players — the session is cancelled below 12.' };
   }
