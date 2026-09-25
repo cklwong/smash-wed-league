@@ -55,7 +55,7 @@
  *   POST { action:'getSheetEditors', secret } -> { ok, emails } (admin passphrase; the SHEET_EDITORS list)
  *   POST { action:'setSheetEditors', emails, secret } -> { ok, emails, updated, warnings } (admin passphrase; saves SHEET_EDITORS and adds them to the protected tabs of today's and upcoming events - never past ones)
  *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team relay doubles night or back to singles)
- *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: snake-drafts eligible signups into teamCount teams by standings)
+ *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: draws confirmed non-no-show signups into teamCount teams in standings tiers - top group snake-split between A and B, next between C and D, ...)
  *   POST { action:'relaySaveTeams', date, teams, guests, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, guests, removals, captain, positions, playing order; guests = names marked as guests)
  *   POST { action:'addWalkIn', date, name, team, secret|pin } -> { ok, name, position, waitlisted, walkIn, seated|relay } (any night: signs a walk-in up without an email and checks them in; team = relay team index, optional)
  *   POST { action:'editWalkIn', date, oldName, newName, secret|pin } -> { ok, name } (fixes a desk walk-in's name tonight everywhere it appears)
@@ -2422,8 +2422,9 @@ function cleanupPastEventProperties() {
 // Admin tab (setEventFormat). A date with no EVENT_<date> script property is
 // a singles night, so every existing week behaves exactly as before.
 //
-// Relay format: players are snake-drafted by standings into 4 or 6 teams
-// (sizes as even as possible - teams can be smaller than 6). Each team's
+// Relay format: players are drawn by standings into 4 or 6 teams in tiers -
+// the strongest group snake-split between A and B, the next between C and
+// D, ... (sizes as even as possible - teams can be smaller than 6). Each team's
 // captain sets positions P1..Pn; the doubles pairs are the rotation
 // P1+P2, P2+P3, ... Pn+P1, so every player plays 2 games per round. Teams
 // meet A vs B, C vs D, ...; game k of a round is team A's k-th pair (in its
@@ -2881,10 +2882,25 @@ function relayAnyGames(state) {
   return state.games.length > 0;
 }
 
-// Snake draft by standings: 1st seed -> A, 2nd -> B, ... last team, then
-// back the other way, so team strengths even out and sizes differ by at
-// most one. Uses the same eligible list as a singles draw (confirmed
-// signups minus no-shows); the default captain is each team's top seed.
+// Team sizes for n players in k teams: as even as possible (floor(n/k)
+// each), with the extras handed out in pairs to the top matchups first (A
+// and B, then C and D, ...) so every matchup stays even; an odd leftover
+// goes to the first team of the last matchup. Mirrored in site/index.html.
+function relayTeamSizes(n, k) {
+  var sizes = [];
+  var base = Math.floor(n / k), extra = n - base * k;
+  for (var t = 0; t < k; t++) sizes.push(base);
+  for (var m = 0; m < Math.floor(k / 2) && extra >= 2; m++) { sizes[2 * m]++; sizes[2 * m + 1]++; extra -= 2; }
+  if (extra > 0) sizes[k - 2]++;
+  return sizes;
+}
+
+// Tiered draw by standings, keeping Team A and B the strongest: the top
+// sizes[A]+sizes[B] players are snake-split between A and B (1st -> A,
+// 2nd -> B, 3rd -> B, 4th -> A, ...), the next group between C and D, and so
+// on - so each matchup (A vs B, C vs D, ...) is two evenly split teams of
+// the same level. Everyone confirmed is drawn except players marked No show,
+// checked in or not; the default captain is each team's top seed.
 function drawTeams(dateISO, teamCount, redraw, secret, pin) {
   var g = relayGuard(dateISO, secret, pin);
   if (!g.ok) return g;
@@ -2893,11 +2909,8 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
     return { ok: false, error: 'Pick ' + RELAY_TEAM_COUNTS.join(' or ') + ' teams.' };
   }
   var data = getWeekSheet(dateISO).getDataRange().getValues();
-  // Checked-in players only, once check-in has started; before that (e.g. a
-  // test draw ahead of the night) every confirmed signup who isn't a no-show.
-  var confirmed = parseSignups(data).slice(0, RELAY_CAP);
-  var anyCheckedIn = confirmed.some(function (s) { return s.checkedIn; });
-  var eligible = confirmed.filter(function (s) { return anyCheckedIn ? s.checkedIn : !s.noShow; });
+  // Every confirmed signup except no-shows, whether or not they've checked in.
+  var eligible = parseSignups(data).slice(0, RELAY_CAP).filter(function (s) { return !s.noShow; });
   if (eligible.length < teamCount * 2) {
     return { ok: false, error: 'Only ' + eligible.length + ' eligible players — need at least ' + (teamCount * 2) + ' for ' + teamCount + ' teams.' };
   }
@@ -2908,10 +2921,20 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
 
   var teams = [];
   for (var t = 0; t < teamCount; t++) teams.push({ id: RELAY_TEAM_IDS[t], captain: '', players: [], order: {} });
-  sorted.forEach(function (p, i) {
-    var lap = Math.floor(i / teamCount), pos = i % teamCount;
-    teams[lap % 2 === 0 ? pos : teamCount - 1 - pos].players.push(p.name);
-  });
+  var sizes = relayTeamSizes(sorted.length, teamCount);
+  var next = 0;
+  for (var m = 0; m < teamCount / 2; m++) {
+    var ta = teams[2 * m], tb = teams[2 * m + 1];
+    var want = [sizes[2 * m], sizes[2 * m + 1]];
+    var group = sorted.slice(next, next + want[0] + want[1]);
+    next += group.length;
+    group.forEach(function (p, i) {
+      var lap = Math.floor(i / 2);
+      var side = (lap % 2 === 0) ? i % 2 : 1 - i % 2; // A, B, B, A, A, B, ...
+      if ([ta, tb][side].players.length >= want[side]) side = 1 - side; // that side is full
+      [ta, tb][side].players.push(p.name);
+    });
+  }
   teams.forEach(function (tm) { tm.captain = tm.players[0] || ''; });
 
   return updateRelayState(dateISO, function (state) {

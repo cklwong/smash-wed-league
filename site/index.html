@@ -402,7 +402,7 @@
       </details>
       <details>
         <summary>How are teams formed?</summary>
-        <p>Teams are drawn from the checked-in players by standings, "snake" style (1st pick to Team A, 2nd to B, … then back the other way), so every team gets a similar mix. Teams are split as evenly as possible, so a team can have fewer than 6 players. The organizer can move players between teams and add late arrivals (they're signed in at the desk) or guests — a guest plays for a team but doesn't earn ranking points. Each team picks a <strong>captain</strong>.</p>
+        <p>Teams are drawn by standings in tiers: the top players are split between <strong>Team A and Team B</strong>, the next group between C and D, then E and F — "snake" order within each pair (1st to A, 2nd and 3rd to B, 4th and 5th to A, …). So A vs B is the top match-up, and each match-up is two evenly split teams of similar level. Everyone signed up is drawn except no-shows. Teams are split as evenly as possible, so a team can have fewer than 6 players. The organizer can move players between teams and add late arrivals (they're signed in at the desk) or guests — a guest plays for a team but doesn't earn ranking points. Each team picks a <strong>captain</strong>.</p>
       </details>
       <details>
         <summary>Who plays with whom?</summary>
@@ -2061,11 +2061,10 @@ function isRelayGuest(n, state){
   if(/^guest\b/i.test((n||'').trim())) return true;
   return !!(state && state.guests && state.guests.some(g=>playerKey(g)===playerKey(n)));
 }
-// Who a draw takes: checked-in players once check-in has started, else every
-// confirmed signup who isn't a no-show (Code.gs drawTeams).
+// Who a draw takes: every confirmed signup except no-shows, checked in or
+// not (Code.gs drawTeams).
 function relayDrawEligible(confirmed){
-  const anyIn = confirmed.some(s=>s.checkedIn);
-  return confirmed.filter(s=>anyIn ? s.checkedIn : !s.noShow);
+  return confirmed.filter(s=>!s.noShow);
 }
 function relayNamesDatalist(){
   return `<datalist id="relay-player-names">${PLAYERS.map(p=>`<option value="${escAttr(p.name)}"></option>`).join('')}</datalist>`;
@@ -2201,10 +2200,15 @@ function relayPlayerStats(state, bonus){
   }).sort((x,y)=>y.rp-x.rp || y.won-x.won || x.name.localeCompare(y.name));
 }
 
-// Team sizes a snake draft of n players into k teams produces (Code.gs drawTeams).
-function relaySnakeSizes(n, k){
-  const sizes = Array(k).fill(0);
-  for(let i=0;i<n;i++){ const lap = Math.floor(i/k), pos = i%k; sizes[lap%2===0 ? pos : k-1-pos]++; }
+// Team sizes the draw uses for n players in k teams (Code.gs relayTeamSizes):
+// even split, extras in pairs to the top matchups (A+B, then C+D, ...), an
+// odd leftover to the first team of the last matchup.
+function relayTeamSizes(n, k){
+  const base = Math.floor(n/k);
+  let extra = n - base*k;
+  const sizes = Array(k).fill(base);
+  for(let m=0; m<Math.floor(k/2) && extra>=2; m++){ sizes[2*m]++; sizes[2*m+1]++; extra -= 2; }
+  if(extra > 0) sizes[k-2]++;
   return sizes;
 }
 function relayDefaultTeamCount(n, counts){
@@ -2293,7 +2297,6 @@ document.getElementById('relay-subnav').addEventListener('click', e=>{
 
 function relayDrawCard(dateISO, week, confirmed, admin, redraw){
   const eligible = relayDrawEligible(confirmed).length;
-  const anyIn = confirmed.some(s=>s.checkedIn);
   const counts = (week.event && week.event.teamCounts) || [4, 6];
   if(!RELAY_TEAM_COUNT_PICK || !counts.includes(RELAY_TEAM_COUNT_PICK)) RELAY_TEAM_COUNT_PICK = relayDefaultTeamCount(eligible, counts);
   const k = RELAY_TEAM_COUNT_PICK;
@@ -2301,21 +2304,21 @@ function relayDrawCard(dateISO, week, confirmed, admin, redraw){
   if(!admin){
     return `<div class="card">${head}<p style="margin:0; font-size:13px; color:var(--text-soft);">${eligible} registered so far. The organizer draws ${counts.join(' or ')} teams from the standings once everyone has checked in.</p></div>`;
   }
-  const sizes = relaySnakeSizes(eligible, k);
+  const sizes = relayTeamSizes(eligible, k);
   const uneven = [];
   for(let t=0; t+1<sizes.length; t+=2) if(sizes[t]!==sizes[t+1]) uneven.push(`${String.fromCharCode(65+t)} vs ${String.fromCharCode(66+t)}`);
   const preview = sizes.map((sz,i)=>`Team ${String.fromCharCode(65+i)}: ${sz}`).join(' · ');
   return `<div class="card">${head}
     <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">${redraw
       ? 'No games have started yet, so teams can still be redrawn from scratch — any moves or added players are lost.'
-      : 'Snake draft by standings (1st pick to Team A, 2nd to B, … then back the other way). Checked-in players are drawn (or every confirmed signup if nobody\'s checked in yet); you can move, add and remove players afterwards.'}</p>
+      : 'Drawn by standings in tiers: the top players are split between Team A and B, the next group between C and D, and so on (snake order within each pair, so each match-up is even). Everyone signed up is drawn except no-shows; you can move, add and remove players afterwards.'}</p>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
       <select id="relay-team-count" class="mini-select" style="padding:8px 10px; font-size:13px;" onchange="RELAY_TEAM_COUNT_PICK=Number(this.value); paintSchedule(LAST_WEEK);">
         ${counts.map(c=>`<option value="${c}" ${c===k?'selected':''}>${c} teams</option>`).join('')}
       </select>
       <button class="btn" id="relay-draw-btn" onclick="drawTeamsClick('${dateISO}', ${redraw})" ${eligible < k*2 ? 'disabled' : ''}>${redraw ? 'Redraw teams' : 'Draw teams'}</button>
     </div>
-    <p style="margin:0; font-size:13px; color:var(--text-soft);">${eligible} ${anyIn ? 'checked in' : 'confirmed'} → ${preview}</p>
+    <p style="margin:0; font-size:13px; color:var(--text-soft);">${eligible} players (no-shows left out) → ${preview}</p>
     ${uneven.length ? `<p style="margin:6px 0 0; font-size:13px; color:var(--loss);">Uneven match-up${uneven.length>1?'s':''}: ${uneven.join(', ')} — add a guest or late player to even it out after the draw.</p>` : ''}
     ${eligible < k*2 ? `<p style="margin:6px 0 0; font-size:13px; color:var(--loss);">Need at least ${k*2} players for ${k} teams.</p>` : ''}
   </div>`;
@@ -2328,7 +2331,7 @@ function relayCheckinCard(dateISO, week, confirmed, admin){
     .sort((a,b)=>a.s.name.localeCompare(b.s.name));
   return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in (${confirmed.length}/${cap})</h3>
     <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">${admin
-      ? 'Tap <strong>Check in</strong> as players arrive — only checked-in players are drawn into teams. Someone who didn\'t sign up? Use <strong>Walk-ins</strong> above.'
+      ? 'Tap <strong>Check in</strong> as players arrive. Mark <strong>No show</strong> for anyone not coming — they\'re left out of the team draw. Someone who didn\'t sign up? Use <strong>Walk-ins</strong> above.'
       : 'Sign in above to check players in or mark no-shows.'}</p>
     <ul class="roster-list">${list.length ? list.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO,admin)).join('') : '<li class="empty-row">No signups yet.</li>'}</ul>
   </div>`;
