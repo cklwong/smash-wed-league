@@ -189,6 +189,37 @@
   .games-details summary:before{content:'▸'; display:inline-block; font-size:9px; transition:transform .15s;}
   .games-details[open] summary:before{transform:rotate(90deg);}
   .games-details[open] summary{margin-bottom:4px;}
+  /* Team relay doubles */
+  .relay-game{display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px solid var(--border); font-size:13px; flex-wrap:wrap;}
+  .relay-game:last-child{border-bottom:none;}
+  .relay-game.now{background:var(--amber-tint); border-radius:6px; padding:8px; border-bottom-color:transparent;}
+  .relay-game .gnum{font-family:'IBM Plex Mono',monospace; color:var(--text-mute); width:24px; flex-shrink:0; font-size:12px;}
+  .relay-game .match-up{flex:1; min-width:200px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .relay-game .pair{min-width:0;}
+  .relay-game .sc{font-family:'IBM Plex Mono',monospace; font-weight:500; white-space:nowrap;}
+  .relay-game .win{color:var(--win); font-weight:600;}
+  .relay-game .acts{display:flex; gap:6px; align-items:center; flex-wrap:wrap;}
+  .round-head{display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin:14px 0 2px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-mute); font-weight:500;}
+  .round-head .res{text-transform:none; letter-spacing:0; font-size:12px; color:var(--text-soft);}
+  .icon-btn{background:#fff; border:1px solid var(--border); border-radius:6px; padding:3px 8px; font-size:12px; cursor:pointer; color:var(--ink); line-height:1.3; font-family:'Inter',sans-serif;}
+  .icon-btn:hover{background:var(--line);}
+  .icon-btn:disabled{opacity:.35; cursor:default; background:#fff;}
+  .icon-btn.on{background:var(--amber-tint); border-color:#E8C48A; color:var(--amber-deep);}
+  .team-row{display:flex; align-items:center; gap:6px; padding:7px 0; border-bottom:1px solid var(--border); font-size:14px; flex-wrap:wrap;}
+  .team-row:last-child{border-bottom:none;}
+  .team-row .pos{font-family:'IBM Plex Mono',monospace; color:var(--text-mute); width:26px; font-size:12px; flex-shrink:0;}
+  .team-row .rname{flex:1; min-width:130px;}
+  .team-row .tools{display:flex; gap:4px; align-items:center; flex-wrap:wrap;}
+  .mini-select{padding:4px 6px; border:1px solid var(--border); border-radius:6px; font-size:12px; background:#fff; font-family:'Inter',sans-serif; color:var(--ink); max-width:100%;}
+  .relay-sub{font-size:12px; color:var(--text-mute); margin:12px 0 4px; text-transform:uppercase; letter-spacing:.04em; font-weight:500;}
+  .event-tag{display:inline-block; background:var(--amber-tint); color:var(--amber-deep); border-radius:20px; padding:1px 8px; font-size:11px; font-weight:500; vertical-align:1px;}
+  .faq details{border-bottom:1px solid var(--border); padding:12px 0;}
+  .faq details:last-child{border-bottom:none;}
+  .faq summary{cursor:pointer; font-weight:500; color:var(--ink); font-size:14px;}
+  .faq p, .faq li{font-size:13.5px; color:var(--text-soft); line-height:1.6;}
+  .faq p{margin:8px 0 0;}
+  .faq ul{margin:8px 0 0; padding-left:20px;}
+  .faq h3{margin:0 0 4px; font-size:15px; color:var(--ink);}
 </style>
 </head>
 <body>
@@ -220,6 +251,7 @@
       <button data-view="schedule">This week</button>
       <button data-view="history">Past weeks</button>
       <button data-view="join">Join</button>
+      <button data-view="faq">FAQ</button>
       <button data-view="admin">Admin</button>
     </nav>
   </div>
@@ -259,6 +291,18 @@
         <div id="schedule-checkin" class="subview active"></div>
         <div id="schedule-live" class="subview"></div>
         <div id="schedule-pools" class="subview"></div>
+      </div>
+      <div id="schedule-relay" style="display:none;">
+        <div class="subnav" id="relay-subnav">
+          <button data-rsub="live" class="active">Live</button>
+          <button data-rsub="teams">Teams</button>
+          <button data-rsub="checkin">Check-in</button>
+          <button data-rsub="players">Players</button>
+        </div>
+        <div id="relay-live" class="subview active"></div>
+        <div id="relay-teams" class="subview"></div>
+        <div id="relay-checkin" class="subview"></div>
+        <div id="relay-players" class="subview"></div>
       </div>
     </div>
   </section>
@@ -321,6 +365,62 @@
     </div>
   </section>
 
+  <section id="view-faq" class="view">
+    <div class="page-head">
+      <h2>FAQ</h2>
+      <p>How Smash Wed works — the weekly singles league and the monthly team relay doubles night.</p>
+    </div>
+    <div class="card faq">
+      <h3>Singles league <span class="event-tag">every Wednesday</span></h3>
+      <details>
+        <summary>How do I sign up?</summary>
+        <p>Use the <strong>Join</strong> tab and pick a Wednesday. Signups close at <strong>noon Pacific</strong> on match day. The first 24 players are confirmed; everyone after that is on the waitlist and moves up automatically if a confirmed player drops. Please bring 2 good quality birds; court rental is $5/person.</p>
+      </details>
+      <details>
+        <summary>How are pools drawn?</summary>
+        <p>At check-in the organizer draws round-robin pools by standings — the top-ranked players go to Pool A, the next group to Pool B, and so on (2 pools for up to 16 players, 3 for up to 21, 4 above that). New players without a ranking are placed last. If someone doesn't show, a Guest takes their spot so the pool stays even.</p>
+      </details>
+      <details>
+        <summary>How are games scored and how do I earn ranking points?</summary>
+        <p>You play everyone in your pool once. Your rank points for the night are the number of games you won, plus a <strong>+1 bonus</strong> for playing in a top pool (Pool A when there are 3 pools; Pools A and B when there are 4).</p>
+      </details>
+      <details>
+        <summary>How are the standings calculated?</summary>
+        <p>Your average is the mean of your <strong>best 4 weeks out of your last 6</strong> weeks played. Weeks you skip don't count against you — but a 4th missed week in a row is marked "1mo absence" with 0 points until you've played 2 weeks again.</p>
+        <p>Players tied on average are separated by rank points in the most recent week they all played, then by their most recent head-to-head result. Anyone still tied shares the rank.</p>
+      </details>
+    </div>
+    <div class="card faq">
+      <h3>Team relay doubles <span class="event-tag">last Wednesday of the month</span></h3>
+      <details>
+        <summary>What is it?</summary>
+        <p>Once a month the singles league takes a break for a team night. Everyone who signs up is split into <strong>4 or 6 teams</strong> (up to 36 players), and teams play doubles relays against each other. Sign up on the <strong>Join</strong> tab the same way — relay nights are labelled there.</p>
+      </details>
+      <details>
+        <summary>How are teams formed?</summary>
+        <p>Teams are drawn from the standings "snake" style (1st pick to Team A, 2nd to B, … then back the other way), so every team gets a similar mix. Teams are split as evenly as possible, so a team can have fewer than 6 players. The organizer can move players between teams and add late arrivals or guests. Each team picks a <strong>captain</strong>.</p>
+      </details>
+      <details>
+        <summary>Who plays with whom?</summary>
+        <p>The captain puts the team in order P1, P2, P3 … and the doubles pairs rotate: <strong>P1+P2, P2+P3, P3+P4, P4+P5, P5+P6 and P6+P1</strong>. With 6 players that's 6 pairs, and everyone plays in exactly 2 of them each round. The captain also decides the order the pairs play in.</p>
+      </details>
+      <details>
+        <summary>How does a match between two teams work?</summary>
+        <ul>
+          <li>Team A plays Team B, Team C plays Team D, and so on. Each team's first pair plays the other team's first pair, then the second pairs, etc.</li>
+          <li>Each doubles game is to <strong>15 points</strong> (win by 2, capped at 21) unless the organizer announces a different target that night.</li>
+          <li>A <strong>round</strong> is won by the team that wins more doubles games; if that's level, by total point difference.</li>
+          <li>Teams play <strong>two rounds</strong>. If each team wins one, one <strong>tiebreak doubles game</strong> to 15 decides the match — each captain picks any two players for it.</li>
+          <li>Both teams in a match need the same number of players — the organizer evens it out with a guest or late player if needed.</li>
+        </ul>
+      </details>
+      <details>
+        <summary>Does it count for the standings?</summary>
+        <p>The organizer decides for each relay night. An <strong>exhibition</strong> night doesn't affect anyone's standings at all — it's as if the week didn't happen. On a <strong>ranked</strong> night you earn one point per doubles game you win (up to 4 over the two rounds) plus <strong>2 bonus points</strong> if your team wins its match — at most 6, the same scale as a singles night. The tiebreak game only decides the match; guests don't earn points.</p>
+      </details>
+    </div>
+  </section>
+
   <section id="view-admin" class="view">
     <div class="page-head">
       <h2>Admin</h2>
@@ -345,6 +445,19 @@
       <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Organizer tools</h3>
       <p class="note" style="margin:0 0 8px;">Duplicate the most recent week's tab as a new blank tab one week later — pool grids and formatting carried over, signups/draw/scores wiped.</p>
       <button type="button" class="btn ghost small" onclick="createNextWeek()">Create next week</button>
+      <p class="note" style="margin:12px 0 8px;">Event format — make a date a <strong>team relay doubles</strong> night (planned for the last Wednesday of each month) or keep it a regular singles night, and pick whether a relay night counts toward the standings.</p>
+      <div id="event-format-box">
+        <select id="ef-date" class="week-select" aria-label="Event date" onchange="syncEventFormatForm()"></select>
+        <select id="ef-format" class="week-select" aria-label="Event format" onchange="syncEventFormatForm(true)">
+          <option value="singles">Singles league (regular)</option>
+          <option value="relay">Team relay doubles</option>
+        </select>
+        <select id="ef-rp" class="week-select" aria-label="Ranking points">
+          <option value="exhibition">Exhibition — no ranking points</option>
+          <option value="ranked">Ranked — own wins + 2 for a team win (max 6)</option>
+        </select>
+        <button type="button" class="btn ghost small" onclick="saveEventFormat()">Save event format</button>
+      </div>
       <p class="note" style="margin:12px 0 8px;">Wipe tonight's pool draw, every score, and check-in/no-show status back to undrawn — for testing, not during a real session.</p>
       <button type="button" class="btn ghost small" onclick="resetThisWeek()">Reset this week's draw &amp; scores</button>
       <p class="note" style="margin:12px 0 8px;">Fix a player's name across the season standings and every weekly signup list, and optionally set the email they get notified at when added to or removed from an event (they'll get a confirmation email of the change too).</p>
@@ -405,6 +518,8 @@ let PLAYERS = [];
 let PLAYER_EMAILS = {}; // name -> registered email, admin-only (see listPlayerEmails)
 let WEEKS = []; // finalized week dates (ISO), most recent first
 const CAP = 24;
+const RELAY_CAP = 36; // signups confirmed on a team relay night (mirrors RELAY_CAP in gas/Code.gs)
+let WEEK_FORMATS = {}; // ISO date -> {format:'relay', rpMode} for team relay nights (from weekDates)
 
 let rankingsPromise = null;
 function fetchRankings(){
@@ -421,7 +536,7 @@ function fetchWeekDates(){
   if(!weekDatesPromise){
     weekDatesPromise = fetch(GAS_URL+'?action=weekDates')
       .then(r=>r.json())
-      .then(j=>j.dates || [])
+      .then(j=>{ WEEK_FORMATS = j.formats || {}; return j.dates || []; })
       .catch(e=>{ weekDatesPromise = null; return []; });
   }
   return weekDatesPromise;
@@ -680,6 +795,8 @@ async function renderSchedule(quiet=false, force=false){
 // updates instantly instead of waiting out two backend round-trips.
 function paintSchedule(week, dateISO){
   dateISO = dateISO || week.date;
+  if(isRelayWeek(week)) return paintRelay(week, dateISO); // team relay night - see paintRelay
+  document.getElementById('schedule-relay').style.display = 'none';
   const content = document.getElementById('schedule-content');
   const skel = document.getElementById('schedule-skel');
   const confirmed = week.signups.slice(0, CAP);
@@ -687,24 +804,7 @@ function paintSchedule(week, dateISO){
   const drawnPools = week.pools.filter(p=>p.drawn);
   const admin = hasRunAccess();
 
-  let signinHtml;
-  if(!admin){
-    signinHtml = `<div class="cta-line" style="flex-direction:column; align-items:stretch;">
-      <span>Sign in with tonight's PIN to manage check-in, matches, and pools (or use the admin passphrase on the Admin tab).</span>
-      <div class="search-row" style="margin:8px 0 0;">
-        <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="week-pin-input" placeholder="6-digit PIN" autocomplete="off">
-        <button type="button" class="btn small" onclick="weekPinSignIn('${dateISO}')">Sign in</button>
-      </div>
-      <p class="note" id="week-pin-error" style="display:none; color:var(--loss); margin:6px 0 0;"></p>
-    </div>`;
-  } else if(!isAdmin()){
-    signinHtml = `<div class="cta-line">
-      <span>Signed in with tonight's PIN.</span>
-      <button class="btn small ghost" onclick="weekPinSignOut()">Sign out</button>
-    </div>`;
-  } else {
-    signinHtml = '';
-  }
+  const signinHtml = scheduleSigninHtml(dateISO, admin, 'check-in, matches, and pools');
 
   const bannerHtml = `<div class="session-banner">
     <div><div class="date">Wed, ${fmtDate(dateISO)}</div>
@@ -772,6 +872,27 @@ function paintSchedule(week, dateISO){
     updateGuestInputs(poolIdx, NEXT_MATCHES[poolIdx][NEXT_SELECTED[poolIdx]]);
   });
   tickLiveTimers();
+}
+
+// PIN sign-in prompt (or signed-in note) shown under the This week banner.
+function scheduleSigninHtml(dateISO, admin, what){
+  if(!admin){
+    return `<div class="cta-line" style="flex-direction:column; align-items:stretch;">
+      <span>Sign in with tonight's PIN to manage ${what} (or use the admin passphrase on the Admin tab).</span>
+      <div class="search-row" style="margin:8px 0 0;">
+        <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" id="week-pin-input" placeholder="6-digit PIN" autocomplete="off">
+        <button type="button" class="btn small" onclick="weekPinSignIn('${dateISO}')">Sign in</button>
+      </div>
+      <p class="note" id="week-pin-error" style="display:none; color:var(--loss); margin:6px 0 0;"></p>
+    </div>`;
+  }
+  if(!isAdmin()){
+    return `<div class="cta-line">
+      <span>Signed in with tonight's PIN.</span>
+      <button class="btn small ghost" onclick="weekPinSignOut()">Sign out</button>
+    </div>`;
+  }
+  return '';
 }
 
 // Preview text + guest-padding checkboxes for however many eligible players
@@ -889,7 +1010,9 @@ function checkinRow(s, num, dateISO, admin){
 // renderSchedule(true) call below still fetches the authoritative state
 // afterward, so a failed request or a seat conflict self-corrects right away.
 async function statusAction(btnEl, action, dateISO, name){
-  if(action==='noshow' && !confirm(`Mark ${name} as a no-show? Their pool spot goes to a Guest.`)) return;
+  if(action==='noshow' && !confirm(isRelayWeek(LAST_WEEK)
+    ? `Mark ${name} as a no-show?`
+    : `Mark ${name} as a no-show? Their pool spot goes to a Guest.`)) return;
   const li = btnEl.closest('li');
   if(li){
     const num = li.querySelector('.num')?.textContent || '';
@@ -971,6 +1094,7 @@ async function fetchEventPin(){
   document.getElementById('admin-signout-btn').style.display = 'inline-block';
   populateRenameSelect();
   fetchPlayerEmails(secret);
+  populateEventFormat();
 }
 
 async function createNextWeek(){
@@ -995,7 +1119,7 @@ async function resetThisWeek(){
   out.style.display = 'block'; out.textContent = 'Resetting…';
   const res = await postAction({action:'resetWeek', date:dateISO, secret: adminSecret()});
   if(!res.ok){ out.textContent = res.error || 'Could not reset the week.'; return; }
-  out.textContent = `Reset Wed, ${fmtDate(dateISO)} — draw, scores, and check-ins cleared.`;
+  out.textContent = `Reset Wed, ${fmtDate(dateISO)} — draw${WEEK_FORMATS[dateISO] ? ' (relay teams)' : ''}, scores, and check-ins cleared.`;
   if(WEEK_DATE === dateISO) renderSchedule(true, true);
 }
 
@@ -1101,9 +1225,9 @@ document.getElementById('rename-form').addEventListener('submit', async e=>{
   out.textContent = `Renamed "${oldName}" to "${newName}"${res.tabsUpdated ? ' — ' + res.tabsUpdated + ' weekly tab' + (res.tabsUpdated===1?'':'s') + ' updated' : ''}${email ? ' — confirmation emailed.' : '.'}`;
 });
 
-function rosterRow(s, num, phase){
+function rosterRow(s, num, phase, cap=CAP){
   return `<li>
-    <span class="num">${phase==='waitlist' ? CAP+num : num}</span>
+    <span class="num">${phase==='waitlist' ? cap+num : num}</span>
     <span class="rname">${s.name}${statusBadge(s)}</span>
   </li>`;
 }
@@ -1501,7 +1625,13 @@ async function renderHistory(){
   }
   sel.style.display = '';
   const prev = sel.value;
-  sel.innerHTML = dates.map(d=>`<option value="${d}">Wed, ${fmtDateFull(d)}${pending.includes(d) ? ' · not yet finalized' : ''}</option>`).join('');
+  sel.innerHTML = dates.map(d=>{
+    const f = WEEK_FORMATS[d];
+    const tag = f && f.format==='relay'
+      ? ' · team relay' + (f.rpMode==='ranked' ? (pending.includes(d) ? ' · not yet finalized' : '') : ' (exhibition)')
+      : (pending.includes(d) ? ' · not yet finalized' : '');
+    return `<option value="${d}">Wed, ${fmtDateFull(d)}${tag}</option>`;
+  }).join('');
   sel.value = (prev && dates.includes(prev)) ? prev : dates[0];
   loadHistoryWeek(sel.value);
 }
@@ -1516,6 +1646,7 @@ async function loadHistoryWeek(dateISO){
   }
   if(myToken !== historyToken) return; // a newer selection is in flight
   const week = WEEK_CACHE[dateISO];
+  if(isRelayWeek(week)){ content.innerHTML = relayHistoryHtml(week, dateISO); return; }
   const model = week.exists ? buildLiveModel(week) : {pools:[]};
   if(!model.pools.length){
     content.innerHTML = '<div class="card"><p style="margin:0; font-size:14px; color:var(--text-soft);">No pool results found for this week.</p></div>';
@@ -1552,6 +1683,7 @@ async function finalizeRankingsClick(dateISO){
     return;
   }
   sessionStorage.setItem('sw-admin-secret', secret);
+  if(res.exhibition){ out.textContent = 'This relay night is an exhibition — nothing is written to the standings. Switch it to Ranked on the Admin tab first if it should count.'; return; }
   let msg = `Done — updated ${res.updated||0} player${res.updated===1?'':'s'}.`;
   if(res.added && res.added.length) msg += ` Added ${res.added.join(', ')} as new.`;
   if(res.skipped && res.skipped.length) msg += ` Could not add: ${res.skipped.join(', ')} (Rankings sheet is full).`;
@@ -1800,6 +1932,713 @@ async function saveGameEdit(rowId){
   renderSchedule(true, true);
 }
 
+// ---- Team relay doubles ----
+// A date the organizer switched to "team relay doubles" (Admin tab ->
+// setEventFormat) comes back from ?action=week with `event` and `relay`
+// fields, and paintSchedule hands it to paintRelay instead of the singles
+// pool board. The relay payload is the raw state (teams, games, rev); every
+// derived view below (pairs, playing order, round/tie results, player
+// totals) mirrors the pure relay* functions in gas/Code.gs - keep the two
+// in sync.
+
+const RELAY_ROUNDS = 2;
+const RELAY_TIEBREAK_ROUND = 3;
+let relaySubview = 'live';      // sticky across background refreshes
+let RELAY_OPEN_EDIT = null;     // "tie-round-seq" of a game row with its score inputs open
+let RELAY_TEAM_COUNT_PICK = null;
+let RELAY_EDIT_SEQ = 0;
+let RELAY_SAVE_CHAIN = Promise.resolve();
+
+function isRelayWeek(w){ return !!(w && w.event && w.event.format==='relay'); }
+function weekCap(w){ return (w && w.event && w.event.cap) || CAP; }
+function escHtml(s){ return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function relayRpText(ev){
+  const bonus = (ev && ev.teamBonus) || 2;
+  return ev && ev.rpMode==='ranked'
+    ? `Ranked — 1 pt per doubles win + ${bonus} for a team win`
+    : 'Exhibition — doesn\'t count toward standings';
+}
+
+function isRelayGuest(n){ return /^guest\b/i.test((n||'').trim()); }
+function relayPairs(players){
+  const n = players.length;
+  if(n < 2) return [];
+  if(n === 2) return [[players[0], players[1]]];
+  return players.map((p,i)=>[p, players[(i+1)%n]]);
+}
+function relayOrder(team, round){
+  const n = relayPairs(team.players||[]).length;
+  const o = team.order && team.order[round];
+  if(o && o.length===n && new Set(o).size===n && o.every(x=>Number.isInteger(x) && x>=0 && x<n)) return o.slice();
+  return Array.from({length:n}, (_,i)=>i);
+}
+function relayTieCount(state){ return Math.floor(state.teams.length/2); }
+function relayFindGame(state, tie, round, seq){
+  return state.games.find(g=>g.tie===tie && g.round===round && g.seq===seq) || null;
+}
+function relayGameDone(g){ return !!g && typeof g.sa==='number' && typeof g.sb==='number'; }
+function relayTieView(state, tie){
+  const ta = state.teams[2*tie], tb = state.teams[2*tie+1];
+  const uneven = ta.players.length !== tb.players.length;
+  const rounds = [];
+  for(let r=1; r<=RELAY_ROUNDS; r++){
+    const pa = relayPairs(ta.players), pb = relayPairs(tb.players);
+    const oa = relayOrder(ta, r), ob = relayOrder(tb, r);
+    let count = Math.max(pa.length, pb.length);
+    state.games.forEach(g=>{ if(g.tie===tie && g.round===r && g.seq+1 > count) count = g.seq+1; });
+    const games = [];
+    let winsA=0, winsB=0, ptsA=0, ptsB=0, doneCount=0;
+    for(let s=0; s<count; s++){
+      const rec = relayFindGame(state, tie, r, s);
+      const g = {
+        seq: s,
+        a: rec ? rec.a : (s < oa.length ? pa[oa[s]] : null),
+        b: rec ? rec.b : (s < ob.length ? pb[ob[s]] : null),
+        startedAt: rec ? rec.startedAt || null : null,
+        done: relayGameDone(rec)
+      };
+      if(g.done){
+        g.sa = rec.sa; g.sb = rec.sb;
+        doneCount++; ptsA += rec.sa; ptsB += rec.sb;
+        if(rec.sa > rec.sb) winsA++; else winsB++;
+      }
+      games.push(g);
+    }
+    const done = count > 0 && doneCount === count;
+    let winner = null;
+    if(done){
+      if(winsA !== winsB) winner = winsA > winsB ? 'a' : 'b';
+      else if(ptsA !== ptsB) winner = ptsA > ptsB ? 'a' : 'b';
+      else winner = 'draw';
+    }
+    rounds.push({round:r, games, done, started: doneCount>0 || games.some(x=>!!x.startedAt), winsA, winsB, ptsA, ptsB, winner});
+  }
+  const allDone = rounds.every(x=>x.done);
+  const roundsA = rounds.filter(x=>x.winner==='a').length, roundsB = rounds.filter(x=>x.winner==='b').length;
+  const needsTiebreak = allDone && roundsA === roundsB;
+  const tbRec = relayFindGame(state, tie, RELAY_TIEBREAK_ROUND, 0);
+  const tiebreak = tbRec ? {seq:0, a:tbRec.a, b:tbRec.b, startedAt:tbRec.startedAt||null, done:relayGameDone(tbRec), sa:tbRec.sa, sb:tbRec.sb} : null;
+  let winner = null;
+  if(allDone){
+    if(roundsA !== roundsB) winner = roundsA > roundsB ? 'a' : 'b';
+    else if(tiebreak && tiebreak.done) winner = tiebreak.sa > tiebreak.sb ? 'a' : 'b';
+  }
+  return {tie, a:ta, b:tb, uneven, rounds, roundsA, roundsB, needsTiebreak, tiebreak, winner, done: !!winner};
+}
+function relayPlayerStats(state, bonus){
+  const byKey = {}, teamOf = {}, tieWinner = {};
+  state.teams.forEach(t=>t.players.forEach(p=>{ teamOf[playerKey(p)] = t.id; }));
+  for(let tie=0; tie<relayTieCount(state); tie++){
+    const v = relayTieView(state, tie);
+    if(v.winner) tieWinner[v.winner==='a' ? v.a.id : v.b.id] = true;
+  }
+  const entry = name=>{
+    const k = playerKey(name);
+    if(!byKey[k]) byKey[k] = {name:name.trim(), team:teamOf[k]||'', played:0, won:0, guest:isRelayGuest(name)};
+    return byKey[k];
+  };
+  state.teams.forEach(t=>t.players.forEach(entry));
+  state.games.forEach(g=>{
+    if(g.round > RELAY_ROUNDS || !relayGameDone(g)) return;
+    const teamA = state.teams[2*g.tie], teamB = state.teams[2*g.tie+1];
+    [[g.a, g.sa>g.sb, teamA], [g.b, g.sb>g.sa, teamB]].forEach(([pair, won, team])=>{
+      (pair||[]).forEach(n=>{
+        const e = entry(n);
+        e.played++;
+        if(won) e.won++;
+        if(!e.team && team) e.team = team.id;
+      });
+    });
+  });
+  return Object.values(byKey).map(e=>{
+    e.teamWon = !!(e.team && tieWinner[e.team]);
+    e.rp = e.won + (e.teamWon ? bonus : 0);
+    return e;
+  }).sort((x,y)=>y.rp-x.rp || y.won-x.won || x.name.localeCompare(y.name));
+}
+
+// Team sizes a snake draft of n players into k teams produces (Code.gs drawTeams).
+function relaySnakeSizes(n, k){
+  const sizes = Array(k).fill(0);
+  for(let i=0;i<n;i++){ const lap = Math.floor(i/k), pos = i%k; sizes[lap%2===0 ? pos : k-1-pos]++; }
+  return sizes;
+}
+function relayDefaultTeamCount(n, counts){
+  let best = counts[0];
+  counts.forEach(c=>{ if(Math.abs(n/c-6) < Math.abs(n/best-6)) best = c; });
+  return best;
+}
+
+function paintRelay(week, dateISO){
+  const content = document.getElementById('schedule-content');
+  const skel = document.getElementById('schedule-skel');
+  const state = week.relay || {teams:[], games:[], rev:0};
+  const ev = week.event;
+  const cap = weekCap(week);
+  const confirmed = week.signups.slice(0, cap);
+  const waitlist = week.signups.slice(cap);
+  const admin = hasRunAccess();
+  const drawn = state.teams.length > 0;
+  document.getElementById('schedule-sub').textContent = `Wed, ${fmtDate(dateISO)} · team relay doubles night`;
+
+  const bannerHtml = `<div class="session-banner">
+    <div><div class="date">Wed, ${fmtDate(dateISO)} · Team Relay Doubles</div>
+    <div class="meta">${escHtml(relayRpText(ev))} · <a href="#" onclick="showView('faq'); return false;" style="color:#fff;">how it works</a></div></div>
+    <div style="display:flex; gap:8px;">
+      <div class="cap-pill"><div class="n">${confirmed.length}/${cap}</div><div class="l">Confirmed</div></div>
+      ${drawn ? `<div class="cap-pill"><div class="n">${state.teams.length}</div><div class="l">Teams</div></div>`
+              : `<div class="cap-pill"><div class="n">${waitlist.length}</div><div class="l">Waitlist</div></div>`}
+    </div>
+  </div>` + scheduleSigninHtml(dateISO, admin, 'teams, check-in, and scores');
+
+  let predrawHtml = '';
+  let liveHtml = '', teamsHtml = '', checkinHtml = '', playersHtml = '';
+  if(!drawn){
+    predrawHtml = `<div class="card my-panel">
+      <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Tonight is a <strong>team relay doubles</strong> night. Signups are open until <strong>noon Pacific</strong>; the first ${cap} are confirmed and teams are drawn from the standings at check-in.</p>
+      <button class="btn small" onclick="showView('join')">Add/remove a player</button>
+    </div>`;
+    predrawHtml += relayDrawCard(dateISO, week, confirmed, admin, false);
+    predrawHtml += relayCheckinCard(dateISO, week, confirmed, admin);
+    predrawHtml += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Waitlist</h3>
+      <ul class="roster-list">${waitlist.length ? waitlist.map((s,i)=>rosterRow(s,i+1,'waitlist',cap)).join('') : '<li class="empty-row">Nobody waiting right now.</li>'}</ul>
+    </div>`;
+  } else {
+    liveHtml = relayLiveHtml(state, admin);
+    teamsHtml = relayUnassignedCard(week, confirmed, state, admin) + relayTeamsHtml(week, state, admin);
+    checkinHtml = (admin && !state.games.length ? relayDrawCard(dateISO, week, confirmed, admin, true) : '')
+      + relayUnassignedCard(week, confirmed, state, admin)
+      + relayCheckinCard(dateISO, week, confirmed, admin);
+    playersHtml = relayPlayersCard(state, ev);
+  }
+
+  // Keep half-typed scores/names and picked selects across the repaint.
+  const snap = {};
+  content.querySelectorAll('input[id], select[id]').forEach(el=>{ if(el.value !== '') snap[el.id] = el.value; });
+  skel.style.display = 'none';
+  document.getElementById('schedule-banner').innerHTML = bannerHtml;
+  document.getElementById('schedule-predraw').innerHTML = predrawHtml;
+  document.getElementById('schedule-predraw').style.display = drawn ? 'none' : 'block';
+  document.getElementById('schedule-postdraw').style.display = 'none';
+  document.getElementById('schedule-relay').style.display = drawn ? 'block' : 'none';
+  document.getElementById('relay-live').innerHTML = liveHtml;
+  document.getElementById('relay-teams').innerHTML = teamsHtml;
+  document.getElementById('relay-checkin').innerHTML = checkinHtml;
+  document.getElementById('relay-players').innerHTML = playersHtml;
+  showRelaySubview(relaySubview);
+  for(const id in snap){
+    const el = document.getElementById(id);
+    if(!el) continue;
+    if(el.tagName==='SELECT' && ![...el.options].some(o=>o.value===snap[id])) continue;
+    el.value = snap[id];
+  }
+  tickLiveTimers();
+}
+
+function showRelaySubview(name){
+  relaySubview = name;
+  document.querySelectorAll('#schedule-relay .subview').forEach(v=>v.classList.toggle('active', v.id==='relay-'+name));
+  document.querySelectorAll('#relay-subnav button').forEach(b=>b.classList.toggle('active', b.dataset.rsub===name));
+}
+document.getElementById('relay-subnav').addEventListener('click', e=>{
+  const btn = e.target.closest('button[data-rsub]');
+  if(btn) showRelaySubview(btn.dataset.rsub);
+});
+
+function relayDrawCard(dateISO, week, confirmed, admin, redraw){
+  const eligible = confirmed.filter(s=>!s.noShow).length;
+  const counts = (week.event && week.event.teamCounts) || [4, 6];
+  if(!RELAY_TEAM_COUNT_PICK || !counts.includes(RELAY_TEAM_COUNT_PICK)) RELAY_TEAM_COUNT_PICK = relayDefaultTeamCount(eligible, counts);
+  const k = RELAY_TEAM_COUNT_PICK;
+  const head = `<h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">${redraw ? 'Redraw teams' : 'Draw teams'} <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">organizer</span></h3>`;
+  if(!admin){
+    return `<div class="card">${head}<p style="margin:0; font-size:13px; color:var(--text-soft);">${eligible} registered so far. The organizer draws ${counts.join(' or ')} teams from the standings once everyone has checked in.</p></div>`;
+  }
+  const sizes = relaySnakeSizes(eligible, k);
+  const uneven = [];
+  for(let t=0; t+1<sizes.length; t+=2) if(sizes[t]!==sizes[t+1]) uneven.push(`${String.fromCharCode(65+t)} vs ${String.fromCharCode(66+t)}`);
+  const preview = sizes.map((sz,i)=>`Team ${String.fromCharCode(65+i)}: ${sz}`).join(' · ');
+  return `<div class="card">${head}
+    <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">${redraw
+      ? 'No games have started yet, so teams can still be redrawn from scratch — any moves or added players are lost.'
+      : 'Snake draft by standings (1st pick to Team A, 2nd to B, … then back the other way). Confirmed signups minus no-shows are included; you can move, add and remove players afterwards.'}</p>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px;">
+      <select id="relay-team-count" class="mini-select" style="padding:8px 10px; font-size:13px;" onchange="RELAY_TEAM_COUNT_PICK=Number(this.value); paintSchedule(LAST_WEEK);">
+        ${counts.map(c=>`<option value="${c}" ${c===k?'selected':''}>${c} teams</option>`).join('')}
+      </select>
+      <button class="btn" id="relay-draw-btn" onclick="drawTeamsClick('${dateISO}', ${redraw})" ${eligible < k*2 ? 'disabled' : ''}>${redraw ? 'Redraw teams' : 'Draw teams'}</button>
+    </div>
+    <p style="margin:0; font-size:13px; color:var(--text-soft);">${eligible} eligible → ${preview}</p>
+    ${uneven.length ? `<p style="margin:6px 0 0; font-size:13px; color:var(--loss);">Uneven match-up${uneven.length>1?'s':''}: ${uneven.join(', ')} — add a guest or late player to even it out after the draw.</p>` : ''}
+    ${eligible < k*2 ? `<p style="margin:6px 0 0; font-size:13px; color:var(--loss);">Need at least ${k*2} players for ${k} teams.</p>` : ''}
+  </div>`;
+}
+
+function relayCheckinCard(dateISO, week, confirmed, admin){
+  const list = confirmed.map((s,i)=>({s, joinNum:i+1})).sort((a,b)=>a.s.name.localeCompare(b.s.name));
+  return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Check-in (${confirmed.length}/${weekCap(week)})</h3>
+    <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">${admin
+      ? 'Tap <strong>Check in</strong> as players arrive. No-shows are left out of the team draw.'
+      : 'Sign in above to check players in or mark no-shows.'}</p>
+    <ul class="roster-list">${list.length ? list.map(({s,joinNum})=>checkinRow(s,joinNum,dateISO,admin)).join('') : '<li class="empty-row">No signups yet.</li>'}</ul>
+  </div>`;
+}
+
+// Confirmed, not-no-show signups who aren't on any team - late arrivals
+// after the draw, or someone removed from a team.
+function relayUnassignedCard(week, confirmed, state, admin){
+  const onTeam = new Set(state.teams.flatMap(t=>t.players.map(playerKey)));
+  const loose = confirmed.filter(s=>!s.noShow && !onTeam.has(playerKey(s.name)));
+  if(!loose.length) return '';
+  const rows = loose.map(s=>`<div class="team-row"><span class="rname">${escHtml(s.name)}${statusBadge(s)}</span>
+    ${admin ? `<select class="mini-select" aria-label="Add ${escAttr(s.name)} to a team" onchange="if(this.value!=='') relayAddExisting(this.dataset.name, Number(this.value))" data-name="${escAttr(s.name)}">
+      <option value="">Add to team…</option>${state.teams.map((t,ti)=>`<option value="${ti}">Team ${t.id} (${t.players.length})</option>`).join('')}
+    </select>` : ''}</div>`).join('');
+  return `<div class="card" style="border-color:#E8C48A;"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Signed up, not on a team</h3>
+    <p style="margin:0 0 6px; font-size:13px; color:var(--text-soft);">Late arrivals or players taken off a team.${admin ? '' : ' The organizer can add them to a team.'}</p>${rows}</div>`;
+}
+
+function relayLiveHtml(state, admin){
+  const ties = [];
+  for(let t=0; t<relayTieCount(state); t++) ties.push(relayTieCard(state, t, admin, false));
+  const note = admin ? `<p class="note" style="margin:0 0 12px;">Tap <strong>Start</strong> when a pair goes on court and <strong>Record</strong> the score when they finish (or <strong>Score</strong> to enter a finished game directly). Scores can be fixed any time with <strong>Edit</strong>.</p>` : '';
+  return note + ties.join('');
+}
+
+function relayTieCard(state, tie, admin, readOnly){
+  const v = relayTieView(state, tie);
+  const A = v.a.id, B = v.b.id;
+  let status;
+  if(v.winner){
+    const onTb = v.needsTiebreak;
+    status = `<span class="pool-status full">Team ${v.winner==='a'?A:B} wins${onTb ? ' on the tiebreak' : ` ${Math.max(v.roundsA,v.roundsB)}–${Math.min(v.roundsA,v.roundsB)}`}</span>`;
+  } else if(v.needsTiebreak){
+    status = `<span class="pool-status" style="background:var(--amber-tint); color:var(--amber-deep);">Level — tiebreak game</span>`;
+  } else {
+    const cur = v.rounds.find(r=>!r.done);
+    status = `<span class="pool-status" style="background:var(--line); color:var(--text-soft);">${cur && cur.started ? 'Round '+cur.round+' in progress' : (cur ? 'Round '+cur.round+' up next' : '')}</span>`;
+  }
+  const warn = (v.uneven && !v.done && !readOnly)
+    ? `<div class="redraw-banner" style="margin:6px 0 4px;"><p>Team ${A} has ${v.a.players.length} players and Team ${B} has ${v.b.players.length} — even them out on the Teams tab (add a guest or a late player) before playing.</p></div>` : '';
+  const caps = `<p style="margin:0; font-size:12px; color:var(--text-mute);">Captains: ${escHtml(v.a.captain||'—')} (${A}) · ${escHtml(v.b.captain||'—')} (${B})</p>`;
+  const rounds = v.rounds.map(r=>relayRoundHtml(v, r, admin, readOnly)).join('');
+  return `<div class="card"><div class="pool-head" style="margin-bottom:4px;"><h3>Team ${A} vs Team ${B}</h3>${status}</div>${caps}${warn}${rounds}${relayTiebreakHtml(v, admin, readOnly)}</div>`;
+}
+
+function relayRoundHtml(v, r, admin, readOnly){
+  const A = v.a.id, B = v.b.id;
+  let res = '';
+  if(r.done){
+    const diff = r.ptsA - r.ptsB;
+    res = r.winner==='draw'
+      ? `level ${r.winsA}–${r.winsB}, ${r.ptsA}–${r.ptsB} pts`
+      : `<strong style="color:var(--win);">Team ${r.winner==='a'?A:B}</strong> ${r.winsA}–${r.winsB} games · ${diff>0?'+':''}${diff} pts (${A})`;
+  } else if(r.started){
+    res = `${A} ${r.winsA} – ${r.winsB} ${B} so far`;
+  }
+  // "Up next" = first game in this round that isn't done or on court, once
+  // the round before it is finished (or this is round 1).
+  const prevDone = r.round===1 || v.rounds[r.round-2].done;
+  const nextSeq = prevDone ? (r.games.find(g=>!g.done && !g.startedAt) || {}).seq : undefined;
+  const rows = r.games.map(g=>relayGameRow(v, r.round, g, admin, readOnly, g.seq===nextSeq)).join('');
+  return `<div class="round-head"><span>Round ${r.round}</span><span class="res">${res}</span></div>${rows}`;
+}
+
+function relayPairHtml(pair, won){
+  if(!pair) return '<span class="game-note">— no pair —</span>';
+  const txt = pair.map(escHtml).join(' + ');
+  return won ? `<span class="pair win">${txt}</span>` : `<span class="pair">${txt}</span>`;
+}
+
+function relayGameRow(v, round, g, admin, readOnly, upNext){
+  const key = `${v.tie}-${round}-${g.seq}`;
+  const label = round===RELAY_TIEBREAK_ROUND ? 'TB' : 'G'+(g.seq+1);
+  const onCourt = !!g.startedAt && !g.done;
+  const editing = !readOnly && admin && (RELAY_OPEN_EDIT===key || onCourt);
+  const call = `${v.tie},${round},${g.seq}`;
+  let mid, acts = '';
+  if(editing){
+    mid = `<span class="score-entry">
+      <input type="number" inputmode="numeric" min="0" id="relay-sa-${key}" placeholder="${v.a.id}" value="${g.done ? g.sa : ''}">
+      <span>–</span>
+      <input type="number" inputmode="numeric" min="0" id="relay-sb-${key}" placeholder="${v.b.id}" value="${g.done ? g.sb : ''}">
+    </span>`;
+    acts = `<button class="btn small" onclick="relayScoreClick(${call})">${g.done ? 'Save' : 'Record'}</button>`
+      + (onCourt ? `<button class="btn small ghost" title="Take this game off court" onclick="relayClearClick(${call}, false)">✕</button>` : '')
+      + (g.done ? `<button class="btn small ghost" onclick="relayClearClick(${call}, true)">Delete</button>` : '')
+      + (RELAY_OPEN_EDIT===key ? `<button class="btn small ghost" onclick="RELAY_OPEN_EDIT=null; paintSchedule(LAST_WEEK);">Cancel</button>` : '');
+  } else if(g.done){
+    mid = `<span class="sc"><span class="${g.sa>g.sb?'win':''}">${g.sa}</span>–<span class="${g.sb>g.sa?'win':''}">${g.sb}</span></span>`;
+    if(admin && !readOnly) acts = `<button class="btn small ghost" onclick="RELAY_OPEN_EDIT='${key}'; paintSchedule(LAST_WEEK);">Edit</button>`;
+  } else {
+    mid = '<span class="game-note">vs</span>';
+    if(admin && !readOnly && !v.uneven && g.a && g.b){
+      acts = `<button class="btn small" onclick="relayStartClick(${call})">Start</button>
+        <button class="btn small ghost" onclick="RELAY_OPEN_EDIT='${key}'; paintSchedule(LAST_WEEK);">Score</button>`;
+    }
+  }
+  const tag = onCourt ? ` <span class="elapsed num" data-since="${g.startedAt}">0:00</span>`
+    : (upNext && !readOnly ? ' <span class="game-note">up next</span>' : '');
+  return `<div class="relay-game${onCourt?' now':''}">
+    <span class="gnum">${label}</span>
+    <span class="match-up">${relayPairHtml(g.a, g.done && g.sa>g.sb)} ${mid} ${relayPairHtml(g.b, g.done && g.sb>g.sa)}${tag}</span>
+    ${acts ? `<span class="acts">${acts}</span>` : ''}
+  </div>`;
+}
+
+function relayTiebreakHtml(v, admin, readOnly){
+  if(v.tiebreak){
+    return `<div class="round-head"><span>Tiebreak</span><span class="res">${v.needsTiebreak ? '' : 'not needed any more — rounds are no longer level'}</span></div>`
+      + relayGameRow(v, RELAY_TIEBREAK_ROUND, v.tiebreak, admin, readOnly, false);
+  }
+  if(!v.needsTiebreak) return '';
+  const head = `<div class="round-head"><span>Tiebreak</span><span class="res">one doubles game to 15 — each captain picks two players</span></div>`;
+  if(!admin || readOnly) return head + '<p class="game-note" style="margin:6px 0 0;">Waiting for the captains to pick their pairs.</p>';
+  const sel = (side, team, n)=>`<select class="mini-select" id="relay-tb-${v.tie}-${side}${n}" aria-label="Team ${team.id} tiebreak player ${n}">
+    <option value="">Team ${team.id} player ${n}…</option>${team.players.map(p=>`<option value="${escAttr(p)}">${escHtml(p)}</option>`).join('')}</select>`;
+  return head + `<div class="relay-game now" style="gap:6px;">
+    <span class="gnum">TB</span>
+    <span class="match-up">${sel('a', v.a, 1)} + ${sel('a', v.a, 2)} <span class="game-note">vs</span> ${sel('b', v.b, 1)} + ${sel('b', v.b, 2)}</span>
+    <span class="acts">
+      <span class="score-entry">
+        <input type="number" inputmode="numeric" min="0" id="relay-sa-${v.tie}-3-0" placeholder="${v.a.id}">
+        <span>–</span>
+        <input type="number" inputmode="numeric" min="0" id="relay-sb-${v.tie}-3-0" placeholder="${v.b.id}">
+      </span>
+      <button class="btn small ghost" onclick="relayStartClick(${v.tie},3,0)">Start</button>
+      <button class="btn small" onclick="relayScoreClick(${v.tie},3,0)">Record</button>
+    </span>
+  </div>`;
+}
+
+function relayTeamsHtml(week, state, admin){
+  const intro = admin
+    ? `<p class="note" style="margin:0 0 12px;">The captain's P1, P2, P3 … order sets the pairs (P1+P2, P2+P3, … and the last player with P1). Use ▲▼ to change positions, ★ for captain, the menu to move a player to another team, ✕ to take them off. Games already played keep the players who played them.</p>`
+    : '';
+  return intro + `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:14px;">${state.teams.map((t,ti)=>relayTeamCard(week, state, ti, admin)).join('')}</div>`;
+}
+
+function relayTeamCard(week, state, ti, admin){
+  const t = state.teams[ti];
+  const opp = state.teams[ti ^ 1];
+  const tie = Math.floor(ti/2);
+  const v = relayTieView(state, tie);
+  const signup = {};
+  week.signups.forEach(s=>{ signup[playerKey(s.name)] = s; });
+  const n = t.players.length;
+  const rows = t.players.map((p,pi)=>{
+    const s = signup[playerKey(p)];
+    const badges = (playerKey(p)===playerKey(t.captain) ? ' <span class="mine-badge">captain</span>' : '')
+      + (isRelayGuest(p) ? ' <span class="mine-badge">guest</span>' : '')
+      + (s && s.noShow ? ' <span class="mine-badge ns">No show</span>' : '');
+    const tools = admin ? `<span class="tools">
+      <button class="icon-btn" title="Move up" onclick="relayMovePos(${ti},${pi},-1)" ${pi===0?'disabled':''}>▲</button>
+      <button class="icon-btn" title="Move down" onclick="relayMovePos(${ti},${pi},1)" ${pi===n-1?'disabled':''}>▼</button>
+      <button class="icon-btn${playerKey(p)===playerKey(t.captain)?' on':''}" title="Make captain" onclick="relaySetCaptain(${ti},${pi})">★</button>
+      <select class="mini-select" aria-label="Move ${escAttr(p)} to another team" onchange="if(this.value!=='') relayMoveTeam(${ti},${pi},Number(this.value))">
+        <option value="">Move…</option>${state.teams.map((o,oi)=>oi===ti?'':`<option value="${oi}">Team ${o.id}</option>`).join('')}
+      </select>
+      <button class="icon-btn" title="Take off the team" onclick="relayRemove(${ti},${pi})">✕</button>
+    </span>` : '';
+    return `<div class="team-row"><span class="pos">P${pi+1}</span><span class="rname">${escHtml(p)}${badges}</span>${tools}</div>`;
+  }).join('');
+
+  const addHtml = admin ? `<div class="search-row" style="margin:10px 0 0; gap:6px; flex-wrap:wrap;">
+      <input type="text" id="relay-add-${ti}" placeholder="Late player's name" style="min-width:140px;">
+      <button class="btn small ghost" onclick="relayAddTyped(${ti})">Add</button>
+      <button class="btn small ghost" onclick="relayAddGuest(${ti})">+ Guest</button>
+    </div>` : '';
+
+  const pairs = relayPairs(t.players);
+  const orderHtml = [1,2].map(r=>{
+    const order = relayOrder(t, r);
+    const locked = v.rounds[r-1].started;
+    const items = order.map((pairIdx,k)=>{
+      const pr = pairs[pairIdx];
+      const posLabel = n===2 ? 'P1+P2' : `P${pairIdx+1}+P${(pairIdx+1)%n+1}`;
+      const tools = (admin && !locked) ? `<span class="tools">
+          <button class="icon-btn" title="Play earlier" onclick="relayMoveOrder(${ti},${r},${k},-1)" ${k===0?'disabled':''}>▲</button>
+          <button class="icon-btn" title="Play later" onclick="relayMoveOrder(${ti},${r},${k},1)" ${k===order.length-1?'disabled':''}>▼</button>
+        </span>` : '';
+      return `<div class="team-row" style="font-size:13px;"><span class="pos">G${k+1}</span><span class="rname"><span class="pool-tag">${posLabel}</span> ${pr.map(escHtml).join(' + ')}</span>${tools}</div>`;
+    }).join('');
+    const copyBtn = (admin && r===2 && !locked) ? ` <button class="icon-btn" onclick="relayCopyOrder(${ti})">same as round 1</button>` : '';
+    return `<div class="relay-sub">Round ${r} playing order${locked ? ' · locked (round under way)' : ''}${copyBtn}</div>${items || '<p class="game-note">Needs at least 2 players.</p>'}`;
+  }).join('');
+
+  const sizeWarn = opp && opp.players.length !== n
+    ? `<span class="pool-status" style="background:var(--loss-tint); color:var(--loss);">${n} vs ${opp.players.length} — uneven</span>`
+    : `<span class="pool-status full">${n} players</span>`;
+  return `<div class="card" style="margin-bottom:0;">
+    <div class="pool-head"><h3>Team ${t.id} <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">vs Team ${opp ? opp.id : '—'}</span></h3>${sizeWarn}</div>
+    ${rows || '<p class="game-note">No players.</p>'}
+    ${addHtml}
+    ${orderHtml}
+  </div>`;
+}
+
+function relayPlayersCard(state, ev){
+  const ranked = ev && ev.rpMode==='ranked';
+  const stats = relayPlayerStats(state, (ev && ev.teamBonus) || 2);
+  const rows = stats.map((p,i)=>`<tr>
+      <td><span class="num" style="color:var(--text-mute);">${i+1}</span></td>
+      <td class="p-name">${escHtml(p.name)}${p.guest?' <span class="mine-badge">guest</span>':''}</td>
+      <td>${p.team ? 'Team '+p.team : '–'}${p.teamWon ? ' <span class="mine-badge ok">won</span>' : ''}</td>
+      <td class="num-col num">${p.won}–${p.played-p.won}</td>
+      <td class="num-col num">${p.guest || !p.played ? '–' : p.rp}</td>
+    </tr>`).join('');
+  return `<div class="card">
+    <div class="pool-head"><h3>Players</h3><span class="pool-status ${ranked?'full':''}" ${ranked?'':'style="background:var(--amber-tint); color:var(--amber-deep);"'}>${ranked ? 'Ranked night' : 'Exhibition — not counted'}</span></div>
+    <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">Doubles won–lost over the two rounds (the tiebreak game only decides the match). ${ranked ? 'Rank pts' : 'Pts <em>would be</em>'} = doubles won + ${(ev && ev.teamBonus) || 2} for a team win.</p>
+    <table class="standings">
+      <thead><tr><th style="width:30px;">#</th><th>Player</th><th>Team</th><th class="num-col" style="width:56px;">W–L</th><th class="num-col" style="width:60px;">${ranked ? 'Rank pts' : 'Pts'}</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="5" class="empty-row">No players yet.</td></tr>'}</tbody>
+    </table>
+  </div>`;
+}
+
+function relayHistoryHtml(week, dateISO){
+  const state = week.relay || {teams:[], games:[]};
+  if(!state.teams.length){
+    return '<div class="card"><p style="margin:0; font-size:14px; color:var(--text-soft);">Team relay night — no teams were drawn.</p></div>';
+  }
+  const ranked = week.event && week.event.rpMode==='ranked';
+  let html = `<div class="card my-panel"><p style="margin:0; font-size:13px; color:var(--text-soft);"><strong>Team relay doubles</strong> · ${escHtml(relayRpText(week.event))}</p></div>`;
+  for(let t=0; t<relayTieCount(state); t++) html += relayTieCard(state, t, false, true);
+  html += relayPlayersCard(state, week.event);
+  if(ranked) html += finalizeRankingsCard(dateISO);
+  return html;
+}
+
+// ---- Relay actions ----
+
+function relayCreds(){ return {secret: adminSecret(), pin: eventPin()}; }
+
+// Adopts the relay state a relay action returned (every relay action echoes
+// the fresh state, success or not), or refetches if it didn't come back.
+function relayAdopt(res){
+  if(res && res.relay && LAST_WEEK && isRelayWeek(LAST_WEEK)){
+    LAST_WEEK.relay = res.relay;
+    paintSchedule(LAST_WEEK);
+  } else {
+    renderSchedule(true, true);
+  }
+}
+
+async function drawTeamsClick(dateISO, redraw){
+  const k = RELAY_TEAM_COUNT_PICK;
+  if(redraw && !confirm(`Redraw into ${k} teams? Every team edit so far is lost.`)) return;
+  const btn = document.getElementById('relay-draw-btn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Drawing…'; }
+  const res = await postAction({action:'drawTeams', date:dateISO, teamCount:k, redraw, ...relayCreds()});
+  if(!res.ok) alert(res.error || 'Could not draw teams — please try again.');
+  else relaySubview = 'teams';
+  relayAdopt(res);
+}
+
+// Team edits apply locally right away, then save in order: each save posts
+// the latest local teams with the rev from the previous save's reply, so
+// quick successive taps don't trip the other-device check.
+function relayCommitTeams(){
+  const mySeq = ++RELAY_EDIT_SEQ;
+  paintSchedule(LAST_WEEK);
+  RELAY_SAVE_CHAIN = RELAY_SAVE_CHAIN.then(async ()=>{
+    if(!LAST_WEEK || !LAST_WEEK.relay) return;
+    const relay = LAST_WEEK.relay;
+    const res = await postAction({action:'relaySaveTeams', date:WEEK_DATE, teams:relay.teams, rev:relay.rev, ...relayCreds()});
+    if(!res.ok){
+      alert(res.error || 'Could not save the team change — please try again.');
+      relayAdopt(res);
+    } else if(res.relay){
+      if(mySeq === RELAY_EDIT_SEQ) relayAdopt(res);
+      else LAST_WEEK.relay.rev = res.relay.rev; // newer local edits are queued - keep them
+    }
+  });
+}
+function relayTeams(){ return LAST_WEEK.relay.teams; }
+function relayResetOrder(t){ t.order = {}; } // stale once the team's size changes
+
+function relayMovePos(ti, pi, dir){
+  const p = relayTeams()[ti].players, j = pi+dir;
+  if(j<0 || j>=p.length) return;
+  [p[pi], p[j]] = [p[j], p[pi]];
+  relayCommitTeams();
+}
+function relaySetCaptain(ti, pi){
+  const t = relayTeams()[ti];
+  t.captain = t.players[pi];
+  relayCommitTeams();
+}
+function relayMoveTeam(ti, pi, toTi){
+  const teams = relayTeams();
+  const [name] = teams[ti].players.splice(pi, 1);
+  if(playerKey(teams[ti].captain)===playerKey(name)) teams[ti].captain = '';
+  teams[toTi].players.push(name);
+  relayResetOrder(teams[ti]); relayResetOrder(teams[toTi]);
+  relayCommitTeams();
+}
+function relayRemove(ti, pi){
+  const t = relayTeams()[ti];
+  const name = t.players[pi];
+  if(!confirm(`Take ${name} off Team ${t.id}? Games they already played stay recorded.`)) return;
+  t.players.splice(pi, 1);
+  if(playerKey(t.captain)===playerKey(name)) t.captain = '';
+  relayResetOrder(t);
+  relayCommitTeams();
+}
+function relayAddName(ti, name){
+  name = (name||'').trim().slice(0,40);
+  if(!name) return false;
+  const teams = relayTeams();
+  const clash = teams.find(t=>t.players.some(p=>playerKey(p)===playerKey(name)));
+  if(clash){ alert(`${name} is already on Team ${clash.id}.`); return false; }
+  teams[ti].players.push(name);
+  relayResetOrder(teams[ti]);
+  relayCommitTeams();
+  return true;
+}
+function relayAddTyped(ti){
+  const inp = document.getElementById('relay-add-'+ti);
+  if(inp && relayAddName(ti, inp.value)) inp.value = '';
+}
+function relayAddGuest(ti){
+  const used = new Set(relayTeams().flatMap(t=>t.players.map(playerKey)));
+  let n = 1;
+  while(used.has('guest '+n)) n++;
+  relayAddName(ti, 'Guest '+n);
+}
+function relayAddExisting(name, ti){ relayAddName(ti, name); }
+function relayMoveOrder(ti, round, k, dir){
+  const t = relayTeams()[ti];
+  const order = relayOrder(t, round), j = k+dir;
+  if(j<0 || j>=order.length) return;
+  [order[k], order[j]] = [order[j], order[k]];
+  t.order = Object.assign({}, t.order, {[round]: order});
+  relayCommitTeams();
+}
+function relayCopyOrder(ti){
+  const t = relayTeams()[ti];
+  t.order = Object.assign({}, t.order, {2: relayOrder(t, 1)});
+  relayCommitTeams();
+}
+
+function relayTiebreakPicks(tie){
+  const val = id=>{ const el = document.getElementById(id); return el ? el.value : ''; };
+  const a = [val(`relay-tb-${tie}-a1`), val(`relay-tb-${tie}-a2`)];
+  const b = [val(`relay-tb-${tie}-b1`), val(`relay-tb-${tie}-b2`)];
+  if(a.some(x=>!x) || b.some(x=>!x) || a[0]===a[1] || b[0]===b[1]) return null;
+  return {a, b};
+}
+
+async function relayStartClick(tie, round, seq){
+  const body = {action:'relayStartGame', date:WEEK_DATE, tie, round, seq, ...relayCreds()};
+  const state = LAST_WEEK.relay;
+  let pairs;
+  if(round===RELAY_TIEBREAK_ROUND){
+    const picks = relayTiebreakPicks(tie);
+    if(!picks){ alert('Pick two different players from each team first.'); return; }
+    body.aPair = picks.a; body.bPair = picks.b;
+    pairs = picks;
+  } else {
+    const g = relayTieView(state, tie).rounds[round-1].games[seq];
+    pairs = {a:g.a, b:g.b};
+  }
+  // Straight onto the board; the reply reconciles (or rolls it back).
+  state.games.push({tie, round, seq, a:pairs.a, b:pairs.b, startedAt: Date.now()+SERVER_OFFSET});
+  paintSchedule(LAST_WEEK);
+  const res = await postAction(body);
+  if(!res.ok) alert(res.error || 'Could not start the game — please try again.');
+  relayAdopt(res);
+}
+
+async function relayScoreClick(tie, round, seq){
+  const key = `${tie}-${round}-${seq}`;
+  const ia = document.getElementById('relay-sa-'+key), ib = document.getElementById('relay-sb-'+key);
+  const v = checkScores(ia ? ia.value : '', ib ? ib.value : '');
+  if(v.error){ alert(v.error); return; }
+  const body = {action:'relayScore', date:WEEK_DATE, tie, round, seq, scoreA:v.a, scoreB:v.b, ...relayCreds()};
+  const state = LAST_WEEK.relay;
+  let rec = relayFindGame(state, tie, round, seq);
+  if(!rec){
+    let pairs;
+    if(round===RELAY_TIEBREAK_ROUND){
+      pairs = relayTiebreakPicks(tie);
+      if(!pairs){ alert('Pick two different players from each team first.'); return; }
+      body.aPair = pairs.a; body.bPair = pairs.b;
+    } else {
+      const g = relayTieView(state, tie).rounds[round-1].games[seq];
+      pairs = {a:g.a, b:g.b};
+    }
+    rec = {tie, round, seq, a:pairs.a, b:pairs.b};
+    state.games.push(rec);
+  }
+  rec.sa = v.a; rec.sb = v.b; rec.finishedAt = Date.now()+SERVER_OFFSET;
+  if(ia) ia.value = ''; if(ib) ib.value = '';
+  RELAY_OPEN_EDIT = null;
+  paintSchedule(LAST_WEEK);
+  const res = await postAction(body);
+  if(!res.ok) alert(res.error || 'Could not save the score — please try again.');
+  relayAdopt(res);
+}
+
+async function relayClearClick(tie, round, seq, done){
+  if(!confirm(done ? 'Delete this game\'s score? It goes back to unplayed.' : 'Take this game off court? No score is recorded.')) return;
+  const state = LAST_WEEK.relay;
+  state.games = state.games.filter(g=>!(g.tie===tie && g.round===round && g.seq===seq));
+  RELAY_OPEN_EDIT = null;
+  paintSchedule(LAST_WEEK);
+  const res = await postAction({action:'relayClearGame', date:WEEK_DATE, tie, round, seq, ...relayCreds()});
+  if(!res.ok) alert(res.error || 'Could not update the game — please try again.');
+  relayAdopt(res);
+}
+
+// ---- Admin: event format (singles vs team relay doubles) ----
+
+async function populateEventFormat(){
+  weekDatesPromise = null; // fresh formats, e.g. after another organizer changed one
+  const dates = await fetchWeekDates();
+  const p = partsInTZ(new Date(),'America/Los_Angeles');
+  const today = `${p.year}-${p.month}-${p.day}`;
+  const upcoming = dates.filter(d=>d>=today);
+  const sel = document.getElementById('ef-date');
+  const prev = sel.value;
+  sel.innerHTML = upcoming.length
+    ? upcoming.map(d=>`<option value="${d}">Wed, ${fmtDateFull(d)}${WEEK_FORMATS[d] ? ' · team relay' : ''}</option>`).join('')
+    : '<option value="">No upcoming week tabs — create one first</option>';
+  if(upcoming.includes(prev)) sel.value = prev;
+  syncEventFormatForm();
+}
+function syncEventFormatForm(formatChanged){
+  const date = document.getElementById('ef-date').value;
+  const fmt = document.getElementById('ef-format');
+  const rp = document.getElementById('ef-rp');
+  if(!formatChanged){
+    const f = WEEK_FORMATS[date];
+    fmt.value = f && f.format==='relay' ? 'relay' : 'singles';
+    rp.value = f && f.rpMode==='ranked' ? 'ranked' : 'exhibition';
+  }
+  rp.style.display = fmt.value==='relay' ? '' : 'none';
+}
+async function saveEventFormat(){
+  const date = document.getElementById('ef-date').value;
+  const format = document.getElementById('ef-format').value;
+  const rpMode = document.getElementById('ef-rp').value;
+  const out = document.getElementById('admin-tools-out');
+  if(!date){ out.style.display = 'block'; out.textContent = 'Create the week\'s tab first.'; return; }
+  out.style.display = 'block'; out.textContent = 'Saving…';
+  const res = await postAction({action:'setEventFormat', date, format, rpMode, secret: adminSecret()});
+  if(!res.ok){ out.textContent = res.error || 'Could not save the event format.'; return; }
+  if(format==='relay') WEEK_FORMATS[date] = {format:'relay', rpMode: res.event.rpMode};
+  else delete WEEK_FORMATS[date];
+  weekDatesPromise = null;
+  delete WEEK_CACHE[date];
+  out.textContent = format==='relay'
+    ? `Wed, ${fmtDate(date)} is now a team relay doubles night (${res.event.rpMode==='ranked' ? 'ranked' : 'exhibition'}).`
+    : `Wed, ${fmtDate(date)} is a regular singles night.`;
+  populateEventFormat();
+  if(WEEK_DATE === date) renderSchedule(true, true);
+}
+
 function getSelectedJoinDate(){
   const checked = document.querySelector('input[name="jf-date"]:checked');
   return checked ? checked.value : getSessionDateISO();
@@ -1840,9 +2679,9 @@ async function removeSignup(dateISO, name){
   if(!result.ok){ alert('Could not remove — please try again.'); return; }
   renderJoinedList();
 }
-function joinRosterRow(s, num, phase, dateISO){
+function joinRosterRow(s, num, phase, dateISO, cap=CAP){
   return `<li>
-    <span class="num">${phase==='waitlist' ? CAP+num : num}</span>
+    <span class="num">${phase==='waitlist' ? cap+num : num}</span>
     <span class="rname">${s.name}${statusBadge(s)}</span>
     <button type="button" class="remove-btn" title="Remove" aria-label="Remove ${s.name}" onclick="removeSignup('${dateISO}','${s.name.replace(/'/g,"\\'")}')">❌</button>
   </li>`;
@@ -1861,6 +2700,9 @@ function updateJoinSubForSelected(){
   } else if(isPast){
     sub.textContent = `Signups for Wed, ${fmtDate(dateISO)} are closed — pick another date below.`;
     btn.disabled = true; btn.textContent = 'Signups closed';
+  } else if(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay'){
+    sub.textContent = `Wed, ${fmtDate(dateISO)} is a team relay doubles night — the first ${RELAY_CAP} signups are confirmed and teams are drawn at check-in. See the FAQ for how it works.`;
+    btn.disabled = false; btn.textContent = 'Request a spot';
   } else {
     sub.textContent = `New players get placed into a pool by the organizer once signups close.`;
     btn.disabled = false; btn.textContent = 'Request a spot';
@@ -1880,13 +2722,14 @@ async function renderJoinedList(){
   // discard a response that no longer matches what's selected so a slower
   // request doesn't clobber a faster one that landed after it.
   if(getSelectedJoinDate() !== dateISO) return;
-  const confirmed = week.signups.slice(0, CAP);
-  const waitlist = week.signups.slice(CAP);
+  const cap = weekCap(week);
+  const confirmed = week.signups.slice(0, cap);
+  const waitlist = week.signups.slice(cap);
   list.innerHTML = confirmed.length
-    ? confirmed.map((s,i)=>joinRosterRow(s,i+1,'confirmed',dateISO)).join('')
+    ? confirmed.map((s,i)=>joinRosterRow(s,i+1,'confirmed',dateISO,cap)).join('')
     : '<li class="empty-row">No signups yet for this date.</li>';
   if(waitlist.length){
-    waitlistList.innerHTML = waitlist.map((s,i)=>joinRosterRow(s,i+1,'waitlist',dateISO)).join('');
+    waitlistList.innerHTML = waitlist.map((s,i)=>joinRosterRow(s,i+1,'waitlist',dateISO,cap)).join('');
     waitlistCard.style.display = 'block';
   }
   populateExistingSelect(week.signups.map(s=>s.name));
@@ -1903,7 +2746,7 @@ async function renderJoinOptions(){
   container.innerHTML = statuses.map((s,i)=>`
     <label${s.closed?' style="opacity:.5;"':''}>
       <input type="radio" name="jf-date" value="${s.date}" ${s.closed?'disabled':''} ${i===firstOpenIdx?'checked':''}>
-      Wed, ${fmtDate(s.date)}${s.closed?' · Closed':''}
+      Wed, ${fmtDate(s.date)}${WEEK_FORMATS[s.date] && WEEK_FORMATS[s.date].format==='relay' ? ' · Team Relay' : ''}${s.closed?' · Closed':''}
     </label>`).join('');
   container.querySelectorAll('input[name="jf-date"]').forEach(inp=>inp.addEventListener('change', ()=>{ updateJoinSubForSelected(); renderJoinedList(); }));
   updateJoinSubForSelected();
@@ -1941,12 +2784,14 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   }
 
   const position = result.position;
-  const confirmedSpot = position <= CAP;
+  const cap = result.cap || CAP;
+  const relayNight = !!(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay');
+  const confirmedSpot = position <= cap;
   document.getElementById('confirm-badge').className = 'ok-badge' + (confirmedSpot ? '' : ' wait');
   document.getElementById('confirm-name').textContent = 'You\'re in, ' + name;
   document.getElementById('confirm-detail').textContent = confirmedSpot
-    ? `Confirmed — spot #${position} for Wed, ${fmtDate(dateISO)}. Pools go up once signups close.`
-    : `Waitlisted — #${position-CAP} in line for Wed, ${fmtDate(dateISO)}. You'll move up if a confirmed player drops.`;
+    ? `Confirmed — spot #${position} for Wed, ${fmtDate(dateISO)}. ${relayNight ? 'Teams are drawn at check-in — it\'s a team relay doubles night.' : 'Pools go up once signups close.'}`
+    : `Waitlisted — #${position-cap} in line for Wed, ${fmtDate(dateISO)}. You'll move up if a confirmed player drops.`;
   document.getElementById('join-form').style.display = 'none';
   document.getElementById('join-confirm').classList.add('active');
   renderJoinedList();

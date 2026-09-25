@@ -7,6 +7,10 @@
  *   1. Project Settings > Script Properties: set
  *        ADMIN_EMAILS  - comma-separated organizer emails (used if you ever run sendWeeklyPin() by hand)
  *        ADMIN_SECRET  - passphrase organizers type on the site to retrieve an event PIN
+ *        SHEET_EDITORS - optional, comma-separated emails that may still edit protected
+ *                        week/relay tabs by hand (share the spreadsheet with them as
+ *                        Editors too); run applySheetEditorsToProtectedTabs() once after
+ *                        setting it so already-protected tabs pick them up
  *   2. Run setupTriggers() once (authorizes MailApp - also needed for the
  *      new-player welcome email on signup - and installs the Wednesday
  *      9:30pm auto-finalize/cleanup check, see autoFinalizeWeekly). The PIN
@@ -18,9 +22,14 @@
  * as a new "M/D/YY R" + "M/D/YY RP" column pair and long-term absences are
  * marked (see the finalization section at the bottom of this file).
  *
+ * Any date can instead be a team relay doubles night (setEventFormat, from
+ * the site's Admin tab) - see the "Team relay doubles" section at the very
+ * bottom. Singles nights (the default) are untouched by it.
+ *
  * Endpoints (after deploying as a Web App):
  *   GET  ?action=rankings              -> { players: [{name, rank, avg, trend: [{date, score, pool}]}], weeks: ['YYYY-MM-DD', ...] } (pool is a "A6"-style pool+rank label for that week; rank is tie-broken - the sheet's own Rank column ties on equal Avg, so equal-rank groups are re-ordered by most-recent-week rank points then most-recent head-to-head, with unresolved ties sharing one rank number [skip-style] but shuffled randomly rather than alphabetically, since pool seeding sorts on this field. This tie-break runs once per finalize and is persisted to the Rankings sheet's "Sorted Name"/"Sorted Rank" columns [A/B] by writeSortedRankings() - getRankings() just reads that snapshot back, so the order is stable across views until the next finalize, not re-shuffled on every request)
- *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools }
+ *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools, live } (+ event and relay on a team relay night - see computeWeek)
+ *   GET  ?action=weekDates             -> { dates: ['YYYY-MM-DD', ...], formats: { 'YYYY-MM-DD': {format:'relay', rpMode}, ... } } (formats lists relay nights only)
  *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}, ...]}, ...] } (record over NAME's last 6 completed weeks + every individual game vs each opponent shared a pool with in that window; matches are most-recent-first)
  *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error } (emails an "added" confirmation if contact looks like an email, or if the player has a registered email on file - see renamePlayer)
  *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error } (emails a "removed" notice under the same conditions as join)
@@ -42,6 +51,12 @@
  *   POST { action:'banPlayer', name, until, secret } -> { ok } (admin passphrase; blocks name from signing up for any week dated on or before until [YYYY-MM-DD] - see activeBanFor(), checked by addJoin)
  *   POST { action:'unbanPlayer', name, secret } -> { ok } (admin passphrase; lifts a ban early)
  *   POST { action:'listBans', secret } -> { ok, bans: [{name, until}, ...] } (admin passphrase; every currently-active ban, soonest-expiring first)
+ *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team relay doubles night or back to singles)
+ *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: snake-drafts eligible signups into teamCount teams by standings)
+ *   POST { action:'relaySaveTeams', date, teams, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, late adds/guests, removals, captain, positions, playing order)
+ *   POST { action:'relayStartGame', date, tie, round, seq, aPair, bPair, secret|pin } -> { ok, relay } (relay night: marks a game on court; aPair/bPair only for the tiebreak, round 3)
+ *   POST { action:'relayScore', date, tie, round, seq, scoreA, scoreB, aPair, bPair, secret|pin } -> { ok, relay } (relay night: records or corrects a game's score)
+ *   POST { action:'relayClearGame', date, tie, round, seq, secret|pin } -> { ok, relay } (relay night: cancels an on-court game or deletes a recorded score)
  */
 
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
@@ -105,6 +120,12 @@ function doPost(e) {
     else if (body.action === 'banPlayer') result = banPlayer(body.name, body.until, body.secret);
     else if (body.action === 'unbanPlayer') result = unbanPlayer(body.name, body.secret);
     else if (body.action === 'listBans') result = listBans(body.secret);
+    else if (body.action === 'setEventFormat') result = setEventFormat(body.date, body.format, body.rpMode, body.secret);
+    else if (body.action === 'drawTeams') result = drawTeams(body.date, body.teamCount, body.redraw, body.secret, body.pin);
+    else if (body.action === 'relaySaveTeams') result = relaySaveTeams(body.date, body.teams, body.rev, body.secret, body.pin);
+    else if (body.action === 'relayStartGame') result = relayStartGame(body.date, body.tie, body.round, body.seq, body.aPair, body.bPair, body.secret, body.pin);
+    else if (body.action === 'relayScore') result = relayScore(body.date, body.tie, body.round, body.seq, body.scoreA, body.scoreB, body.aPair, body.bPair, body.secret, body.pin);
+    else if (body.action === 'relayClearGame') result = relayClearGame(body.date, body.tie, body.round, body.seq, body.secret, body.pin);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
@@ -147,13 +168,19 @@ function getWeekSheet(dateISO) {
 // "Max limit (24ppl)" / "Wait List Below" are inline labels the organizer drops
 // into that same column - they're not people and must be skipped, not treated
 // as the end of the list, since real waitlisted names continue after them.
-// Past the first blank row the sheet reuses column A for a stray rankings copy.
+// Past the first blank row the sheet reuses column A for a stray rankings copy
+// (a "Sorted Name" header at A33) - a long relay-night list can run into it,
+// so that header is skipped like the inline labels (isSignupLabel).
+function isSignupLabel(name) {
+  return /max limit/i.test(name) || /wait list/i.test(name) || /^sorted (name|rank)$/i.test(name);
+}
+
 function parseSignups(data) {
   var signups = [];
   for (var r = 1; r < data.length; r++) {
     var name = (data[r][0] || '').toString().trim();
     if (!name) break;
-    if (/max limit/i.test(name) || /wait list/i.test(name)) continue;
+    if (isSignupLabel(name)) continue;
     var status = (data[r][1] || '').toString().trim().toLowerCase();
     signups.push({
       row: r + 1, // 1-based sheet row
@@ -259,11 +286,18 @@ function computeWeek(dateISO) {
   });
   var pools = parsePools(data);
   var live = getLiveState(dateISO);
-  return {
+  var week = {
     date: dateISO, exists: true, hasScores: anyScoresEntered(data),
     signups: signups, pools: pools,
     live: { matches: live.matches, checkins: live.checkins }
   };
+  // Relay nights only - a singles payload is exactly what it always was.
+  var ev = getEventSettings(dateISO);
+  if (ev.format === 'relay') {
+    week.event = ev;
+    week.relay = getRelayState(dateISO);
+  }
+  return week;
 }
 
 // True once any score has been typed into any pool's H..H+size grid block.
@@ -363,7 +397,7 @@ function listWeekDates() {
     if (iso) dates.push(iso);
   });
   dates.sort();
-  return { dates: dates };
+  return { dates: dates, formats: listEventFormats() };
 }
 
 // Returns season standings with the tie-broken order that writeSortedRankings()
@@ -728,7 +762,7 @@ function addJoin(dateISO, name, contact) {
     try { emailAddedNotification(email, name, dateISO); }
     catch (err) { Logger.log('emailAddedNotification failed: ' + err); }
   }
-  return { ok: true, row: targetRow, position: position };
+  return { ok: true, row: targetRow, position: position, cap: capFor(dateISO) };
 }
 
 function isEmail(contact) {
@@ -1005,6 +1039,7 @@ function generatePools(dateISO, pin, padGuests, redraw, secret) {
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
+  if (isRelayDate(dateISO)) return relayNightError();
 
   var data = sheet.getDataRange().getValues();
   // Confirmed slice only, minus no-shows. The waitlist is never promoted here -
@@ -1114,6 +1149,8 @@ function resetWeek(dateISO, secret) {
     state.checkins = {};
     return { ok: true };
   });
+  clearRelayState(dateISO); // relay night: teams and games too
+  bustWeekCache(dateISO);
 
   return { ok: true };
 }
@@ -1136,7 +1173,7 @@ function clearSignupsForNewWeek(sheet) {
   for (var r = 2; r <= lastRow; r++) {
     var name = (sheet.getRange(r, 1).getValue() || '').toString().trim();
     if (!name) break; // first truly blank row ends the signup section
-    if (/max limit/i.test(name) || /wait list/i.test(name)) continue;
+    if (isSignupLabel(name)) continue;
     sheet.getRange(r, 1).clearContent();
     sheet.getRange(r, 2).clearContent();
     sheet.getRange(r, CONTACT_COL).clearContent();
@@ -1464,11 +1501,18 @@ function writeWeekDateCell(sheet, dateISO) {
 // which executes as the owner) can edit it - manual edits by other editors
 // on the sheet are blocked in the Sheets UI. Apps Script always lets the
 // spreadsheet owner edit a protected sheet regardless of the editor list, so
-// removing every default editor is enough to lock it to "owner only."
-function protectWeekSheet(sheet) {
-  var protection = sheet.protect().setDescription('Week tab - edit via site admin tools only');
+// removing every default editor is enough to lock it to "owner only." The
+// SHEET_EDITORS script property's emails are then added back (see
+// sheetEditorEmails) so named organizers can still fix a tab by hand.
+function protectWeekSheet(sheet, description) {
+  var protection = sheet.protect().setDescription(description || 'Week tab - edit via site admin tools only');
   protection.removeEditors(protection.getEditors());
   if (protection.canDomainEdit()) protection.setDomainEdit(false);
+  var editors = sheetEditorEmails();
+  if (editors.length) {
+    try { protection.addEditors(editors); }
+    catch (err) { Logger.log('protectWeekSheet: could not add SHEET_EDITORS: ' + err); }
+  }
 }
 
 // ---- Check-in / no-show (admin only) ----
@@ -1663,6 +1707,7 @@ function validateScores(scoreA, scoreB) {
 function startMatch(dateISO, a, b, guestNames, clientId, secret, pin) {
   var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
+  if (isRelayDate(dateISO)) return relayNightError();
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var data = sheet.getDataRange().getValues();
@@ -1746,6 +1791,7 @@ function writePairScore(sheet, data, nameA, nameB, scoreA, scoreB) {
 function recordScore(dateISO, matchId, scoreA, scoreB, secret, pin) {
   var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
+  if (isRelayDate(dateISO)) return relayNightError();
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var v = validateScores(scoreA, scoreB);
@@ -1778,6 +1824,7 @@ function recordScore(dateISO, matchId, scoreA, scoreB, secret, pin) {
 function editScore(dateISO, a, b, scoreA, scoreB, matchId, secret, pin) {
   var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
+  if (isRelayDate(dateISO)) return relayNightError();
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
   var v = validateScores(scoreA, scoreB);
@@ -1823,6 +1870,7 @@ function editScore(dateISO, a, b, scoreA, scoreB, matchId, secret, pin) {
 function cancelMatch(dateISO, matchId, secret, pin) {
   var auth = checkRunAuth(dateISO, secret, pin);
   if (!auth.ok) return auth;
+  if (isRelayDate(dateISO)) return relayNightError();
   var cancelled = null;
   var result = updateLiveState(dateISO, function (state) {
     for (var i = 0; i < state.matches.length; i++) {
@@ -1916,6 +1964,13 @@ function computeWeekResults(week) {
 function dryRunFinalize(dateISO) {
   var week = computeWeek(dateISO);
   if (!week.exists) { Logger.log('No tab exists for ' + dateISO); return; }
+  if (week.relay) {
+    Logger.log('Team relay night, rpMode=' + week.event.rpMode + ' complete=' + relayIsComplete(week.relay) +
+      (week.event.rpMode === 'ranked' ? '' : ' (exhibition - finalize writes nothing)'));
+    var relayResults = computeRelayResults(week.relay);
+    Logger.log(JSON.stringify(relayResults, null, 2));
+    return relayResults;
+  }
   Logger.log('hasScores=' + week.hasScores + ' complete=' + weekIsComplete(week));
   var results = computeWeekResults(week);
   Logger.log(JSON.stringify(results, null, 2));
@@ -1960,7 +2015,9 @@ function forceFinalizeWeek(dateISO, secret) {
   if (!dateISO) return { ok: false, error: 'Missing date.' };
   var result = maybeFinalizeWeek(dateISO);
   if (result && result.pending) {
-    return { ok: false, error: "This week isn't fully scored yet — every pool game needs a result before it can finalize." };
+    return { ok: false, error: isRelayDate(dateISO)
+      ? "This relay night isn't finished yet — every tie needs a winner before it can finalize."
+      : "This week isn't fully scored yet — every pool game needs a result before it can finalize." };
   }
   return result;
 }
@@ -1999,10 +2056,19 @@ function doFinalizeWeek(dateISO) {
   SpreadsheetApp.flush(); // a score was possibly just written; recalc GW/Rank before reading
   var week = computeWeek(dateISO);
   if (!week.exists) return { ok: false, error: 'No tab exists for ' + dateISO };
-  if (!week.hasScores || !weekIsComplete(week)) return { ok: false, pending: true };
-
-  var results = computeWeekResults(week);
-  if (!results.length) return { ok: false, error: 'No pool players found for ' + dateISO };
+  var results;
+  if (week.relay) {
+    // Team relay night: an exhibition writes nothing to Rankings (no R/RP
+    // column at all, so nobody's average, absences or tie-breaks move).
+    if (week.event.rpMode !== 'ranked') return { ok: true, exhibition: true, date: dateISO };
+    if (!relayIsComplete(week.relay)) return { ok: false, pending: true };
+    results = computeRelayResults(week.relay);
+    if (!results.length) return { ok: false, error: 'No relay players found for ' + dateISO };
+  } else {
+    if (!week.hasScores || !weekIsComplete(week)) return { ok: false, pending: true };
+    results = computeWeekResults(week);
+    if (!results.length) return { ok: false, error: 'No pool players found for ' + dateISO };
+  }
 
   var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Rankings');
   if (!sheet) return { ok: false, error: 'Rankings sheet not found' };
@@ -2170,8 +2236,10 @@ function applyAbsencePasses(sheet, rCol, playedRows, names) {
   var cur = weekCols.indexOf(rCol - 1);
   if (cur === -1) return;
 
+  // "A6"-style pool+rank labels, or "TC"-style team labels from a ranked
+  // team relay night (computeRelayResults).
   function attended(rowVals, wc) {
-    return /^[A-D]\d+$/.test((rowVals[wc] || '').toString().trim());
+    return /^([A-D]\d+|T[A-H])$/.test((rowVals[wc] || '').toString().trim());
   }
   // An absence marker whose 0 is still dragging the average.
   function absenceZero(rowVals, wc) {
@@ -2252,4 +2320,614 @@ function cleanupPastEventProperties() {
     if (m[1] < today) { props.deleteProperty(key); removed.push(key); }
   });
   return removed;
+}
+
+// ---- Team relay doubles (per-date event format) ----
+//
+// Any date can be switched from the usual singles pools to a team relay
+// doubles night (the plan: last Wednesday of the month) from the site's
+// Admin tab (setEventFormat). A date with no EVENT_<date> script property is
+// a singles night, so every existing week behaves exactly as before.
+//
+// Relay format: players are snake-drafted by standings into 4 or 6 teams
+// (sizes as even as possible - teams can be smaller than 6). Each team's
+// captain sets positions P1..Pn; the doubles pairs are the rotation
+// P1+P2, P2+P3, ... Pn+P1, so every player plays 2 games per round. Teams
+// meet A vs B, C vs D, ...; game k of a round is team A's k-th pair (in its
+// captain's playing order for that round) vs team B's k-th pair. A round is
+// won on doubles won, then point differential; two rounds are played, and a
+// 1-1 (or level) tie is decided by one tiebreak doubles game. Both teams in
+// a tie must have the same number of players before games can start - the
+// organizer evens them out by adding a guest or a late joiner.
+//
+// Ranking points (chosen per event): 'exhibition' writes nothing to
+// Rankings (a week with no R/RP column is invisible to the Avg, absence
+// passes and tie-breaks), 'ranked' = your own doubles won (0-4) + a
+// RELAY_TEAM_BONUS if your team wins the tie. The tiebreak game only
+// decides the tie; guests never get rank points.
+//
+// The relay data lives as JSON in cell A1 of a separate "Relay M/D/YY" tab
+// (rows below it are a read-only readable copy, rewritten on every change)
+// - never in the weekly M/D/YY tab's pool geometry, so parsePools, the
+// head-to-head scans and createWeek's duplicate-the-newest-tab all keep
+// seeing a clean, undrawn singles template. The weekly tab's column A/B
+// signup list and check-in/no-show status are shared with singles nights
+// unchanged.
+
+var RELAY_CAP = 36;               // signups confirmed on a relay night (6 teams of 6)
+var RELAY_TEAM_COUNTS = [4, 6];   // add 8 here once there's enough interest
+var RELAY_TEAM_BONUS = 2;         // ranked mode: rank points for winning the tie
+var RELAY_ROUNDS = 2;
+var RELAY_TIEBREAK_ROUND = 3;     // the tiebreak game is stored as round 3, seq 0
+var RELAY_TEAM_IDS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+// { format:'singles', cap } or { format:'relay', rpMode, cap, teamBonus }.
+function getEventSettings(dateISO) {
+  var raw = dateISO ? PropertiesService.getScriptProperties().getProperty('EVENT_' + dateISO) : null;
+  return parseEventSettings(raw);
+}
+
+function parseEventSettings(raw) {
+  var ev = null;
+  if (raw) { try { ev = JSON.parse(raw); } catch (err) { ev = null; } }
+  if (!ev || ev.format !== 'relay') return { format: 'singles', cap: CAP };
+  return {
+    format: 'relay',
+    rpMode: ev.rpMode === 'ranked' ? 'ranked' : 'exhibition',
+    cap: RELAY_CAP,
+    teamBonus: RELAY_TEAM_BONUS,
+    teamCounts: RELAY_TEAM_COUNTS
+  };
+}
+
+function isRelayDate(dateISO) {
+  return getEventSettings(dateISO).format === 'relay';
+}
+
+function capFor(dateISO) {
+  return getEventSettings(dateISO).cap;
+}
+
+// Every date's non-singles settings in one property read, for weekDates.
+function listEventFormats() {
+  var all = PropertiesService.getScriptProperties().getProperties();
+  var out = {};
+  Object.keys(all).forEach(function (k) {
+    var m = k.match(/^EVENT_(\d{4}-\d{2}-\d{2})$/);
+    if (!m) return;
+    var ev = parseEventSettings(all[k]);
+    if (ev.format === 'relay') out[m[1]] = { format: ev.format, rpMode: ev.rpMode };
+  });
+  return out;
+}
+
+function relayNightError() {
+  return { ok: false, error: 'This is a team relay night — use the team relay desk on the This week page.' };
+}
+
+function bustWeekCache(dateISO) {
+  var cache = CacheService.getScriptCache();
+  cache.remove('week_' + dateISO);
+  cache.remove('weekDates');
+}
+
+// Admin: switches a date between the singles league and team relay doubles,
+// and picks the relay night's ranking-points mode. Refuses a switch that
+// would strand data - singles pools already drawn, or relay teams drawn.
+function setEventFormat(dateISO, format, rpMode, secret) {
+  var auth = checkAdminSecret(secret);
+  if (!auth.ok) return auth;
+  if (!dateISO || !/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) return { ok: false, error: 'Missing date.' };
+  var props = PropertiesService.getScriptProperties();
+  var key = 'EVENT_' + dateISO;
+  var current = getEventSettings(dateISO);
+  var sheet = getWeekSheet(dateISO);
+
+  if (format === 'relay') {
+    if (current.format !== 'relay' && sheet && poolsAreDrawn(sheet.getDataRange().getValues())) {
+      return { ok: false, error: 'Singles pools are already drawn for ' + dateISO + ' — reset the week first.' };
+    }
+    props.setProperty(key, JSON.stringify({ format: 'relay', rpMode: rpMode === 'ranked' ? 'ranked' : 'exhibition' }));
+  } else if (format === 'singles') {
+    if (current.format === 'relay' && getRelayState(dateISO).teams.length) {
+      return { ok: false, error: 'Relay teams are already drawn for ' + dateISO + ' — reset the week first.' };
+    }
+    props.deleteProperty(key);
+  } else {
+    return { ok: false, error: 'Unknown format: ' + format };
+  }
+  bustWeekCache(dateISO);
+  return { ok: true, event: getEventSettings(dateISO) };
+}
+
+// ---- Relay state storage ----
+
+function relaySheetName(dateISO) {
+  return 'Relay ' + tabNameForDate(dateISO); // doesn't start with a date, so headerToISODate skips it
+}
+
+function emptyRelayState() {
+  return { rev: 0, teams: [], games: [] };
+}
+
+function getRelayState(dateISO) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(relaySheetName(dateISO));
+  if (!sheet) return emptyRelayState();
+  var raw = sheet.getRange(1, 1).getValue();
+  var state = null;
+  if (raw) { try { state = JSON.parse(raw); } catch (err) { state = null; } }
+  if (!state || typeof state !== 'object') return emptyRelayState();
+  if (!state.teams) state.teams = [];
+  if (!state.games) state.games = [];
+  if (!state.rev) state.rev = 0;
+  return state;
+}
+
+function saveRelayState(dateISO, state) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var name = relaySheetName(dateISO);
+  var sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = ss.insertSheet(name);
+    var weekSheet = getWeekSheet(dateISO);
+    if (weekSheet) { // park it right after its week's tab
+      ss.setActiveSheet(sheet);
+      ss.moveActiveSheet(weekSheet.getIndex() + 1);
+    }
+    protectWeekSheet(sheet, 'Relay tab - edit via the site only');
+  }
+  state.rev = (state.rev || 0) + 1;
+  sheet.getRange(1, 1).setValue(JSON.stringify(state));
+  try { writeRelayMirror(sheet, state); }
+  catch (err) { Logger.log('writeRelayMirror failed: ' + err); }
+  bustWeekCache(dateISO);
+}
+
+// Serializes read-modify-write of the relay state across devices (same
+// script lock the live match desk and finalize use). Saved unless the
+// mutator reports failure; the fresh state rides back on every result so
+// the site can repaint without a refetch.
+function updateRelayState(dateISO, mutate) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var state = getRelayState(dateISO);
+    var result = mutate(state) || { ok: true };
+    if (result.ok !== false) saveRelayState(dateISO, state);
+    result.relay = state;
+    return result;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Readable copy under the JSON cell: teams, every game, player totals.
+function writeRelayMirror(sheet, state) {
+  var rows = [];
+  rows.push(['Read-only copy of the relay data in cell A1 - edits here are ignored; use the site. Updated ' +
+    Utilities.formatDate(new Date(), 'America/Los_Angeles', 'M/d/yy h:mm a')]);
+  rows.push(['']);
+  rows.push(['TEAMS']);
+  rows.push(['Team', 'Captain', 'P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8']);
+  state.teams.forEach(function (t) { rows.push(['Team ' + t.id, t.captain || ''].concat(t.players)); });
+  rows.push(['']);
+  rows.push(['GAMES']);
+  rows.push(['Tie', 'Round', 'Game', 'Pair (first team)', 'Score', 'Pair (second team)', 'Result']);
+  for (var tie = 0; tie < relayTieCount(state); tie++) {
+    var v = relayTieView(state, tie);
+    v.rounds.forEach(function (r) {
+      r.games.forEach(function (g) {
+        rows.push([v.a.id + ' vs ' + v.b.id, r.round, g.seq + 1, (g.a || []).join(' + '),
+          g.done ? g.sa + '-' + g.sb : (g.startedAt ? 'on court' : ''), (g.b || []).join(' + '), '']);
+      });
+      if (r.done) rows.push(['', r.round, '', 'Round ' + r.round + ': ' + r.winsA + '-' + r.winsB + ' games, ' +
+        r.ptsA + '-' + r.ptsB + ' pts', '', '', r.winner === 'draw' ? 'level' : 'Team ' + (r.winner === 'a' ? v.a.id : v.b.id)]);
+    });
+    if (v.tiebreak) {
+      var tb = v.tiebreak;
+      rows.push([v.a.id + ' vs ' + v.b.id, 'Tiebreak', '', (tb.a || []).join(' + '),
+        tb.done ? tb.sa + '-' + tb.sb : 'on court', (tb.b || []).join(' + '), '']);
+    }
+    if (v.winner) rows.push(['', '', '', 'Tie winner', '', '', 'Team ' + (v.winner === 'a' ? v.a.id : v.b.id)]);
+  }
+  rows.push(['']);
+  rows.push(['PLAYERS']);
+  rows.push(['Player', 'Team', 'Games won', 'Games played', 'Team won tie', 'Rank pts (if ranked)']);
+  relayPlayerStats(state).forEach(function (p) {
+    rows.push([p.name, p.team ? 'Team ' + p.team : '', p.won, p.played, p.teamWon ? 'yes' : '', p.guest ? 'guest' : p.rp]);
+  });
+
+  var width = 1;
+  rows.forEach(function (r) { if (r.length > width) width = r.length; });
+  var values = rows.map(function (r) {
+    var out = r.slice();
+    while (out.length < width) out.push('');
+    return out;
+  });
+  var lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
+  if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, Math.max(lastCol, 1)).clearContent();
+  sheet.getRange(2, 1, values.length, width).setValues(values);
+}
+
+// ---- Relay rules (pure - mirrored by relay* helpers in site/index.html) ----
+
+function isRelayGuest(name) {
+  return /^guest\b/i.test((name || '').toString().trim());
+}
+
+function relayPairs(players) {
+  var n = players.length;
+  if (n < 2) return [];
+  if (n === 2) return [[players[0], players[1]]];
+  var out = [];
+  for (var i = 0; i < n; i++) out.push([players[i], players[(i + 1) % n]]);
+  return out;
+}
+
+// The captain's playing order for a round: a permutation of pair indices,
+// falling back to P1+P2 first, P2+P3 next, ... when unset or stale (e.g.
+// the team's size changed since it was saved).
+function relayOrder(team, round) {
+  var n = relayPairs(team.players || []).length;
+  var o = team.order && team.order[round];
+  var ok = o && o.length === n;
+  if (ok) {
+    var seen = {};
+    for (var i = 0; i < o.length; i++) {
+      if (typeof o[i] !== 'number' || o[i] < 0 || o[i] >= n || seen[o[i]]) { ok = false; break; }
+      seen[o[i]] = true;
+    }
+  }
+  if (ok) return o.slice();
+  var ident = [];
+  for (var k = 0; k < n; k++) ident.push(k);
+  return ident;
+}
+
+function relayTieCount(state) {
+  return Math.floor(state.teams.length / 2);
+}
+
+function relayFindGame(state, tie, round, seq) {
+  for (var i = 0; i < state.games.length; i++) {
+    var g = state.games[i];
+    if (g.tie === tie && g.round === round && g.seq === seq) return g;
+  }
+  return null;
+}
+
+function relayGameDone(g) {
+  return !!g && typeof g.sa === 'number' && typeof g.sb === 'number';
+}
+
+// Everything about one tie (teams 2*tie and 2*tie+1): each round's games -
+// recorded ones as stored (names frozen at play time), the rest scheduled
+// from the current lineups - plus round/tie results and the tiebreak.
+function relayTieView(state, tie) {
+  var ta = state.teams[2 * tie], tb = state.teams[2 * tie + 1];
+  var uneven = ta.players.length !== tb.players.length;
+  var rounds = [];
+  for (var r = 1; r <= RELAY_ROUNDS; r++) {
+    var pa = relayPairs(ta.players), pb = relayPairs(tb.players);
+    var oa = relayOrder(ta, r), ob = relayOrder(tb, r);
+    var count = Math.max(pa.length, pb.length);
+    state.games.forEach(function (g) { if (g.tie === tie && g.round === r && g.seq + 1 > count) count = g.seq + 1; });
+    var games = [];
+    var winsA = 0, winsB = 0, ptsA = 0, ptsB = 0, doneCount = 0;
+    for (var s = 0; s < count; s++) {
+      var rec = relayFindGame(state, tie, r, s);
+      var g = {
+        seq: s,
+        a: rec ? rec.a : (s < oa.length ? pa[oa[s]] : null),
+        b: rec ? rec.b : (s < ob.length ? pb[ob[s]] : null),
+        startedAt: rec ? rec.startedAt || null : null,
+        done: relayGameDone(rec)
+      };
+      if (g.done) {
+        g.sa = rec.sa; g.sb = rec.sb;
+        doneCount++;
+        ptsA += rec.sa; ptsB += rec.sb;
+        if (rec.sa > rec.sb) winsA++; else winsB++;
+      }
+      games.push(g);
+    }
+    var done = count > 0 && doneCount === count;
+    var winner = null;
+    if (done) {
+      if (winsA !== winsB) winner = winsA > winsB ? 'a' : 'b';
+      else if (ptsA !== ptsB) winner = ptsA > ptsB ? 'a' : 'b';
+      else winner = 'draw';
+    }
+    rounds.push({ round: r, games: games, done: done, started: doneCount > 0 || games.some(function (x) { return !!x.startedAt; }),
+      winsA: winsA, winsB: winsB, ptsA: ptsA, ptsB: ptsB, winner: winner });
+  }
+  var allDone = rounds.every(function (x) { return x.done; });
+  var roundsA = 0, roundsB = 0;
+  rounds.forEach(function (x) { if (x.winner === 'a') roundsA++; if (x.winner === 'b') roundsB++; });
+  var needsTiebreak = allDone && roundsA === roundsB;
+  var tbRec = relayFindGame(state, tie, RELAY_TIEBREAK_ROUND, 0);
+  var tiebreak = tbRec ? { a: tbRec.a, b: tbRec.b, startedAt: tbRec.startedAt || null, done: relayGameDone(tbRec),
+    sa: tbRec.sa, sb: tbRec.sb } : null;
+  var winner = null;
+  if (allDone) {
+    if (roundsA !== roundsB) winner = roundsA > roundsB ? 'a' : 'b';
+    else if (tiebreak && tiebreak.done) winner = tiebreak.sa > tiebreak.sb ? 'a' : 'b';
+  }
+  return { tie: tie, a: ta, b: tb, uneven: uneven, rounds: rounds, roundsA: roundsA, roundsB: roundsB,
+    needsTiebreak: needsTiebreak, tiebreak: tiebreak, winner: winner, done: !!winner };
+}
+
+function relayIsComplete(state) {
+  var n = relayTieCount(state);
+  if (!n) return false;
+  for (var t = 0; t < n; t++) if (!relayTieView(state, t).done) return false;
+  return true;
+}
+
+// Per player: doubles won/played over the two rounds (the tiebreak game
+// only decides the tie), whether their team won its tie, and the ranked-mode
+// rank points (won + RELAY_TEAM_BONUS for a tie win). A player's team is
+// the one they're on now, else the side they last played for.
+function relayPlayerStats(state) {
+  var byKey = {};
+  var teamOf = {};
+  state.teams.forEach(function (t) {
+    t.players.forEach(function (p) { teamOf[p.trim().toLowerCase()] = t.id; });
+  });
+  var tieWinner = {}; // team id -> true when that team won its tie
+  for (var tie = 0; tie < relayTieCount(state); tie++) {
+    var v = relayTieView(state, tie);
+    if (v.winner) tieWinner[v.winner === 'a' ? v.a.id : v.b.id] = true;
+  }
+  function entry(name) {
+    var k = name.trim().toLowerCase();
+    if (!byKey[k]) byKey[k] = { name: name.trim(), team: teamOf[k] || '', played: 0, won: 0, guest: isRelayGuest(name) };
+    return byKey[k];
+  }
+  state.teams.forEach(function (t) { t.players.forEach(entry); });
+  state.games.forEach(function (g) {
+    if (g.round > RELAY_ROUNDS || !relayGameDone(g)) return;
+    var teamA = state.teams[2 * g.tie], teamB = state.teams[2 * g.tie + 1];
+    [['a', g.a, g.sa > g.sb, teamA], ['b', g.b, g.sb > g.sa, teamB]].forEach(function (side) {
+      (side[1] || []).forEach(function (n) {
+        var e = entry(n);
+        e.played++;
+        if (side[2]) e.won++;
+        if (!e.team && side[3]) e.team = side[3].id;
+      });
+    });
+  });
+  var list = Object.keys(byKey).map(function (k) {
+    var e = byKey[k];
+    e.teamWon = !!(e.team && tieWinner[e.team]);
+    e.rp = e.won + (e.teamWon ? RELAY_TEAM_BONUS : 0);
+    return e;
+  });
+  list.sort(function (x, y) { return y.rp - x.rp || y.won - x.won || x.name.localeCompare(y.name); });
+  return list;
+}
+
+// Finalize rows for a ranked relay night: every non-guest who played, with
+// a "T<team>" label in the week's R column (applyAbsencePasses counts it as
+// attended).
+function computeRelayResults(state) {
+  return relayPlayerStats(state).filter(function (p) { return !p.guest && p.played > 0; })
+    .map(function (p) { return { name: p.name, r: 'T' + (p.team || '?'), rp: p.rp }; });
+}
+
+// ---- Relay actions (admin passphrase or tonight's event PIN) ----
+
+function relayGuard(dateISO, secret, pin) {
+  var auth = checkRunAuth(dateISO, secret, pin);
+  if (!auth.ok) return auth;
+  if (!isRelayDate(dateISO)) return { ok: false, error: dateISO + ' is not a team relay night.' };
+  if (!getWeekSheet(dateISO)) return { ok: false, error: 'No tab exists for ' + dateISO };
+  return { ok: true };
+}
+
+function relayAnyGames(state) {
+  return state.games.length > 0;
+}
+
+// Snake draft by standings: 1st seed -> A, 2nd -> B, ... last team, then
+// back the other way, so team strengths even out and sizes differ by at
+// most one. Uses the same eligible list as a singles draw (confirmed
+// signups minus no-shows); the default captain is each team's top seed.
+function drawTeams(dateISO, teamCount, redraw, secret, pin) {
+  var g = relayGuard(dateISO, secret, pin);
+  if (!g.ok) return g;
+  teamCount = Number(teamCount);
+  if (RELAY_TEAM_COUNTS.indexOf(teamCount) === -1) {
+    return { ok: false, error: 'Pick ' + RELAY_TEAM_COUNTS.join(' or ') + ' teams.' };
+  }
+  var data = getWeekSheet(dateISO).getDataRange().getValues();
+  var eligible = parseSignups(data).slice(0, RELAY_CAP).filter(function (s) { return !s.noShow; });
+  if (eligible.length < teamCount * 2) {
+    return { ok: false, error: 'Only ' + eligible.length + ' eligible players — need at least ' + (teamCount * 2) + ' for ' + teamCount + ' teams.' };
+  }
+  var rankedPlayers = getRankings().players;
+  var sorted = eligible.map(function (s, i) {
+    return { name: s.name, rank: rankFor(rankedPlayers, s.name), idx: i };
+  }).sort(function (a, b) { return a.rank - b.rank || a.idx - b.idx; });
+
+  var teams = [];
+  for (var t = 0; t < teamCount; t++) teams.push({ id: RELAY_TEAM_IDS[t], captain: '', players: [], order: {} });
+  sorted.forEach(function (p, i) {
+    var lap = Math.floor(i / teamCount), pos = i % teamCount;
+    teams[lap % 2 === 0 ? pos : teamCount - 1 - pos].players.push(p.name);
+  });
+  teams.forEach(function (tm) { tm.captain = tm.players[0] || ''; });
+
+  return updateRelayState(dateISO, function (state) {
+    if (state.teams.length) {
+      if (!redraw) return { ok: false, error: 'Teams are already drawn.' };
+      if (relayAnyGames(state)) return { ok: false, error: 'Games have started — teams can no longer be redrawn.' };
+    }
+    state.teams = teams;
+    state.games = [];
+    return { ok: true };
+  });
+}
+
+// Saves the organizer's team edits (moves, late adds, guests, removals,
+// captain, P1..Pn positions, per-round playing order) as a whole - the site
+// edits a local copy and posts every team back. rev guards against two
+// devices overwriting each other's edits. Already-recorded games keep the
+// names they were played with; changes only affect games not yet started.
+function relaySaveTeams(dateISO, teams, rev, secret, pin) {
+  var g = relayGuard(dateISO, secret, pin);
+  if (!g.ok) return g;
+  if (!Array.isArray(teams)) return { ok: false, error: 'Missing teams.' };
+  return updateRelayState(dateISO, function (state) {
+    if (!state.teams.length) return { ok: false, error: 'Draw teams first.' };
+    if (Number(rev) !== state.rev) return { ok: false, stale: true, error: 'Teams were changed on another device — showing the latest now; please redo your change.' };
+    if (teams.length !== state.teams.length) return { ok: false, error: 'The number of teams cannot change after the draw — redraw instead.' };
+    var seen = {};
+    var clean = [];
+    for (var i = 0; i < teams.length; i++) {
+      var t = teams[i] || {};
+      if (t.id !== state.teams[i].id) return { ok: false, error: 'Team order mismatch — refresh and try again.' };
+      var players = [];
+      var list = Array.isArray(t.players) ? t.players : [];
+      for (var j = 0; j < list.length; j++) {
+        var nm = String(list[j] || '').trim().slice(0, 40);
+        if (!nm) continue;
+        var k = nm.toLowerCase();
+        if (seen[k]) return { ok: false, error: nm + ' is listed on more than one team.' };
+        seen[k] = true;
+        players.push(nm);
+      }
+      var captain = String(t.captain || '').trim();
+      if (players.map(function (p) { return p.toLowerCase(); }).indexOf(captain.toLowerCase()) === -1) captain = '';
+      var order = {};
+      var tmp = { players: players, order: t.order || {} };
+      for (var r = 1; r <= RELAY_ROUNDS; r++) order[r] = relayOrder(tmp, r);
+      clean.push({ id: t.id, captain: captain, players: players, order: order });
+    }
+    state.teams = clean;
+    return { ok: true };
+  });
+}
+
+// Resolves which pairs play a (tie, round, seq) game: scheduled from the
+// lineups for rounds 1-2, the organizer's picks for the tiebreak.
+function relayResolvePairs(state, tie, round, seq, aPair, bPair) {
+  if (tie < 0 || tie >= relayTieCount(state)) return { ok: false, error: 'Unknown tie.' };
+  var v = relayTieView(state, tie);
+  if (round === RELAY_TIEBREAK_ROUND) {
+    if (!v.needsTiebreak) return { ok: false, error: 'This tie doesn\'t need a tiebreak game.' };
+    var pick = function (pair, team) {
+      if (!Array.isArray(pair) || pair.length !== 2) return null;
+      var names = team.players.map(function (p) { return p.toLowerCase(); });
+      var out = [];
+      for (var i = 0; i < 2; i++) {
+        var idx = names.indexOf(String(pair[i] || '').trim().toLowerCase());
+        if (idx === -1) return null;
+        out.push(team.players[idx]);
+      }
+      return out[0] === out[1] ? null : out;
+    };
+    var a = pick(aPair, v.a), b = pick(bPair, v.b);
+    if (!a || !b) return { ok: false, error: 'Pick two different players from each team for the tiebreak.' };
+    return { ok: true, a: a, b: b };
+  }
+  if (round < 1 || round > RELAY_ROUNDS) return { ok: false, error: 'Unknown round.' };
+  if (v.uneven) return { ok: false, error: 'Team ' + v.a.id + ' has ' + v.a.players.length + ' players and Team ' + v.b.id +
+    ' has ' + v.b.players.length + ' — even them out (add a guest or a late player) before playing.' };
+  var game = v.rounds[round - 1].games[seq];
+  if (!game || !game.a || !game.b) return { ok: false, error: 'Unknown game.' };
+  return { ok: true, a: game.a, b: game.b };
+}
+
+function relayStartGame(dateISO, tie, round, seq, aPair, bPair, secret, pin) {
+  var g = relayGuard(dateISO, secret, pin);
+  if (!g.ok) return g;
+  tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
+  return updateRelayState(dateISO, function (state) {
+    if (relayFindGame(state, tie, round, seq)) return { ok: false, error: 'That game is already on court or scored.' };
+    var p = relayResolvePairs(state, tie, round, seq, aPair, bPair);
+    if (!p.ok) return p;
+    state.games.push({ tie: tie, round: round, seq: seq, a: p.a, b: p.b, startedAt: Date.now() });
+    return { ok: true };
+  });
+}
+
+// Records a game's score, or corrects one already recorded (any whole
+// numbers with a winner - the points target can vary by night). A game
+// needn't be started first.
+function relayScore(dateISO, tie, round, seq, scoreA, scoreB, aPair, bPair, secret, pin) {
+  var g = relayGuard(dateISO, secret, pin);
+  if (!g.ok) return g;
+  var v = validateScores(scoreA, scoreB);
+  if (!v.ok) return v;
+  tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
+  var result = updateRelayState(dateISO, function (state) {
+    var game = relayFindGame(state, tie, round, seq);
+    if (!game) {
+      var p = relayResolvePairs(state, tie, round, seq, aPair, bPair);
+      if (!p.ok) return p;
+      game = { tie: tie, round: round, seq: seq, a: p.a, b: p.b };
+      state.games.push(game);
+    }
+    game.sa = v.a;
+    game.sb = v.b;
+    game.finishedAt = Date.now();
+    return { ok: true, complete: relayIsComplete(state) };
+  });
+  // Finalize runs outside the relay lock (finalizeWeek takes the same lock).
+  // Exhibition nights return without writing anything.
+  if (result && result.ok && result.complete) result.finalize = maybeFinalizeWeek(dateISO);
+  return result;
+}
+
+// Takes a game back off the board: cancels one on court, or deletes a
+// recorded score so the game can be replayed/re-entered.
+function relayClearGame(dateISO, tie, round, seq, secret, pin) {
+  var g = relayGuard(dateISO, secret, pin);
+  if (!g.ok) return g;
+  tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
+  return updateRelayState(dateISO, function (state) {
+    for (var i = 0; i < state.games.length; i++) {
+      var x = state.games[i];
+      if (x.tie === tie && x.round === round && x.seq === seq) { state.games.splice(i, 1); return { ok: true }; }
+    }
+    return { ok: false, error: 'Game not found — it may already be cleared.' };
+  });
+}
+
+// Wipes a relay night's teams and games (resetWeek on a relay date).
+function clearRelayState(dateISO) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(relaySheetName(dateISO));
+  if (!sheet) return;
+  updateRelayState(dateISO, function (state) {
+    state.teams = [];
+    state.games = [];
+    return { ok: true };
+  });
+}
+
+// ---- Protected-tab editors ----
+//
+// SHEET_EDITORS (script property, comma-separated emails) are people who may
+// still edit protected week/relay tabs by hand in Sheets. They must also be
+// shared as Editors on the spreadsheet itself. protectWeekSheet() adds them
+// to every newly protected tab; run applySheetEditorsToProtectedTabs() once
+// from the editor to add them to tabs that are already protected.
+
+function sheetEditorEmails() {
+  var raw = PropertiesService.getScriptProperties().getProperty('SHEET_EDITORS') || '';
+  return raw.split(',').map(function (s) { return s.trim(); }).filter(isEmail);
+}
+
+function applySheetEditorsToProtectedTabs() {
+  var emails = sheetEditorEmails();
+  if (!emails.length) { Logger.log('SHEET_EDITORS is not set.'); return; }
+  var updated = 0;
+  SpreadsheetApp.getActiveSpreadsheet().getSheets().forEach(function (sheet) {
+    sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).forEach(function (p) {
+      p.addEditors(emails);
+      updated++;
+    });
+  });
+  Logger.log('Added ' + emails.join(', ') + ' to ' + updated + ' protected tab(s).');
 }
