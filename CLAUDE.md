@@ -144,18 +144,21 @@ Google Apps Script file, edited directly.
   `Relay M/D/YY` tab (rows below are a read-only readable copy) - never in
   the weekly tab's pool geometry. The site's This week page renders these
   nights via `paintRelay` in `index.html`, with the same Check-in / Live /
-  Pools sub-tabs as singles (Pools = teams, pairs, playing order, results).
-  Format: each team's positions fix its pairs for the night (P1+P2, P3+P4,
-  ...); in each of the two rounds every pair plays twice, against two
-  different opposing pairs; a 1-1 tie goes to one tiebreak game. A team's
-  playing order per round lists each pair index twice (game k = first
-  team's k-th entry vs second team's); the default comes from
-  `RELAY_REST_ORDERS` (separate `a`/`b` orders per pair count, brute-forced
-  to spread rest), round 2 follows round 1 unless given its own `order[2]`,
-  and a round's order locks once its first game starts. Games only start
+  Pools sub-tabs as singles (Pools = teams, pairs, results).
+  Format: each team's positions make its pairs (P1+P2, P3+P4, ...); in
+  each of the two rounds every pair plays twice, against two different
+  opposing pairs, in a fixed order (`RELAY_ORDERS`, per pair count and
+  round, `a`/`b` = first/second team of the matchup; game k = a[k] vs
+  b[k]; brute-forced to spread rest). Before round 2 a captain may re-pair
+  (the team's optional `lineup2`); if neither team re-pairs, round 2 uses
+  its own order that brings in the match-ups round 1 didn't have (with 3
+  pairs, each pair meets its third opponent and replays one), otherwise
+  the new pairs play round 1's order (`relaySchedule`). Round 1 pairs lock
+  when round 1 starts, round 2 pairs when round 2 starts; a 1-1 tie goes to
+  one tiebreak game. Games only start
   when both teams in a matchup have the same, even number of players
-  (`relayMatchupProblem`). The pure rules (`relayPairs`/`relayOrder`/
-  `relayDefaultOrder`/`relayTieView`/`relayPlayerStats`/`relayTeamSizes`)
+  (`relayMatchupProblem`). The pure rules (`relayPairs`/`relayLineup`/
+  `relaySchedule`/`relayTieView`/`relayPlayerStats`/`relayTeamSizes`)
   exist in both `Code.gs` and `index.html` and must stay in sync (the mock
   reuses the page's copies). Singles-only actions (`generatePools`,
   `startMatch`, `recordScore`, `editScore`, `cancelMatch`) refuse on these
