@@ -404,8 +404,8 @@
       </details>
       <details>
         <summary>Who plays with whom?</summary>
-        <p>Before the first game the captain picks the team's <strong>doubles pairs</strong>, and they stay together all night. In each round every pair plays <strong>twice</strong>, against two different pairs from the other team.</p>
-        <p>The site starts every team on a playing order that spreads out rest (from 3 pairs up, nobody plays two games in a row). The captain can change the order for either round, but it's locked once that round's first game starts. Round 2 uses round 1's order unless the captain changes it.</p>
+        <p>Before the first game the captain picks the team's <strong>doubles pairs</strong>. In each round every pair plays <strong>twice</strong>, against two different pairs from the other team, in a set order that spreads out rest (from 3 pairs up, nobody plays two games in a row).</p>
+        <p>Before round 2 starts, the captain can <strong>re-pair</strong> the team. If both teams keep their pairs, round 2's order brings in the match-ups round 1 didn't have. With 3 pairs a side, each pair meets its third opponent and replays one from round 1, so every pair plays all three opposing pairs during the night.</p>
       </details>
       <details>
         <summary>How does a match between two teams work?</summary>
@@ -2056,7 +2056,7 @@ const RELAY_TIEBREAK_ROUND = 3;
 let relaySubview = 'live';      // sticky across background refreshes
 let RELAY_OPEN_EDIT = null;     // "tie-round-seq" of a game row with its score inputs open
 let RELAY_EDIT_TEAM = null;     // team index whose card is in Edit mode (Pools tab)
-let RELAY_ORDER_EDIT = null;    // "team-round" playing order open for reordering
+let RELAY_R2_EDIT = null;       // team index whose round-2 pairs are open for changes
 const RELAY_OPEN_ROUNDS = {};   // "tie-round" -> true: a collapsed round the organizer expanded
 let RELAY_TEAM_COUNT_PICK = null;
 let RELAY_EDIT_SEQ = 0;
@@ -2093,38 +2093,48 @@ function relayPairs(players){
   for(let i=0; i+1<players.length; i+=2) out.push([players[i], players[i+1]]);
   return out;
 }
-// Default playing orders by pairs per team - 'a' for the first team of a
-// matchup, 'b' for the second; every pair plays twice, against two
-// different pairs, with rest spread out (Code.gs RELAY_REST_ORDERS).
-const RELAY_REST_ORDERS = {
-  1: {a:[0,0], b:[0,0]},
-  2: {a:[0,1,0,1], b:[0,1,1,0]},
-  3: {a:[0,1,0,2,1,2], b:[0,1,2,0,2,1]},
-  4: {a:[0,1,2,0,3,2,1,3], b:[0,1,2,3,0,1,2,3]},
-  5: {a:[0,1,2,3,0,4,1,2,3,4], b:[0,1,2,3,4,0,2,1,4,3]}
+// Fixed playing orders by pairs per team and round - 'a' for the first team
+// of a matchup, 'b' for the second; game k is a[k] vs b[k]. Round 2 is used
+// when neither captain re-paired and brings in the match-ups round 1
+// didn't have (Code.gs RELAY_ORDERS / relayFixedOrder).
+const RELAY_ORDERS = {
+  1: {1: {a:[0,0], b:[0,0]}, 2: {a:[0,0], b:[0,0]}},
+  2: {1: {a:[0,1,0,1], b:[0,1,1,0]}, 2: {a:[0,1,0,1], b:[0,1,1,0]}},
+  3: {1: {a:[0,1,0,2,1,2], b:[0,1,2,0,2,1]}, 2: {a:[0,1,2,1,0,2], b:[0,2,1,0,1,2]}},
+  4: {1: {a:[0,1,2,0,3,2,1,3], b:[0,1,2,3,0,1,2,3]}, 2: {a:[0,2,1,0,3,1,2,3], b:[1,0,3,2,1,0,3,2]}},
+  5: {1: {a:[0,1,2,3,0,4,1,2,3,4], b:[0,1,2,3,4,0,2,1,4,3]}, 2: {a:[0,1,2,3,0,4,1,3,2,4], b:[2,0,4,1,3,2,4,0,3,1]}}
 };
-function relayDefaultOrder(n, side){
-  const t = RELAY_REST_ORDERS[n];
-  if(t) return (side ? t.b : t.a).slice();
+function relayFixedOrder(n, round, side){
+  const t = RELAY_ORDERS[n];
+  if(t) return (side ? t[round].b : t[round].a).slice();
+  const shifts = round === 2 ? [3, 1] : [0, 2];
   const out = [];
-  for(let k=0;k<n;k++) out.push(k);
-  for(let j=0;j<n;j++) out.push(side ? (j+2)%n : j);
+  for(let pass=0; pass<2; pass++) for(let j=0; j<n; j++) out.push(side ? (j+shifts[pass])%n : j);
   return out;
 }
-// 2n entries, each pair index exactly twice.
-function relayValidOrder(o, n){
-  if(!o || o.length!==2*n) return false;
-  const seen = {};
-  return o.every(x=>Number.isInteger(x) && x>=0 && x<n && (seen[x]=(seen[x]||0)+1) <= 2);
+// Positions P1..Pn for a round: the team list for round 1, the captain's
+// round-2 positions (lineup2) for round 2 when set - reconciled with the roster.
+function relayLineup(team, round){
+  const players = team.players || [];
+  if(round !== 2 || !Array.isArray(team.lineup2)) return players.slice();
+  const byKey = {}, used = new Set(), out = [];
+  players.forEach(p=>{ byKey[playerKey(p)] = p; });
+  team.lineup2.forEach(n=>{ const k = playerKey(n); if(byKey[k] && !used.has(k)){ out.push(byKey[k]); used.add(k); } });
+  players.forEach(p=>{ if(!used.has(playerKey(p))) out.push(p); });
+  return out;
 }
-// Round 1: saved order, else the default. Round 2: its own order if the
-// captain set one, else round 1's order (Code.gs relayOrder).
-function relayOrder(team, round, side){
-  const n = relayPairs(team.players || []).length;
-  const o = team.order && team.order[round];
-  if(relayValidOrder(o, n)) return o.slice();
-  if(round === 2) return relayOrder(team, 1, side);
-  return relayDefaultOrder(n, side);
+function relaySamePairs(team){
+  const keys = lineup=>relayPairs(lineup).map(pr=>pr.map(p=>p.toLowerCase()).sort().join('+')).sort().join('|');
+  return keys(relayLineup(team, 1)) === keys(relayLineup(team, 2));
+}
+// A round's games: [[aPair, bPair], ...] (Code.gs relaySchedule).
+function relaySchedule(ta, tb, round){
+  const repeat = round === 2 && relaySamePairs(ta) && relaySamePairs(tb);
+  const pa = relayPairs(relayLineup(ta, repeat ? 1 : round)), pb = relayPairs(relayLineup(tb, repeat ? 1 : round));
+  const n = Math.max(pa.length, pb.length);
+  if(!n) return [];
+  const oa = relayFixedOrder(n, repeat ? 2 : 1, 0), ob = relayFixedOrder(n, repeat ? 2 : 1, 1);
+  return oa.map((x,k)=>[pa[x] || null, pb[ob[k]] || null]);
 }
 // Why a matchup can't start games yet ('' when it can) - Code.gs relayMatchupProblem.
 function relayMatchupProblem(ta, tb){
@@ -2141,11 +2151,10 @@ function relayGameDone(g){ return !!g && typeof g.sa==='number' && typeof g.sb==
 function relayTieView(state, tie){
   const ta = state.teams[2*tie], tb = state.teams[2*tie+1];
   const problem = relayMatchupProblem(ta, tb);
-  const pa = relayPairs(ta.players), pb = relayPairs(tb.players);
   const rounds = [];
   for(let r=1; r<=RELAY_ROUNDS; r++){
-    const oa = relayOrder(ta, r, 0), ob = relayOrder(tb, r, 1);
-    let count = 2*Math.max(pa.length, pb.length);
+    const sched = relaySchedule(ta, tb, r);
+    let count = sched.length;
     state.games.forEach(g=>{ if(g.tie===tie && g.round===r && g.seq+1 > count) count = g.seq+1; });
     const games = [];
     let winsA=0, winsB=0, ptsA=0, ptsB=0, doneCount=0;
@@ -2153,8 +2162,8 @@ function relayTieView(state, tie){
       const rec = relayFindGame(state, tie, r, s);
       const g = {
         seq: s,
-        a: rec ? rec.a : (s < oa.length ? pa[oa[s]] : null),
-        b: rec ? rec.b : (s < ob.length ? pb[ob[s]] : null),
+        a: rec ? rec.a : (s < sched.length ? sched[s][0] : null),
+        b: rec ? rec.b : (s < sched.length ? sched[s][1] : null),
         startedAt: rec ? rec.startedAt || null : null,
         done: relayGameDone(rec)
       };
@@ -2526,19 +2535,19 @@ function relayTiebreakHtml(v, admin, readOnly){
   </div>`;
 }
 
-// ---- Pools tab: teams, pairs, playing order ----
+// ---- Pools tab: teams and pairs ----
 
 function relayTeamsHtml(week, state, admin){
   return `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:14px; margin-bottom:14px;">${state.teams.map((t,ti)=>relayTeamCard(week, state, ti, admin)).join('')}</div>`;
 }
 
-// Read-only by default: the pairs and a one-line playing order per round.
-// Edit reveals the per-player tools and the add box; Change opens one
-// round's order for reordering.
+// Read-only by default: the pairs (and round 2's, if the captain re-paired).
+// Edit reveals the per-player tools and the add box; "change" opens the
+// round-2 positions. Playing orders are fixed (RELAY_ORDERS) - the Live tab
+// lists every game.
 function relayTeamCard(week, state, ti, admin){
   const t = state.teams[ti];
   const opp = state.teams[ti ^ 1];
-  const side = ti % 2;
   const v = relayTieView(state, Math.floor(ti/2));
   const r1Locked = v.rounds[0].started;
   const editing = admin && RELAY_EDIT_TEAM === ti;
@@ -2552,6 +2561,7 @@ function relayTeamCard(week, state, ti, admin){
       + (s && s.noShow ? ' <span class="mine-badge ns">No show</span>' : '');
   };
   const n = t.players.length;
+  const repaired = !relaySamePairs(t);
   let body;
   if(editing){
     body = t.players.map((p,pi)=>`<div class="team-row"><span class="pos">P${pi+1}</span><span class="rname">${nameHtml(p)}</span><span class="tools">
@@ -2563,70 +2573,51 @@ function relayTeamCard(week, state, ti, admin){
       </select>`}
       <button class="icon-btn" title="${r1Locked ? 'Replace with a guest' : 'Take off the team'}" onclick="relayRemove(${ti},${pi})">✕</button>
     </span></div>`).join('')
-    + `<p class="game-note" style="margin:6px 0 0;">P1+P2, P3+P4, … are the pairs${r1Locked ? ' — fixed now that round 1 has started; ✕ swaps a player for a guest' : ''}.</p>
+    + `<p class="game-note" style="margin:6px 0 0;">P1+P2, P3+P4, … are the round 1 pairs${r1Locked ? ' — fixed now that round 1 has started; ✕ swaps a player for a guest' : ''}.</p>
     <div class="search-row" style="margin:10px 0 0; gap:6px; flex-wrap:wrap;">
       <input type="text" id="relay-add-${ti}" list="relay-player-names" placeholder="Late player or guest name" style="min-width:140px;" autocomplete="off">
       <button class="btn small ghost" title="Signs them up, checks them in and puts them on this team (in a guest's spot if there is one)" onclick="relayAddTyped(${ti})">Add player</button>
       <button class="btn small ghost" title="Adds this name as a guest (no ranking points) — leave the box empty for Guest 1, 2, …" onclick="relayAddGuest(${ti})">+ Guest</button>
     </div>`;
   } else {
-    const pairs = relayPairs(t.players);
-    body = pairs.map((pr,k)=>`<div class="team-row"><span class="pos">${k+1}</span><span class="rname">${nameHtml(pr[0])} + ${nameHtml(pr[1])}</span></div>`).join('')
-      + (n % 2 ? `<div class="team-row"><span class="pos">–</span><span class="rname">${nameHtml(t.players[n-1])} <span class="game-note">needs a partner</span></span></div>` : '')
-      || '<p class="game-note">No players.</p>';
+    body = (repaired ? '<div class="relay-sub" style="margin:0;">Round 1 pairs</div>' : '') + relayPairsHtml(relayLineup(t, 1), nameHtml);
   }
-  const orders = n >= 2 ? [1,2].map(r=>relayOrderHtml(state, v, t, ti, side, r, admin)).join('') : '';
   const editBtn = admin ? `<button class="btn small ghost" onclick="RELAY_EDIT_TEAM=${editing ? 'null' : ti}; paintSchedule(LAST_WEEK);">${editing ? 'Done' : 'Edit'}</button>` : '';
   return `<div class="card" style="margin-bottom:0;">
     <div class="pool-head"><h3>Team ${t.id} <span style="font-weight:400; color:var(--text-mute); font-size:12px; text-transform:none;">vs Team ${opp ? opp.id : '—'}</span></h3>${editBtn}</div>
     ${body}
-    ${orders}
+    ${n >= 2 ? relayRound2Html(v, t, ti, admin, repaired, nameHtml) : ''}
   </div>`;
 }
 
-// One round's playing order: "pairs 1 2 1 3 2 3", or,
-// while open for changes, one row per game with ▲▼. Locked once the round's
-// first game starts.
-function relayOrderHtml(state, v, t, ti, side, r, admin){
-  const n = relayPairs(t.players).length;
-  if(!n) return '';
-  const order = relayOrder(t, r, side);
-  const locked = v.rounds[r-1].started;
-  const key = `${ti}-${r}`;
-  const own = !!(t.order && relayValidOrder(t.order[r], n));
-  const sameAsR1 = r===2 && (!own || t.order[2].join(',')===relayOrder(t, 1, side).join(','));
-  const isDefault = r===1 && order.join(',')===relayDefaultOrder(n, side).join(',');
-  const label = `<span class="relay-sub" style="margin:0;">Round ${r} order</span>`;
-  const lockNote = locked ? ' <span class="game-note">· locked</span>' : '';
-  if(admin && !locked && RELAY_ORDER_EDIT===key){
-    const pairs = relayPairs(t.players);
-    const rows = order.map((pi,k)=>`<div class="team-row" style="font-size:13px;"><span class="pos">G${k+1}</span><span class="rname"><span class="pool-tag">${pi+1}</span> ${pairs[pi].map(escHtml).join(' + ')}</span><span class="tools">
-      <button class="icon-btn" title="Play earlier" onclick="relayMoveOrder(${ti},${r},${k},-1)" ${k===0?'disabled':''}>▲</button>
-      <button class="icon-btn" title="Play later" onclick="relayMoveOrder(${ti},${r},${k},1)" ${k===order.length-1?'disabled':''}>▼</button>
-    </span></div>`).join('');
-    const reset = r===1
-      ? (isDefault ? '' : `<button class="icon-btn" onclick="relayResetOrder(${ti},1)">recommended</button>`)
-      : (sameAsR1 ? '' : `<button class="icon-btn" onclick="relayResetOrder(${ti},2)">same as round 1</button>`);
-    return `<div style="margin-top:10px;">${label} ${reset} <button class="icon-btn" onclick="RELAY_ORDER_EDIT=null; paintSchedule(LAST_WEEK);">done</button></div>${rows}${relayRepeatNote(v, r)}`;
-  }
-  const seq = (r===2 && sameAsR1) ? 'same as round 1' : `pairs ${order.map(x=>x+1).join(' ')}`;
-  const change = (admin && !locked) ? ` <button class="icon-btn" onclick="RELAY_ORDER_EDIT='${key}'; paintSchedule(LAST_WEEK);">change</button>` : '';
-  return `<div style="margin-top:8px; font-size:13px;">${label} ${seq}${isDefault ? ' <span class="game-note">· spreads rest</span>' : ''}${lockNote}${change}</div>`;
+function relayPairsHtml(lineup, nameHtml){
+  const n = lineup.length;
+  return relayPairs(lineup).map((pr,k)=>`<div class="team-row"><span class="pos">${k+1}</span><span class="rname">${nameHtml(pr[0])} + ${nameHtml(pr[1])}</span></div>`).join('')
+    + (n % 2 ? `<div class="team-row"><span class="pos">–</span><span class="rname">${nameHtml(lineup[n-1])} <span class="game-note">needs a partner</span></span></div>` : '')
+    || '<p class="game-note">No players.</p>';
 }
 
-// With both captains free to reorder, a pair could meet the same opposing
-// pair twice in a round - flagged while reordering (allowed, just probably
-// not intended).
-function relayRepeatNote(v, r){
-  const seen = {}, dup = [];
-  v.rounds[r-1].games.forEach(g=>{
-    if(!g.a || !g.b) return;
-    const k = g.a.join('+') + '|' + g.b.join('+');
-    if(seen[k] && !dup.includes(k)) dup.push(k);
-    seen[k] = true;
-  });
-  if(!dup.length) return '';
-  return `<p class="game-note" style="margin:4px 0 0; color:var(--loss);">Round ${r}: ${dup.map(k=>k.split('|').map(p=>p.split('+').map(escHtml).join(' + ')).join(' meet ')).join('; ')} twice.</p>`;
+// Round 2 pairs: one line while they're the same as round 1; the new pairs
+// once the captain re-paired; the P1..Pn positions with ▲▼ while open for
+// changes. Locked once round 2's first game starts.
+function relayRound2Html(v, t, ti, admin, repaired, nameHtml){
+  const locked = v.rounds[1].started;
+  const canEdit = admin && !locked;
+  if(canEdit && RELAY_R2_EDIT === ti){
+    const lineup = relayLineup(t, 2), n = lineup.length;
+    const rows = lineup.map((p,pi)=>`<div class="team-row" style="font-size:13px;"><span class="pos">P${pi+1}</span><span class="rname">${nameHtml(p)}</span><span class="tools">
+      <button class="icon-btn" title="Move up" onclick="relayMoveLineup2(${ti},${pi},-1)" ${pi===0?'disabled':''}>▲</button>
+      <button class="icon-btn" title="Move down" onclick="relayMoveLineup2(${ti},${pi},1)" ${pi===n-1?'disabled':''}>▼</button>
+    </span></div>`).join('');
+    return `<div style="margin-top:10px;"><span class="relay-sub" style="margin:0;">Round 2 pairs</span>
+      ${repaired ? `<button class="icon-btn" onclick="relayResetLineup2(${ti})">same as round 1</button>` : ''}
+      <button class="icon-btn" onclick="RELAY_R2_EDIT=null; paintSchedule(LAST_WEEK);">done</button></div>
+      <p class="game-note" style="margin:2px 0 4px;">P1+P2, P3+P4, … — use ▲▼ to re-pair. Keeping the same pairs brings in the match-ups round 1 didn't have.</p>${rows}`;
+  }
+  const change = canEdit ? ` <button class="icon-btn" onclick="RELAY_R2_EDIT=${ti}; paintSchedule(LAST_WEEK);">change</button>` : '';
+  const lockNote = locked ? ' <span class="game-note">· locked</span>' : '';
+  if(!repaired) return `<div style="margin-top:8px; font-size:13px;"><span class="relay-sub" style="margin:0;">Round 2</span> same pairs${lockNote}${change}</div>`;
+  return `<div style="margin-top:10px;"><span class="relay-sub" style="margin:0;">Round 2 pairs</span>${lockNote}${change}</div>${relayPairsHtml(relayLineup(t, 2), nameHtml)}`;
 }
 
 function relayPlayersCard(state, ev){
@@ -2708,7 +2699,6 @@ function relayCommitTeams(){
   });
 }
 function relayTeams(){ return LAST_WEEK.relay.teams; }
-function relayClearOrder(t){ t.order = {}; } // stale once the team's size changes
 
 function relayMovePos(ti, pi, dir){
   const p = relayTeams()[ti].players, j = pi+dir;
@@ -2726,7 +2716,6 @@ function relayMoveTeam(ti, pi, toTi){
   const [name] = teams[ti].players.splice(pi, 1);
   if(playerKey(teams[ti].captain)===playerKey(name)) teams[ti].captain = '';
   teams[toTi].players.push(name);
-  relayClearOrder(teams[ti]); relayClearOrder(teams[toTi]);
   relayCommitTeams();
 }
 // Before round 1: takes the player off (the team is then a player short -
@@ -2738,11 +2727,12 @@ function relayRemove(ti, pi){
   const v = relayTieView(LAST_WEEK.relay, Math.floor(ti/2));
   if(v.rounds[0].started){
     if(!confirm(`Replace ${name} with a guest on Team ${t.id}? Games they already played stay recorded.`)) return;
-    t.players[pi] = relayNextGuestName();
+    const guest = relayNextGuestName();
+    t.players[pi] = guest;
+    if(t.lineup2) t.lineup2 = t.lineup2.map(x=>playerKey(x)===playerKey(name) ? guest : x);
   } else {
     if(!confirm(`Take ${name} off Team ${t.id}?`)) return;
     t.players.splice(pi, 1);
-    relayClearOrder(t);
   }
   if(playerKey(t.captain)===playerKey(name)) t.captain = '';
   relayCommitTeams();
@@ -2791,25 +2781,20 @@ function relayAddGuest(ti, placeholderOnly){
   }
   teams[ti].players.push(name);
   if(named) relay.guests = (relay.guests||[]).concat([name]);
-  relayClearOrder(teams[ti]);
   if(inp) inp.value = '';
   relayCommitTeams();
 }
 function relayAddExisting(name, ti){ relayAddPlayerClick(name, ti, null); }
-function relayMoveOrder(ti, round, k, dir){
+function relayMoveLineup2(ti, pi, dir){
   const t = relayTeams()[ti];
-  const order = relayOrder(t, round, ti % 2), j = k+dir;
-  if(j<0 || j>=order.length) return;
-  [order[k], order[j]] = [order[j], order[k]];
-  t.order = Object.assign({}, t.order, {[round]: order});
+  const lineup = relayLineup(t, 2), j = pi+dir;
+  if(j<0 || j>=lineup.length) return;
+  [lineup[pi], lineup[j]] = [lineup[j], lineup[pi]];
+  t.lineup2 = lineup;
   relayCommitTeams();
 }
-// Round 1 back to the rest-spreading default; round 2 back to following round 1.
-function relayResetOrder(ti, round){
-  const t = relayTeams()[ti];
-  const order = Object.assign({}, t.order);
-  delete order[round];
-  t.order = order;
+function relayResetLineup2(ti){
+  delete relayTeams()[ti].lineup2;
   relayCommitTeams();
 }
 

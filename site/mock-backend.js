@@ -272,7 +272,7 @@
     }
     const sorted = eligible.map((s, i) => ({ name: s.name, rank: rankFor(s.name), idx: i }))
       .sort((a, b) => a.rank - b.rank || a.idx - b.idx);
-    const teams = Array.from({ length: k }, (_, t) => ({ id: TEAM_IDS[t], captain: '', players: [], order: {} }));
+    const teams = Array.from({ length: k }, (_, t) => ({ id: TEAM_IDS[t], captain: '', players: [] }));
     const plan = relayTeamSizes(sorted.length, k);
     const sizes = plan.sizes;
     let next = 0;
@@ -317,12 +317,11 @@
         players.push(nm);
       }
       const captain = players.some((p) => key(p) === key(t.captain)) ? String(t.captain).trim() : '';
-      // Mirrors gas/Code.gs: round 2's order only kept when it differs from round 1's.
-      const tmp = { players, order: t.order || {} };
-      const order = { 1: relayOrder(tmp, 1, i % 2) };
-      const o2 = tmp.order[2];
-      if (relayValidOrder(o2, relayPairs(players).length) && o2.join(',') !== order[1].join(',')) order[2] = o2.slice();
-      const cleanTeam = { id: t.id, captain, players, order };
+      const tmp = { players, lineup2: t.lineup2 };
+      let lineup2 = Array.isArray(t.lineup2) ? relayLineup(tmp, 2) : null;
+      if (lineup2 && lineup2.join('\n') === players.join('\n')) lineup2 = null; // same as round 1
+      const cleanTeam = { id: t.id, captain, players };
+      if (lineup2) cleanTeam.lineup2 = lineup2;
       clean.push(cleanTeam);
     }
     // Mirrors the guests clean-up in gas/Code.gs relaySaveTeams.
@@ -385,10 +384,13 @@
   // "Guest N" placeholder's spot, else joins at the end.
   function placeOnTeam(team, name) {
     for (let i = team.players.length - 1; i >= 0; i--) {
-      if (/^guest \d+$/i.test(String(team.players[i]).trim())) { team.players[i] = name; return; }
+      const guest = String(team.players[i]).trim();
+      if (!/^guest \d+$/i.test(guest)) continue;
+      team.players[i] = name;
+      if (team.lineup2) team.lineup2 = team.lineup2.map((p) => (key(p) === key(guest) ? name : p));
+      return;
     }
     team.players.push(name);
-    team.order = {};
   }
   function walkInTarget(name) {
     if (!STATE.live.walkins[key(name)]) return { ok: false, error: 'Only walk-ins added at the desk can be changed here.' };
@@ -411,7 +413,7 @@
     if (oldKey in STATE.live.checkins && newKey !== oldKey) { STATE.live.checkins[newKey] = STATE.live.checkins[oldKey]; delete STATE.live.checkins[oldKey]; }
     if (isRelay(date)) {
       const st = relayState(date);
-      st.teams.forEach((tm) => { tm.players = tm.players.map(swap); tm.captain = swap(tm.captain); });
+      st.teams.forEach((tm) => { tm.players = tm.players.map(swap); tm.captain = swap(tm.captain); if (tm.lineup2) tm.lineup2 = tm.lineup2.map(swap); });
       st.games.forEach((g) => { g.a = (g.a || []).map(swap); g.b = (g.b || []).map(swap); });
       st.rev++;
     }
@@ -425,10 +427,9 @@
       const st = relayState(date);
       if (st.games.some((g) => (g.a || []).concat(g.b || []).some((n) => key(n) === k))) return { ok: false, error: nm + ' has already played a game tonight — take them off their team instead.' };
       st.teams.forEach((tm) => {
-        const before = tm.players.length;
         tm.players = tm.players.filter((p) => key(p) !== k);
-        if (tm.players.length !== before) tm.order = {};
         if (key(tm.captain) === k) tm.captain = '';
+        if (tm.lineup2) tm.lineup2 = tm.lineup2.filter((p) => key(p) !== k);
       });
       st.rev++;
     } else {
