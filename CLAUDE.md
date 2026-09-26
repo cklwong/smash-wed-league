@@ -136,31 +136,41 @@ Google Apps Script file, edited directly.
   the first 24 non-no-shows, then fills spots freed by no-shows with
   checked-in players from past the cap (walk-ins, waitlisters who turned
   up); the Check-in list shows those past-cap check-ins with a waitlist tag.
-- **Doubles (team relay) nights** (code calls them "relay"): any date can be
-  switched from singles to a doubles (team relay) night on the Admin tab (`setEventFormat`, stored as an
+- **Team doubles nights** (code calls them "relay", after an earlier
+  rotating-pairs format): any date can be switched from singles to a team
+  doubles night on the Admin tab (`setEventFormat`, stored as an
   `EVENT_<YYYY-MM-DD>` script property; no property = singles, so singles
-  weeks are untouched). Relay teams/games live as JSON in cell A1 of a
-  separate `Relay M/D/YY` tab (rows below are a read-only readable copy) -
-  never in the weekly tab's pool geometry. The site's This week page renders
-  relay nights via `paintRelay` in `index.html`; the pure relay rules
-  (`relayLineup`/`relayPairs`/`relayOrder`/`relayTieView`/`relayPlayerStats`;
-  a team's optional `lineup2` holds the captain's round-2 positions; unset
-  round-1 playing orders default to `RELAY_REST_ORDERS`, a per-team-size
-  table that spreads each player's rest across both rounds, and round 2
-  plays in round 1's order unless given its own `order[2]`) exist in both
-  `Code.gs` and `index.html` and must stay in sync (the mock reuses the
-  page's copies). Singles-only actions (`generatePools`, `startMatch`,
-  `recordScore`, `editScore`, `cancelMatch`) refuse on relay dates. Ranking
-  points per relay night: exhibition (nothing written to Rankings) or ranked
-  (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label `T<team>`).
-  The team draw (`drawTeams`) takes every confirmed signup except no-shows
-  and fills teams in standings tiers - the top group snake-split between A
-  and B, the next between C and D, ... (`relayTeamSizes` keeps each matchup
-  even; mirrored in `index.html`). Walk-ins
-  and late players are added through `relayAddPlayer` (= `addWalkIn` plus
-  an optional team); guests (named, or "Guest N") are
-  team-only, listed in the relay state's `guests`, and never get rank points.
-  Test with `site/index.html?mock=1&relay=1`.
+  weeks are untouched). Teams/games live as JSON in cell A1 of a separate
+  `Relay M/D/YY` tab (rows below are a read-only readable copy) - never in
+  the weekly tab's pool geometry. The site's This week page renders these
+  nights via `paintRelay` in `index.html`, with the same Check-in / Live /
+  Pools sub-tabs as singles (Pools = teams, pairs, playing order, results).
+  Format: each team's positions fix its pairs for the night (P1+P2, P3+P4,
+  ...); in each of the two rounds every pair plays twice, against two
+  different opposing pairs; a 1-1 tie goes to one tiebreak game. A team's
+  playing order per round lists each pair index twice (game k = first
+  team's k-th entry vs second team's); the default comes from
+  `RELAY_REST_ORDERS` (separate `a`/`b` orders per pair count, brute-forced
+  to spread rest), round 2 follows round 1 unless given its own `order[2]`,
+  and a round's order locks once its first game starts. Games only start
+  when both teams in a matchup have the same, even number of players
+  (`relayMatchupProblem`). The pure rules (`relayPairs`/`relayOrder`/
+  `relayDefaultOrder`/`relayTieView`/`relayPlayerStats`/`relayTeamSizes`)
+  exist in both `Code.gs` and `index.html` and must stay in sync (the mock
+  reuses the page's copies). Singles-only actions (`generatePools`,
+  `startMatch`, `recordScore`, `editScore`, `cancelMatch`) refuse on these
+  dates. Ranking points per night: exhibition (nothing written to Rankings)
+  or ranked (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label
+  `T<team>`). The team draw (`drawTeams`) takes every confirmed signup
+  except no-shows and fills teams in standings tiers - the top group
+  snake-split between A and B, the next between C and D, ... -
+  `relayTeamSizes` gives every team whole pairs and equal matchups, padding
+  with "Guest N" placeholders (the fewest needed, on the last teams).
+  Walk-ins and late players are added through `relayAddPlayer` (=
+  `addWalkIn` plus an optional team; `relayPlaceOnTeam` puts them in a
+  Guest N placeholder's spot if the team has one); guests (named, or
+  "Guest N") are team-only, listed in the relay state's `guests`, and never
+  get rank points. Test with `site/index.html?mock=1&relay=1`.
 - **One-time environment setup** on a fresh spreadsheet binding: set the
   `ADMIN_EMAILS` and `ADMIN_SECRET` script properties (Project Settings →
   Script Properties) - optionally also `SHEET_EDITORS` (comma-separated emails
