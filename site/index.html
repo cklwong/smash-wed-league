@@ -2205,6 +2205,12 @@ function relayPairUp(teams, a, b, locked){
   };
   return (anchor(a, b) || anchor(b, a)) && paired();
 }
+// Which of `names` are on court right now (Code.gs relayOnCourt).
+function relayOnCourt(state, names){
+  const busy = new Set();
+  state.games.forEach(g=>{ if(g.startedAt && !relayGameDone(g)) (g.a||[]).concat(g.b||[]).forEach(n=>busy.add(playerKey(n))); });
+  return names.filter(n=>busy.has(playerKey(n)));
+}
 function relayTieCount(state){ return Math.floor(state.teams.length/2); }
 function relayFindGame(state, tie, round, seq){
   return state.games.find(g=>g.tie===tie && g.round===round && g.seq===seq) || null;
@@ -2618,8 +2624,12 @@ function relayGameRow(v, round, g, admin, readOnly, upNext){
     if(admin && !readOnly) acts = `<button class="icon-btn" title="Edit score" onclick="RELAY_OPEN_EDIT='${key}'; paintSchedule(LAST_WEEK);">✎</button>`;
   } else {
     mid = '<span class="game-note">vs</span>';
+    // Up next can't start while any of its players is still on court.
+    const clash = (upNext && !readOnly && g.a && g.b) ? relayOnCourt(LAST_WEEK.relay, g.a.concat(g.b)) : [];
     if(admin && !readOnly && upNext && !v.problem && g.a && g.b){
-      acts = `<button class="btn small" onclick="relayStartClick(${call})">Start</button>
+      acts = clash.length
+        ? `<span class="game-note">waiting for ${clash.map(escHtml).join(' & ')}</span>`
+        : `<button class="btn small" onclick="relayStartClick(${call})">Start</button>
         <button class="btn small ghost" title="Enter a finished game's score" onclick="RELAY_OPEN_EDIT='${key}'; paintSchedule(LAST_WEEK);">Score</button>`;
     }
   }
@@ -2941,6 +2951,8 @@ async function relayStartClick(tie, round, seq){
     const g = relayTieView(state, tie).rounds[round-1].games[seq];
     pairs = {a:g.a, b:g.b};
   }
+  const clash = relayOnCourt(state, pairs.a.concat(pairs.b));
+  if(clash.length){ alert(`${clash.join(' and ')} ${clash.length>1?'are':'is'} still on court in another game — score or cancel that game first.`); return; }
   // Straight onto the board; the reply reconciles (or rolls it back).
   state.games.push({tie, round, seq, a:pairs.a, b:pairs.b, startedAt: Date.now()+SERVER_OFFSET});
   paintSchedule(LAST_WEEK);

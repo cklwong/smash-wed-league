@@ -478,6 +478,8 @@
     if (relayFindGame(st, tie, round, seq)) return relayReply(date, { ok: false, error: 'That game is already on court or scored.' });
     const p = relayResolve(st, tie, round, seq, aPair, bPair);
     if (!p.ok) return relayReply(date, p);
+    const clash = relayOnCourt(st, p.a.concat(p.b)); // mirrors gas/Code.gs relayStartGame
+    if (clash.length) return relayReply(date, { ok: false, error: clash.join(' and ') + (clash.length > 1 ? ' are' : ' is') + ' still on court in another game — score or cancel that game first.' });
     st.games.push({ tie, round, seq, a: p.a, b: p.b, startedAt: Date.now() });
     return relayReply(date, { ok: true });
   }
