@@ -158,7 +158,9 @@ Google Apps Script file, edited directly.
   when round 1 starts, round 2 pairs when round 2 starts; a 1-1 tie goes to
   one tiebreak game. Games only start
   when both teams in a matchup have the same, even number of players
-  (`relayMatchupProblem`). The pure rules (`relayPairs`/`relayLineup`/
+  (`relayMatchupProblem`), and never while one of their players is still on
+  court in another game (`relayOnCourt`, checked by `relayStartGame` and on
+  the Live tab, which shows "waiting for …" instead of Start). The pure rules (`relayPairs`/`relayLineup`/
   `relaySchedule`/`relayTieView`/`relayPlayerStats`/`relayTeamSizes`)
   exist in both `Code.gs` and `index.html` and must stay in sync (the mock
   reuses the page's copies). Singles-only actions (`generatePools`,

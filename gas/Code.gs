@@ -2974,6 +2974,18 @@ function relayTieView(state, tie) {
     needsTiebreak: needsTiebreak, tiebreak: tiebreak, winner: winner, done: !!winner };
 }
 
+// Which of `names` are on court right now - in a game that's started but
+// not yet scored (any tie). A game can't start while one of its players is
+// still playing another. Mirrored in site/index.html.
+function relayOnCourt(state, names) {
+  var busy = {};
+  state.games.forEach(function (g) {
+    if (!g.startedAt || relayGameDone(g)) return;
+    (g.a || []).concat(g.b || []).forEach(function (n) { busy[String(n).trim().toLowerCase()] = true; });
+  });
+  return names.filter(function (n) { return busy[String(n).trim().toLowerCase()]; });
+}
+
 function relayIsComplete(state) {
   var n = relayTieCount(state);
   if (!n) return false;
@@ -3408,6 +3420,8 @@ function relayStartGame(dateISO, tie, round, seq, aPair, bPair, secret, pin) {
     if (relayFindGame(state, tie, round, seq)) return { ok: false, error: 'That game is already on court or scored.' };
     var p = relayResolvePairs(state, tie, round, seq, aPair, bPair);
     if (!p.ok) return p;
+    var clash = relayOnCourt(state, p.a.concat(p.b));
+    if (clash.length) return { ok: false, error: clash.join(' and ') + (clash.length > 1 ? ' are' : ' is') + ' still on court in another game — score or cancel that game first.' };
     state.games.push({ tie: tie, round: round, seq: seq, a: p.a, b: p.b, startedAt: Date.now() });
     return { ok: true };
   });
