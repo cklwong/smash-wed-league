@@ -2877,24 +2877,30 @@ function relayRequestPairs(requests, names) {
 
 // The draw's team lists. names = eligible players in standings order;
 // sizes = real players per team (relayTeamSizes(...).sizes); pairs =
-// partner requests to honour (relayRequestPairs). Requested pairs go in
-// first, in order of their stronger player, into that player's tier (tier m =
-// teams 2m and 2m+1, covering the next sizes[2m]+sizes[2m+1] standings
-// places), alternating A, B within the tier; a pair that doesn't fit tries
-// the tiers below, then above, else its players are drawn as singles.
-// Everyone else then fills the remaining spots in standings order, tier by
-// tier, alternating A, B, A, B (skipping a full team). So a pair like 1+14
-// takes an A/B spot and the weakest A/B single slides down to C/D. Each team
-// lists its pairs first (P1+P2, ...), then its singles. Mirrored in
-// site/index.html.
+// partner requests to honour (relayRequestPairs). First each requested pair
+// claims two spots in its stronger player's tier (tier m = teams 2m and
+// 2m+1, covering the next sizes[2m]+sizes[2m+1] standings places); a pair
+// that doesn't fit tries the tiers below, then above, else its players are
+// drawn as singles. Everyone else fills the remaining tier spots in
+// standings order. So a pair like 1+14 takes an A/B spot and the weakest A/B
+// single slides down to C/D. Then each tier is drafted in standings order (a
+// pair at its stronger player's place): the next pick goes to the team with
+// fewer players so far (A on a tie), so taking a pair costs a team a pick -
+// a pair never lands on A just for being drawn first, and A doesn't also get
+// the tier's best single. Each team lists its pairs first (P1+P2, ...), then
+// its singles. Mirrored in site/index.html.
 function relayDrawTeams(names, sizes, pairs) {
   var lc = function (n) { return String(n || '').trim().toLowerCase(); };
   var pos = {};
   names.forEach(function (n, i) { pos[lc(n)] = i; });
   var tiers = Math.floor(sizes.length / 2);
-  var room = sizes.slice(), paired = [], singles = [], turn = [];
+  var room = [], pairRoom = [], units = [], paired = [], singles = [];
   for (var t = 0; t < sizes.length; t++) { paired.push([]); singles.push([]); }
-  for (var m = 0; m < tiers; m++) turn.push(0);
+  for (var m = 0; m < tiers; m++) {
+    room.push(sizes[2 * m] + sizes[2 * m + 1]);
+    pairRoom.push(Math.floor(sizes[2 * m] / 2) + Math.floor(sizes[2 * m + 1] / 2));
+    units.push([]);
+  }
   var tierOf = function (p) {
     var start = 0;
     for (var m2 = 0; m2 < tiers; m2++) {
@@ -2912,29 +2918,43 @@ function relayDrawTeams(names, sizes, pairs) {
     for (var d = home; d < tiers; d++) order.push(d);
     for (var up = home - 1; up >= 0; up--) order.push(up);
     for (var i = 0; i < order.length; i++) {
-      var tier = order[i], first = turn[tier] % 2;
-      var sides = [first, 1 - first];
-      for (var j = 0; j < 2; j++) {
-        var team = 2 * tier + sides[j];
-        if (room[team] < 2) continue;
-        paired[team].push(u.pr[0], u.pr[1]);
-        room[team] -= 2;
-        turn[tier]++;
-        placed[lc(u.pr[0])] = true; placed[lc(u.pr[1])] = true;
-        return;
-      }
+      var tier = order[i];
+      if (pairRoom[tier] < 1) continue;
+      units[tier].push({ players: u.pr, top: u.top });
+      pairRoom[tier]--;
+      room[tier] -= 2;
+      placed[lc(u.pr[0])] = true; placed[lc(u.pr[1])] = true;
+      return;
     }
   });
-  var tierNow = 0, step = 0;
-  names.forEach(function (n) {
+  var tierNow = 0;
+  names.forEach(function (n, i) {
     if (placed[lc(n)]) return;
-    while (tierNow < tiers - 1 && room[2 * tierNow] + room[2 * tierNow + 1] === 0) { tierNow++; step = 0; }
-    var side = step % 2;
-    if (room[2 * tierNow + side] <= 0) side = 1 - side;
-    singles[2 * tierNow + side].push(n);
-    room[2 * tierNow + side]--;
-    step++;
+    while (tierNow < tiers - 1 && room[tierNow] <= 0) tierNow++;
+    units[tierNow].push({ players: [n], top: i });
+    room[tierNow]--;
   });
+  for (var m3 = 0; m3 < tiers; m3++) {
+    var left = [sizes[2 * m3], sizes[2 * m3 + 1]], picks = [0, 0];
+    var pairsLeft = units[m3].filter(function (u) { return u.players.length === 2; }).length;
+    units[m3].sort(function (x, y) { return x.top - y.top; }).forEach(function (u) {
+      var n = u.players.length;
+      // A single mustn't take the spot a later pair needs.
+      var fits = function (s) {
+        if (left[s] < n) return false;
+        if (n === 2) return true;
+        var l = left.slice(); l[s]--;
+        return Math.floor(l[0] / 2) + Math.floor(l[1] / 2) >= pairsLeft;
+      };
+      var first = picks[1] < picks[0] ? 1 : 0;
+      var side = fits(first) ? first : 1 - first;
+      var dest = n === 2 ? paired : singles;
+      u.players.forEach(function (p) { dest[2 * m3 + side].push(p); });
+      left[side] -= n;
+      picks[side] += n;
+      if (n === 2) pairsLeft--;
+    });
+  }
   return paired.map(function (p, i) { return p.concat(singles[i]); });
 }
 
@@ -3154,9 +3174,9 @@ function relayTeamSizes(n, k) {
 
 // The team draw: eligible players = every confirmed signup except those
 // marked No show, checked in or not, in standings order. Team sizes come
-// from relayTeamSizes; relayDrawTeams places requested partner pairs first
-// (in their stronger player's tier) and alternates everyone else A, B, A, B
-// tier by tier, so Team A and B are the strongest matchup. Teams short of an
+// from relayTeamSizes; relayDrawTeams puts requested partner pairs in their
+// stronger player's tier and drafts each tier A, B, A, B in standings order
+// (a pair counting as two picks), so Team A and B are the strongest matchup. Teams short of an
 // even size get "Guest N" placeholders at the bottom.
 function drawTeams(dateISO, teamCount, redraw, secret, pin) {
   var g = relayGuard(dateISO, secret, pin);

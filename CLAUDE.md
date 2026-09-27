@@ -169,9 +169,13 @@ Google Apps Script file, edited directly.
   or ranked (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label
   `T<team>`). The team draw (`drawTeams`) takes every confirmed signup
   except no-shows and fills teams in standings tiers (`relayDrawTeams`):
-  partner-request pairs first, in their stronger player's tier (alternating
-  A/B), then everyone else in standings order, tier by tier, alternating
-  A, B, A, B (1st A, 2nd B, ...), then C and D, ... -
+  partner-request pairs claim spots in their stronger player's tier (moving
+  down, then up, a tier if it has no room for a pair), everyone else fills
+  the rest in standings order; then each tier (A/B, C/D, ...) is drafted in
+  standings order, a pair at its stronger player's place, each pick going
+  to the team with fewer players so far (A on a tie) - so with no requests
+  it's A, B, A, B, and a team that takes a pair gives up a pick (a pair is
+  never put on A just for being a pair) -
   `relayTeamSizes` gives every team whole pairs and equal matchups, padding
   with "Guest N" placeholders (the fewest needed, on the last teams).
   Walk-ins and late players are added through `relayAddPlayer` (=
