@@ -54,7 +54,7 @@
  *   POST { action:'listBans', secret } -> { ok, bans: [{name, until}, ...] } (admin passphrase; every currently-active ban, soonest-expiring first)
  *   POST { action:'getSheetEditors', secret } -> { ok, emails } (admin passphrase; the SHEET_EDITORS list)
  *   POST { action:'setSheetEditors', emails, secret } -> { ok, emails, updated, warnings } (admin passphrase; saves SHEET_EDITORS and adds them to the protected tabs of today's and upcoming events - never past ones)
- *   POST { action:'join', date, name, contact, partner } -> { ok, position, cap, partnerOnly? } (partner = optional preferred doubles partner on a team doubles night; resubmitting an existing signup with a partner just saves the request)
+ *   POST { action:'join', date, name, contact, partner } -> { ok, position, cap, partnerOnly?, cleared? } (partner = optional preferred doubles partner on a team doubles night; resubmitting an existing signup saves the request, or with no partner clears it)
  *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team doubles night or back to singles)
  *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: draws confirmed non-no-show signups into teamCount teams in standings tiers - top group split alternately between A and B, next between C and D, ...; teams padded to an even size with Guest N placeholders)
  *   POST { action:'relaySaveTeams', date, teams, guests, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, guests, removals, captain, positions, round-2 positions [lineup2]; guests = names marked as guests)
@@ -783,12 +783,23 @@ function addJoin(dateISO, name, contact, quiet) {
 // Join, plus an optional preferred doubles partner on a team doubles night
 // (saved in the doubles state's requests - see relayRequestPairs). An
 // existing signup resubmitting with a partner just saves/changes the
-// request. Requests aren't binding: the draw honours what it can and the
+// request, and resubmitting with no partner clears one it had. Requests
+// aren't binding: the draw honours what it can and the
 // organizer can re-pair or move pairs between teams.
 function joinWithPartner(dateISO, name, contact, partner) {
   partner = String(partner || '').trim().slice(0, 40);
-  if (!partner || !isRelayDate(dateISO)) return addJoin(dateISO, name, contact);
+  if (!isRelayDate(dateISO)) return addJoin(dateISO, name, contact);
   name = String(name || '').trim();
+  if (!partner) {
+    var had = (getRelayState(dateISO).requests || []).some(function (r) { return String(r.name).trim().toLowerCase() === name.toLowerCase(); });
+    if (!had) return addJoin(dateISO, name, contact);
+    var sh = getWeekSheet(dateISO);
+    var list = sh ? parseSignups(sh.getDataRange().getValues()) : [];
+    var me = findSignup(list, name);
+    if (!me) return addJoin(dateISO, name, contact);
+    setPartnerRequest(dateISO, me.name, '');
+    return { ok: true, partnerOnly: true, cleared: true, position: list.indexOf(me) + 1, cap: capFor(dateISO) };
+  }
   if (partner.toLowerCase() === name.toLowerCase()) return { ok: false, error: 'Pick someone other than yourself as your partner.' };
   var sheet = getWeekSheet(dateISO);
   if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };

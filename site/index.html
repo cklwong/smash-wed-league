@@ -3076,16 +3076,42 @@ function updateJoinTypeFields(){
 }
 document.querySelectorAll('input[name="jf-type"]').forEach(r=>r.addEventListener('change', updateJoinTypeFields));
 
-function populateExistingSelect(alreadyNames){
+// On a team doubles date, players already signed up stay selectable so they
+// can add, change or clear their partner request (allowAlready).
+function populateExistingSelect(alreadyNames, allowAlready){
   const sel = document.getElementById('jf-existing-select');
   const already = new Set((alreadyNames||[]).map(n=>n.toLowerCase()));
   const names = PLAYERS.map(p=>p.name).slice().sort((a,b)=>a.localeCompare(b));
   const prev = sel.value;
   sel.innerHTML = names.length
-    ? names.map(n=>`<option value="${n.replace(/"/g,'&quot;')}" ${already.has(n.toLowerCase())?'disabled':''}>${n}${already.has(n.toLowerCase())?' (already in)':''}</option>`).join('')
+    ? names.map(n=>{
+        const inAlready = already.has(n.toLowerCase());
+        return `<option value="${n.replace(/"/g,'&quot;')}" ${inAlready && !allowAlready ? 'disabled' : ''}>${n}${inAlready ? (allowAlready ? ' (already in — update partner)' : ' (already in)') : ''}</option>`;
+      }).join('')
     : '<option value="">No players found</option>';
   if(names.includes(prev)) sel.value = prev;
+  syncJoinForSelectedName();
 }
+// When the picked name is already signed up for a doubles date: preselect
+// their current partner request and relabel the button "Save partner".
+function syncJoinForSelectedName(){
+  const btn = document.getElementById('join-submit-btn');
+  if(btn.disabled) return;
+  const type = (document.querySelector('input[name="jf-type"]:checked') || {}).value || 'existing';
+  const name = type === 'existing' ? document.getElementById('jf-existing-select').value : '';
+  const already = !!name && JOIN_SIGNED.has(playerKey(name));
+  btn.textContent = already ? 'Save partner' : 'Request a spot';
+  if(already){
+    const sel = document.getElementById('jf-partner');
+    const cur = JOIN_PARTNERS[playerKey(name)] || '';
+    if([...sel.options].some(o=>o.value===cur)) sel.value = cur;
+    else if(cur){ sel.value = '__new'; document.getElementById('jf-partner-new').value = cur; }
+    document.getElementById('jf-partner-new').style.display = sel.value==='__new' ? 'block' : 'none';
+  }
+}
+let JOIN_SIGNED = new Set(), JOIN_PARTNERS = {}; // the selected doubles date's signups / partner requests
+document.getElementById('jf-existing-select').addEventListener('change', syncJoinForSelectedName);
+document.querySelectorAll('input[name="jf-type"]').forEach(r=>r.addEventListener('change', syncJoinForSelectedName));
 
 async function removeSignup(dateISO, name){
   if(!confirm(`Remove ${name} from Wed, ${fmtDate(dateISO)}?`)) return;
@@ -3168,6 +3194,9 @@ async function renderJoinedList(){
   const waitlist = week.signups.slice(cap);
   const partners = {};
   ((week.relay && week.relay.requests) || []).forEach(r=>{ partners[playerKey(r.name)] = r.partner; });
+  const doublesDate = isRelayWeek(week);
+  JOIN_SIGNED = new Set(doublesDate ? week.signups.map(s=>playerKey(s.name)) : []);
+  JOIN_PARTNERS = partners;
   const pOf = s=>partners[playerKey(s.name)] || '';
   list.innerHTML = confirmed.length
     ? confirmed.map((s,i)=>joinRosterRow(s,i+1,'confirmed',dateISO,cap,pOf(s))).join('')
@@ -3176,8 +3205,8 @@ async function renderJoinedList(){
     waitlistList.innerHTML = waitlist.map((s,i)=>joinRosterRow(s,i+1,'waitlist',dateISO,cap,pOf(s))).join('');
     waitlistCard.style.display = 'block';
   }
-  populateExistingSelect(week.signups.map(s=>s.name));
   updateJoinPartnerField(week.signups);
+  populateExistingSelect(week.signups.map(s=>s.name), doublesDate);
 }
 
 async function renderJoinOptions(){
@@ -3217,6 +3246,10 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   if(Date.now() >= cutoff){ updateJoinSubForSelected(); return; }
   const relayNight = !!(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay');
   const partner = relayNight ? selectedJoinPartner() : '';
+  if(relayNight && JOIN_SIGNED.has(playerKey(name)) && !partner && !JOIN_PARTNERS[playerKey(name)]){
+    const errorEl = document.getElementById('join-error');
+    errorEl.textContent = `${name} is already signed up — pick a partner above to send a request.`; errorEl.style.display = 'block'; return;
+  }
   if(relayNight && document.getElementById('jf-partner').value==='__new' && !partner){
     const errorEl = document.getElementById('join-error');
     errorEl.textContent = 'Type your partner\'s name, or pick them from the list.'; errorEl.style.display = 'block'; return;
@@ -3228,6 +3261,7 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   btn.disabled = true; btn.textContent = 'Submitting…';
   const result = await postJoin(dateISO, name, contact, partner);
   btn.disabled = false; btn.textContent = 'Request a spot';
+  syncJoinForSelectedName();
 
   if(!result.ok){
     errorEl.textContent = result.error || 'Could not save your signup — please try again in a moment.';
@@ -3238,9 +3272,10 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   const position = result.position;
   const cap = result.cap || CAP;
   const confirmedSpot = position <= cap;
-  const partnerNote = result.partner ? ` Partner request: ${result.partner} (the organizer makes the final pairs).` : '';
+  const partnerNote = result.partner ? ` Partner request: ${result.partner} (the organizer makes the final pairs).`
+    : result.cleared ? ' Partner request cleared — the organizer will pair you.' : '';
   document.getElementById('confirm-badge').className = 'ok-badge' + (confirmedSpot ? '' : ' wait');
-  document.getElementById('confirm-name').textContent = result.partnerOnly ? 'Partner request saved, ' + name : 'You\'re in, ' + name;
+  document.getElementById('confirm-name').textContent = result.partnerOnly ? (result.cleared ? 'Partner request cleared, ' : 'Partner request saved, ') + name : 'You\'re in, ' + name;
   document.getElementById('confirm-detail').textContent = (confirmedSpot
     ? `Confirmed — spot #${position} for Wed, ${fmtDate(dateISO)}. ${relayNight ? 'Teams are drawn at check-in — it\'s a team doubles night.' : 'Pools go up once signups close.'}`
     : `Waitlisted — #${position-cap} in line for Wed, ${fmtDate(dateISO)}. You'll move up if a confirmed player drops.`) + partnerNote;
