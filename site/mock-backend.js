@@ -272,18 +272,15 @@
     const sorted = eligible.map((s, i) => ({ name: s.name, rank: rankFor(s.name), idx: i }))
       .sort((a, b) => a.rank - b.rank || a.idx - b.idx);
     // Mirrors gas/Code.gs drawTeams: requested pairs first, then alternate
-    // (the page's relayDrawTeams), guests at the bottom, top seed = captain.
+    // (the page's relayDrawTeams), guests at the bottom.
     const plan = relayTeamSizes(sorted.length, k);
     const names = sorted.map((p) => p.name);
     let guestNo = 0;
     const teams = relayDrawTeams(names, plan.sizes, relayRequestPairs(st.requests, names)).map((list, t) => {
-      const team = { id: TEAM_IDS[t], captain: '', players: list.slice() };
+      const team = { id: TEAM_IDS[t], players: list.slice() };
       for (let x = 0; x < plan.guests[t]; x++) team.players.push('Guest ' + (++guestNo));
       return team;
     });
-    const seed = {};
-    sorted.forEach((p, i) => { seed[key(p.name)] = i; });
-    teams.forEach((t) => { t.captain = t.players.filter((p) => key(p) in seed).sort((x, y) => seed[key(x)] - seed[key(y)])[0] || ''; });
     st.teams = teams;
     st.games = [];
     st.guests = [];
@@ -310,11 +307,10 @@
         seen[key(nm)] = true;
         players.push(nm);
       }
-      const captain = players.some((p) => key(p) === key(t.captain)) ? String(t.captain).trim() : '';
       const tmp = { players, lineup2: t.lineup2 };
       let lineup2 = Array.isArray(t.lineup2) ? relayLineup(tmp, 2) : null;
       if (lineup2 && lineup2.join('\n') === players.join('\n')) lineup2 = null; // same as round 1
-      const cleanTeam = { id: t.id, captain, players };
+      const cleanTeam = { id: t.id, players };
       if (lineup2) cleanTeam.lineup2 = lineup2;
       clean.push(cleanTeam);
     }
@@ -407,7 +403,7 @@
     if (oldKey in STATE.live.checkins && newKey !== oldKey) { STATE.live.checkins[newKey] = STATE.live.checkins[oldKey]; delete STATE.live.checkins[oldKey]; }
     if (isRelay(date)) {
       const st = relayState(date);
-      st.teams.forEach((tm) => { tm.players = tm.players.map(swap); tm.captain = swap(tm.captain); if (tm.lineup2) tm.lineup2 = tm.lineup2.map(swap); });
+      st.teams.forEach((tm) => { tm.players = tm.players.map(swap); if (tm.lineup2) tm.lineup2 = tm.lineup2.map(swap); });
       st.games.forEach((g) => { g.a = (g.a || []).map(swap); g.b = (g.b || []).map(swap); });
       st.rev++;
     }
@@ -422,7 +418,6 @@
       if (st.games.some((g) => (g.a || []).concat(g.b || []).some((n) => key(n) === k))) return { ok: false, error: nm + ' has already played a game tonight — take them off their team instead.' };
       st.teams.forEach((tm) => {
         tm.players = tm.players.filter((p) => key(p) !== k);
-        if (key(tm.captain) === k) tm.captain = '';
         if (tm.lineup2) tm.lineup2 = tm.lineup2.filter((p) => key(p) !== k);
       });
       st.rev++;
