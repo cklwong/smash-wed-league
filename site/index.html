@@ -406,13 +406,13 @@
       </details>
       <details>
         <summary>How are teams formed?</summary>
-        <p>Teams are drawn by standings in tiers: the top players are split between <strong>Team A and Team B</strong>, the next group between C and D, then E and F — alternating within each pair (1st to A, 2nd to B, 3rd to A, 4th to B, …). Requested partner pairs are placed first, in the tier of the stronger partner, so everyone below them shifts down one place. So A vs B is the top match-up, and each match-up is two evenly split teams of similar level. Everyone signed up is drawn except no-shows. Every team has an <strong>even number of players</strong> and both teams in a match-up are the same size — a guest fills any gap (a late arrival takes the guest's spot). A guest plays for a team but doesn't earn ranking points. Each team picks a <strong>captain</strong>.</p>
+        <p>Teams are drawn by standings in tiers: the top players are split between <strong>Team A and Team B</strong>, the next group between C and D, then E and F — alternating within each pair (1st to A, 2nd to B, 3rd to A, 4th to B, …). Requested partner pairs are placed first, in the tier of the stronger partner, so everyone below them shifts down one place. So A vs B is the top match-up, and each match-up is two evenly split teams of similar level. Everyone signed up is drawn except no-shows. Every team has an <strong>even number of players</strong> and both teams in a match-up are the same size — a guest fills any gap (a late arrival takes the guest's spot). A guest plays for a team but doesn't earn ranking points.</p>
       </details>
       <details>
         <summary>Who plays with whom?</summary>
         <p>When you sign up for a team doubles night you can name a <strong>preferred partner</strong> on the Join page (they should sign up and name you too). The draw keeps requested pairs together where it can; the organizer pairs up everyone else. Requests are a preference, not a promise — the organizer may change pairs or put pairs on different teams to keep the teams balanced.</p>
-        <p>Before the first game the captain can adjust the team's <strong>doubles pairs</strong>. In each round every pair plays <strong>twice</strong>, against two different pairs from the other team, in a set order that spreads out rest (from 3 pairs up, nobody plays two games in a row).</p>
-        <p>Before round 2 starts, the captain can <strong>re-pair</strong> the team. If both teams keep their pairs, round 2's order brings in the match-ups round 1 didn't have. With 3 pairs a side, each pair meets its third opponent and replays one from round 1, so every pair plays all three opposing pairs during the night.</p>
+        <p>Before the first game the organizer can adjust the team's <strong>doubles pairs</strong>. In each round every pair plays <strong>twice</strong>, against two different pairs from the other team, in a set order that spreads out rest (from 3 pairs up, nobody plays two games in a row).</p>
+        <p>Before round 2 starts, a team can <strong>re-pair</strong> (the organizer sets it on the site). If both teams keep their pairs, round 2's order brings in the match-ups round 1 didn't have. With 3 pairs a side, each pair meets its third opponent and replays one from round 1, so every pair plays all three opposing pairs during the night.</p>
       </details>
       <details>
         <summary>How does a match between two teams work?</summary>
@@ -420,7 +420,7 @@
           <li>Team A plays Team B, Team C plays Team D, and so on.</li>
           <li>Each doubles game is to <strong>15 points</strong> (win by 2, capped at 21) unless the organizer announces a different target that night.</li>
           <li>A <strong>round</strong> is won by the team that wins more doubles games; if that's level, by total point difference.</li>
-          <li>Teams play <strong>two rounds</strong>. If each team wins one, one <strong>tiebreak doubles game</strong> to 15 decides the match — each captain picks any two players for it.</li>
+          <li>Teams play <strong>two rounds</strong>. If each team wins one, one <strong>tiebreak doubles game</strong> to 15 decides the match — each team picks any two of its players for it.</li>
         </ul>
       </details>
       <details>
@@ -2102,7 +2102,7 @@ function relayPairs(players){
 }
 // Fixed playing orders by pairs per team and round - 'a' for the first team
 // of a matchup, 'b' for the second; game k is a[k] vs b[k]. Round 2 is used
-// when neither captain re-paired and brings in the match-ups round 1
+// when neither team re-paired and brings in the match-ups round 1
 // didn't have (Code.gs RELAY_ORDERS / relayFixedOrder).
 const RELAY_ORDERS = {
   1: {1: {a:[0,0], b:[0,0]}, 2: {a:[0,0], b:[0,0]}},
@@ -2119,7 +2119,7 @@ function relayFixedOrder(n, round, side){
   for(let pass=0; pass<2; pass++) for(let j=0; j<n; j++) out.push(side ? (j+shifts[pass])%n : j);
   return out;
 }
-// Positions P1..Pn for a round: the team list for round 1, the captain's
+// Positions P1..Pn for a round: the team list for round 1, the team's
 // round-2 positions (lineup2) for round 2 when set - reconciled with the roster.
 function relayLineup(team, round){
   const players = team.players || [];
@@ -2591,7 +2591,6 @@ function relayPairRequest(a, b){
   });
   const rankOf = n=>{ const p = PLAYERS.find(p=>playerKey(p.name)===playerKey(n)); return p ? p.rank : 9999; };
   if(!relayPairUp(state.teams, a, b, locked, rankOf)){ alert(`No free spot to pair ${a} and ${b} without splitting another requested pair — move them by hand with Edit.`); return; }
-  state.teams.forEach(t=>{ if(!t.players.some(p=>playerKey(p)===playerKey(t.captain))) t.captain = ''; });
   relayCommitTeams();
 }
 
@@ -2711,8 +2710,8 @@ function relayTiebreakHtml(v, admin, readOnly){
       + relayGameRow(v, RELAY_TIEBREAK_ROUND, v.tiebreak, admin, readOnly, false);
   }
   if(!v.needsTiebreak) return '';
-  const head = `<div class="round-head"><span>Tiebreak</span><span class="res">one game — each captain picks two players</span></div>`;
-  if(!admin || readOnly) return head + '<p class="game-note" style="margin:6px 0 0;">Waiting for the captains to pick their pairs.</p>';
+  const head = `<div class="round-head"><span>Tiebreak</span><span class="res">one game — each team picks two players</span></div>`;
+  if(!admin || readOnly) return head + '<p class="game-note" style="margin:6px 0 0;">Waiting for each team to pick its pair.</p>';
   const sel = (side, team, n)=>`<select class="mini-select" id="relay-tb-${v.tie}-${side}${n}" data-tb-pick aria-label="Team ${team.id} tiebreak player ${n}" onchange="relaySyncTiebreakPicks()">
     <option value="">Team ${team.id} player ${n}…</option>${team.players.map(p=>`<option value="${escAttr(p)}">${escHtml(p)}</option>`).join('')}</select>`;
   return head + `<div class="relay-game now" style="gap:6px;">
@@ -2730,7 +2729,7 @@ function relayTeamsHtml(week, state, admin){
   return `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:14px; margin-bottom:14px;">${state.teams.map((t,ti)=>relayTeamCard(week, state, ti, admin)).join('')}</div>`;
 }
 
-// Read-only by default: the pairs (and round 2's, if the captain re-paired).
+// Read-only by default: the pairs (and round 2's, if the team re-paired).
 // Edit reveals the per-player tools and the add box; "change" opens the
 // round-2 positions. Playing orders are fixed (RELAY_ORDERS) - the Live tab
 // lists every game.
@@ -2745,7 +2744,6 @@ function relayTeamCard(week, state, ti, admin){
   const nameHtml = p=>{
     const s = signup[playerKey(p)];
     return escHtml(p)
-      + (playerKey(p)===playerKey(t.captain) ? ' <span class="mine-badge">captain</span>' : '')
       + (isRelayGuest(p, state) ? ' <span class="mine-badge">guest</span>' : '')
       + (s && s.noShow ? ' <span class="mine-badge ns">No show</span>' : '');
   };
@@ -2756,7 +2754,6 @@ function relayTeamCard(week, state, ti, admin){
     body = t.players.map((p,pi)=>`<div class="team-row"><span class="pos">P${pi+1}</span><span class="rname">${nameHtml(p)}</span><span class="tools">
       <button class="icon-btn" title="Move up" onclick="relayMovePos(${ti},${pi},-1)" ${pi===0||r1Locked?'disabled':''}>▲</button>
       <button class="icon-btn" title="Move down" onclick="relayMovePos(${ti},${pi},1)" ${pi===n-1||r1Locked?'disabled':''}>▼</button>
-      <button class="icon-btn${playerKey(p)===playerKey(t.captain)?' on':''}" title="Make captain" onclick="relaySetCaptain(${ti},${pi})">★</button>
       ${r1Locked ? '' : `<select class="mini-select" aria-label="Move ${escAttr(p)} to another team" onchange="if(this.value!=='') relayMoveTeam(${ti},${pi},Number(this.value))">
         <option value="">Move…</option>${state.teams.map((o,oi)=>oi===ti?'':`<option value="${oi}">Team ${o.id}</option>`).join('')}
       </select>`}
@@ -2787,7 +2784,7 @@ function relayPairsHtml(lineup, nameHtml){
 }
 
 // Round 2 pairs: one line while they're the same as round 1; the new pairs
-// once the captain re-paired; the P1..Pn positions with ▲▼ while open for
+// once the team re-paired; the P1..Pn positions with ▲▼ while open for
 // changes. Locked once round 2's first game starts.
 function relayRound2Html(v, t, ti, admin, repaired, nameHtml){
   const locked = v.rounds[1].started;
@@ -2895,15 +2892,9 @@ function relayMovePos(ti, pi, dir){
   [p[pi], p[j]] = [p[j], p[pi]];
   relayCommitTeams();
 }
-function relaySetCaptain(ti, pi){
-  const t = relayTeams()[ti];
-  t.captain = t.players[pi];
-  relayCommitTeams();
-}
 function relayMoveTeam(ti, pi, toTi){
   const teams = relayTeams();
   const [name] = teams[ti].players.splice(pi, 1);
-  if(playerKey(teams[ti].captain)===playerKey(name)) teams[ti].captain = '';
   teams[toTi].players.push(name);
   relayCommitTeams();
 }
@@ -2923,7 +2914,6 @@ function relayRemove(ti, pi){
     if(!confirm(`Take ${name} off Team ${t.id}?`)) return;
     t.players.splice(pi, 1);
   }
-  if(playerKey(t.captain)===playerKey(name)) t.captain = '';
   relayCommitTeams();
 }
 function relayNextGuestName(){

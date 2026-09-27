@@ -150,7 +150,7 @@ Google Apps Script file, edited directly.
   each of the two rounds every pair plays twice, against two different
   opposing pairs, in a fixed order (`RELAY_ORDERS`, per pair count and
   round, `a`/`b` = first/second team of the matchup; game k = a[k] vs
-  b[k]; brute-forced to spread rest). Before round 2 a captain may re-pair
+  b[k]; brute-forced to spread rest). Before round 2 a team may re-pair
   (the team's optional `lineup2`); if neither team re-pairs, round 2 uses
   its own order that brings in the match-ups round 1 didn't have (with 3
   pairs, each pair meets its third opponent and replays one), otherwise
