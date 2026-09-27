@@ -291,12 +291,13 @@
     let guestNo = 0;
     teams.forEach((t, i) => { for (let x = 0; x < plan.guests[i]; x++) t.players.push('Guest ' + (++guestNo)); });
     // Mirrors gas/Code.gs drawTeams: honour partner requests, then top seed = captain.
-    const locked = {};
-    relayRequestPairs(st.requests, sorted.map((p) => p.name)).forEach(([a, b]) => {
-      if (relayPairUp(teams, a, b, locked)) { locked[key(a)] = true; locked[key(b)] = true; }
-    });
     const seed = {};
     sorted.forEach((p, i) => { seed[key(p.name)] = i; });
+    const locked = {};
+    const seedOf = (n) => (key(n) in seed ? seed[key(n)] : sorted.length);
+    relayRequestPairs(st.requests, sorted.map((p) => p.name)).forEach(([a, b]) => {
+      if (relayPairUp(teams, a, b, locked, seedOf)) { locked[key(a)] = true; locked[key(b)] = true; }
+    });
     teams.forEach((t) => { t.captain = t.players.filter((p) => key(p) in seed).sort((x, y) => seed[key(x)] - seed[key(y)])[0] || ''; });
     st.teams = teams;
     st.games = [];

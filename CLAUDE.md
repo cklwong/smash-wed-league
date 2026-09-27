@@ -187,7 +187,8 @@ Google Apps Script file, edited directly.
   dates for this; `leave` drops it). The draw
   turns requests into pairs (`relayRequestPairs`: mutual first, then
   one-way ones whose partner asked for no one else) and puts each pair
-  together by swapping players (`relayPairUp`, team sizes unchanged); the
+  together by swapping players (`relayPairUp`, team sizes unchanged,
+  choosing the swap whose cross-team trade is closest in standings); the
   Pools/pre-draw "Partner requests" card shows each one's status with a
   "Pair them" button. Requests aren't binding - the organizer can re-pair
   or split them. Test with `site/index.html?mock=1&doubles=1` (the older

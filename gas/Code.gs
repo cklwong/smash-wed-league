@@ -2874,13 +2874,18 @@ function relayRequestPairs(requests, names) {
 }
 
 // Makes a and b one pair (P2k+1 + P2k+2) on the same team by swapping
-// players - the displaced player takes the mover's old spot, crossing teams
-// if needed, so team sizes never change. Never moves anyone in `locked`
-// (lowercased name -> true, e.g. pairs already put together). Tries a's
-// team first, then b's. Returns true once a and b are paired. Mirrored in
-// site/index.html.
-function relayPairUp(teams, a, b, locked) {
+// players - team sizes never change. One of the two stays on their team
+// (the anchor) and the other joins them; the player that joiner replaces
+// goes to the joiner's old spot. Of all the ways to do that, it picks the
+// one whose cross-team swap is closest in standings (seedOf(name) -> lower
+// is stronger; omitted = no preference), so e.g. pairing seed 1 (Team A)
+// with seed 14 (Team D) sends A's weakest spare player to D rather than
+// seed 1's current partner. Never moves anyone in `locked` (lowercased name
+// -> true, e.g. pairs already put together). Returns true once a and b are
+// paired. Mirrored in site/index.html.
+function relayPairUp(teams, a, b, locked, seedOf) {
   var lc = function (n) { return String(n || '').trim().toLowerCase(); };
+  var seed = function (n) { var v = seedOf ? seedOf(n) : 0; return typeof v === 'number' && isFinite(v) ? v : 9999; };
   var find = function (n) {
     for (var ti = 0; ti < teams.length; ti++) {
       for (var pi = 0; pi < teams[ti].players.length; pi++) if (lc(teams[ti].players[pi]) === lc(n)) return [ti, pi];
@@ -2898,23 +2903,25 @@ function relayPairUp(teams, a, b, locked) {
   };
   if (!find(a) || !find(b)) return false;
   if (paired()) return true;
-  var anchor = function (x, y) {
-    var px = find(x), team = teams[px[0]].players;
-    var ks = [Math.floor(px[1] / 2)];
-    for (var k = 0; k < Math.floor(team.length / 2); k++) if (k !== ks[0]) ks.push(k);
-    for (var i = 0; i < ks.length; i++) {
-      var s0 = 2 * ks[i], s1 = s0 + 1;
-      if (s1 >= team.length) continue;
-      var free = function (n) { return lc(n) === lc(x) || lc(n) === lc(y) || !locked[lc(n)]; };
+  var best = null;
+  [[a, b], [b, a]].forEach(function (xy) {
+    var x = xy[0], y = xy[1], px = find(x), py = find(y), team = teams[px[0]].players;
+    var free = function (n) { return lc(n) === lc(x) || lc(n) === lc(y) || !locked[lc(n)]; };
+    for (var k = 0; k < Math.floor(team.length / 2); k++) {
+      var s0 = 2 * k, s1 = s0 + 1;
       if (!free(team[s0]) || !free(team[s1])) continue;
-      var xSlot = lc(team[s1]) === lc(x) ? s1 : s0;
-      swap(find(x), [px[0], xSlot]);
-      swap(find(y), [px[0], xSlot ^ 1]);
-      return true;
+      [s1, s0].forEach(function (sd) {
+        var d = team[sd];
+        if (lc(d) === lc(x)) return; // x keeps this slot; y takes the other
+        var cost = (lc(d) === lc(y) || py[0] === px[0]) ? 0 : Math.abs(seed(d) - seed(y));
+        if (!best || cost < best.cost) best = { cost: cost, x: x, y: y, team: px[0], xSlot: s0 + s1 - sd, sd: sd };
+      });
     }
-    return false;
-  };
-  return (anchor(a, b) || anchor(b, a)) && paired();
+  });
+  if (!best) return false;
+  swap(find(best.x), [best.team, best.xSlot]);
+  if (lc(teams[best.team].players[best.sd]) !== lc(best.y)) swap(find(best.y), [best.team, best.sd]);
+  return paired();
 }
 
 // Everything about one tie (teams 2*tie and 2*tie+1): each round's games -
@@ -3136,8 +3143,9 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
     // Partner requests: put each requested pair together where a swap can
     // (top seeds first), without breaking a pair already made.
     var locked = {};
+    var seedOf = function (n) { var k = String(n).toLowerCase(); return k in seed ? seed[k] : sorted.length; };
     relayRequestPairs(state.requests, sorted.map(function (p) { return p.name; })).forEach(function (pr) {
-      if (relayPairUp(teams, pr[0], pr[1], locked)) { locked[pr[0].toLowerCase()] = true; locked[pr[1].toLowerCase()] = true; }
+      if (relayPairUp(teams, pr[0], pr[1], locked, seedOf)) { locked[pr[0].toLowerCase()] = true; locked[pr[1].toLowerCase()] = true; }
     });
     teams.forEach(function (tm) { // captain: the team's top seed
       tm.captain = tm.players.filter(function (p) { return p.toLowerCase() in seed; })
