@@ -2170,14 +2170,21 @@ function relayRequestPairs(requests, names){
   }));
   return out;
 }
-// The draw's team lists (Code.gs relayDrawTeams): requested pairs first, in
-// their stronger player's tier (alternating A, B), then everyone else in
-// standings order, tier by tier, alternating A, B.
+// The draw's team lists (Code.gs relayDrawTeams): requested pairs claim
+// spots in their stronger player's tier, everyone else fills the rest in
+// standings order; then each tier is drafted in standings order, the next
+// pick going to the team with fewer players (A on a tie), a pair counting
+// as two picks.
 function relayDrawTeams(names, sizes, pairs){
   const pos = {};
   names.forEach((n,i)=>{ pos[playerKey(n)] = i; });
   const tiers = Math.floor(sizes.length/2);
-  const room = sizes.slice(), paired = sizes.map(()=>[]), singles = sizes.map(()=>[]), turn = Array(tiers).fill(0);
+  const paired = sizes.map(()=>[]), singles = sizes.map(()=>[]), units = [], room = [], pairRoom = [];
+  for(let m=0; m<tiers; m++){
+    room.push(sizes[2*m] + sizes[2*m+1]);
+    pairRoom.push(Math.floor(sizes[2*m]/2) + Math.floor(sizes[2*m+1]/2));
+    units.push([]);
+  }
   const tierOf = p=>{
     let start = 0;
     for(let m=0; m<tiers; m++){ start += sizes[2*m] + sizes[2*m+1]; if(p < start) return m; }
@@ -2191,28 +2198,39 @@ function relayDrawTeams(names, sizes, pairs){
     const home = tierOf(u.top), order = [];
     for(let d=home; d<tiers; d++) order.push(d);
     for(let up=home-1; up>=0; up--) order.push(up);
-    for(const tier of order){
-      const first = turn[tier] % 2;
-      for(const side of [first, 1-first]){
-        const team = 2*tier + side;
-        if(room[team] < 2) continue;
-        paired[team].push(u.pr[0], u.pr[1]);
-        room[team] -= 2;
-        turn[tier]++;
-        placed[playerKey(u.pr[0])] = placed[playerKey(u.pr[1])] = true;
-        return;
-      }
-    }
+    const tier = order.find(t=>pairRoom[t] >= 1);
+    if(tier === undefined) return;
+    units[tier].push({players: u.pr, top: u.top});
+    pairRoom[tier]--;
+    room[tier] -= 2;
+    placed[playerKey(u.pr[0])] = placed[playerKey(u.pr[1])] = true;
   });
-  let tierNow = 0, step = 0;
-  names.forEach(n=>{
+  let tierNow = 0;
+  names.forEach((n,i)=>{
     if(placed[playerKey(n)]) return;
-    while(tierNow < tiers-1 && room[2*tierNow] + room[2*tierNow+1] === 0){ tierNow++; step = 0; }
-    let side = step % 2;
-    if(room[2*tierNow+side] <= 0) side = 1-side;
-    singles[2*tierNow+side].push(n);
-    room[2*tierNow+side]--;
-    step++;
+    while(tierNow < tiers-1 && room[tierNow] <= 0) tierNow++;
+    units[tierNow].push({players: [n], top: i});
+    room[tierNow]--;
+  });
+  units.forEach((list, m)=>{
+    const left = [sizes[2*m], sizes[2*m+1]], picks = [0, 0];
+    let pairsLeft = list.filter(u=>u.players.length===2).length;
+    list.sort((x,y)=>x.top-y.top).forEach(u=>{
+      const n = u.players.length;
+      // A single mustn't take the spot a later pair needs.
+      const fits = s=>{
+        if(left[s] < n) return false;
+        if(n === 2) return true;
+        const l = left.slice(); l[s]--;
+        return Math.floor(l[0]/2) + Math.floor(l[1]/2) >= pairsLeft;
+      };
+      const first = picks[1] < picks[0] ? 1 : 0;
+      const side = fits(first) ? first : 1-first;
+      (n === 2 ? paired : singles)[2*m+side].push(...u.players);
+      left[side] -= n;
+      picks[side] += n;
+      if(n === 2) pairsLeft--;
+    });
   });
   return paired.map((p,i)=>p.concat(singles[i]));
 }
