@@ -2382,7 +2382,18 @@ function paintRelay(week, dateISO){
     if(el.tagName==='SELECT' && ![...el.options].some(o=>o.value===snap[id])) continue;
     el.value = snap[id];
   }
+  relaySyncTiebreakPicks();
   tickLiveTimers();
+}
+
+// Tiebreak pickers: a player chosen as one team's player 1 is greyed out
+// in that team's player 2 list and vice versa, so nobody pairs with
+// themselves (Start and the backend refuse it too).
+function relaySyncTiebreakPicks(){
+  const picks = [...document.querySelectorAll('select[data-tb-pick]')];
+  const otherOf = el=>document.getElementById(el.id.replace(/(\d)$/, d=>d==='1' ? '2' : '1'));
+  picks.forEach(el=>{ const o = otherOf(el); if(o && el.id.endsWith('2') && el.value && el.value===o.value) el.value = ''; });
+  picks.forEach(el=>{ const o = otherOf(el); if(o) [...el.options].forEach(opt=>{ opt.disabled = !!opt.value && opt.value===o.value; }); });
 }
 
 function showRelaySubview(name){
@@ -2649,7 +2660,7 @@ function relayTiebreakHtml(v, admin, readOnly){
   if(!v.needsTiebreak) return '';
   const head = `<div class="round-head"><span>Tiebreak</span><span class="res">one game — each captain picks two players</span></div>`;
   if(!admin || readOnly) return head + '<p class="game-note" style="margin:6px 0 0;">Waiting for the captains to pick their pairs.</p>';
-  const sel = (side, team, n)=>`<select class="mini-select" id="relay-tb-${v.tie}-${side}${n}" aria-label="Team ${team.id} tiebreak player ${n}">
+  const sel = (side, team, n)=>`<select class="mini-select" id="relay-tb-${v.tie}-${side}${n}" data-tb-pick aria-label="Team ${team.id} tiebreak player ${n}" onchange="relaySyncTiebreakPicks()">
     <option value="">Team ${team.id} player ${n}…</option>${team.players.map(p=>`<option value="${escAttr(p)}">${escHtml(p)}</option>`).join('')}</select>`;
   return head + `<div class="relay-game now" style="gap:6px;">
     <span class="gnum">TB</span>
