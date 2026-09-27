@@ -256,10 +256,8 @@
     return { ok: true, event: eventFor(date) };
   }
 
-  // Mirrors drawTeams() in gas/Code.gs: tiered by standings - the top group
-  // split alternately between A and B (1st A, 2nd B, 3rd A, ...), the next between C and D, ... Everyone
-  // confirmed except no-shows is drawn. Team sizes come from the page's
-  // relayTeamSizes (a copy of Code.gs relayTeamSizes).
+  // Mirrors drawTeams() in gas/Code.gs: everyone confirmed except no-shows,
+  // placed by the page's relayDrawTeams / relayTeamSizes (copies of Code.gs).
   function drawTeams(date, teamCount, redraw) {
     if (!isRelay(date)) return { ok: false, error: date + ' is not a team doubles night.' };
     const k = Number(teamCount);
@@ -273,27 +271,15 @@
     }
     const sorted = eligible.map((s, i) => ({ name: s.name, rank: rankFor(s.name), idx: i }))
       .sort((a, b) => a.rank - b.rank || a.idx - b.idx);
-    const teams = Array.from({ length: k }, (_, t) => ({ id: TEAM_IDS[t], captain: '', players: [] }));
+    // Mirrors gas/Code.gs drawTeams: requested pairs first, then alternate
+    // (the page's relayDrawTeams), guests at the bottom, top seed = captain.
     const plan = relayTeamSizes(sorted.length, k);
-    const sizes = plan.sizes;
-    let next = 0;
-    for (let m = 0; m < k / 2; m++) {
-      const pair = [teams[2 * m], teams[2 * m + 1]];
-      const want = [sizes[2 * m], sizes[2 * m + 1]];
-      const group = sorted.slice(next, next + want[0] + want[1]);
-      next += group.length;
-      group.forEach((p, i) => {
-        let side = i % 2; // A, B, A, B, ...
-        if (pair[side].players.length >= want[side]) side = 1 - side;
-        pair[side].players.push(p.name);
-      });
-    }
+    const names = sorted.map((p) => p.name);
     let guestNo = 0;
-    teams.forEach((t, i) => { for (let x = 0; x < plan.guests[i]; x++) t.players.push('Guest ' + (++guestNo)); });
-    // Mirrors gas/Code.gs drawTeams: honour partner requests, then top seed = captain.
-    const locked = {};
-    relayRequestPairs(st.requests, sorted.map((p) => p.name)).forEach(([a, b]) => {
-      if (relayPairUp(teams, a, b, locked)) { locked[key(a)] = true; locked[key(b)] = true; }
+    const teams = relayDrawTeams(names, plan.sizes, relayRequestPairs(st.requests, names)).map((list, t) => {
+      const team = { id: TEAM_IDS[t], captain: '', players: list.slice() };
+      for (let x = 0; x < plan.guests[t]; x++) team.players.push('Guest ' + (++guestNo));
+      return team;
     });
     const seed = {};
     sorted.forEach((p, i) => { seed[key(p.name)] = i; });

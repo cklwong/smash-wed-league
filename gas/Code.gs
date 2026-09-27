@@ -56,7 +56,7 @@
  *   POST { action:'setSheetEditors', emails, secret } -> { ok, emails, updated, warnings } (admin passphrase; saves SHEET_EDITORS and adds them to the protected tabs of today's and upcoming events - never past ones)
  *   POST { action:'join', date, name, contact, partner } -> { ok, position, cap, partnerOnly?, cleared? } (partner = optional preferred doubles partner on a team doubles night; resubmitting an existing signup saves the request, or with no partner clears it)
  *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team doubles night or back to singles)
- *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: draws confirmed non-no-show signups into teamCount teams in standings tiers - top group split alternately between A and B, next between C and D, ...; teams padded to an even size with Guest N placeholders)
+ *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: draws confirmed non-no-show signups into teamCount teams in standings tiers - partner-request pairs first, in their stronger player's tier, then everyone else alternately between A and B, then C and D, ...; teams padded to an even size with Guest N placeholders)
  *   POST { action:'relaySaveTeams', date, teams, guests, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, guests, removals, captain, positions, round-2 positions [lineup2]; guests = names marked as guests)
  *   POST { action:'addWalkIn', date, name, team, secret|pin } -> { ok, name, position, waitlisted, walkIn, seated|relay } (any night: signs a walk-in up without an email and checks them in; team = relay team index, optional)
  *   POST { action:'editWalkIn', date, oldName, newName, secret|pin } -> { ok, name } (fixes a desk walk-in's name tonight everywhere it appears)
@@ -2487,8 +2487,10 @@ function cleanupPastEventProperties() {
 // singles night, so every existing week behaves exactly as before. The code
 // still calls these nights "relay" (an earlier version rotated the pairs).
 //
-// Format: players are drawn by standings into 4 or 6 teams in tiers - the
-// strongest group split alternately between A and B, the next between C and D, ...
+// Format: players are drawn by standings into 4 or 6 teams in tiers -
+// partner-request pairs first (in their stronger player's tier), then
+// everyone else alternately between A and B, the next group C and D, ...
+// (relayDrawTeams).
 // Every team has an even number of players (the draw pads with "Guest N"
 // placeholders where needed) and both teams in a matchup are the same size.
 // Each team's captain sets positions P1..Pn, which make the doubles pairs:
@@ -2873,14 +2875,82 @@ function relayRequestPairs(requests, names) {
   return out;
 }
 
-// Makes a and b one pair (P2k+1 + P2k+2) on the same team by swapping
-// players - the displaced player takes the mover's old spot, crossing teams
-// if needed, so team sizes never change. Never moves anyone in `locked`
-// (lowercased name -> true, e.g. pairs already put together). Tries a's
-// team first, then b's. Returns true once a and b are paired. Mirrored in
+// The draw's team lists. names = eligible players in standings order;
+// sizes = real players per team (relayTeamSizes(...).sizes); pairs =
+// partner requests to honour (relayRequestPairs). Requested pairs go in
+// first, in order of their stronger player, into that player's tier (tier m =
+// teams 2m and 2m+1, covering the next sizes[2m]+sizes[2m+1] standings
+// places), alternating A, B within the tier; a pair that doesn't fit tries
+// the tiers below, then above, else its players are drawn as singles.
+// Everyone else then fills the remaining spots in standings order, tier by
+// tier, alternating A, B, A, B (skipping a full team). So a pair like 1+14
+// takes an A/B spot and the weakest A/B single slides down to C/D. Each team
+// lists its pairs first (P1+P2, ...), then its singles. Mirrored in
 // site/index.html.
-function relayPairUp(teams, a, b, locked) {
+function relayDrawTeams(names, sizes, pairs) {
   var lc = function (n) { return String(n || '').trim().toLowerCase(); };
+  var pos = {};
+  names.forEach(function (n, i) { pos[lc(n)] = i; });
+  var tiers = Math.floor(sizes.length / 2);
+  var room = sizes.slice(), paired = [], singles = [], turn = [];
+  for (var t = 0; t < sizes.length; t++) { paired.push([]); singles.push([]); }
+  for (var m = 0; m < tiers; m++) turn.push(0);
+  var tierOf = function (p) {
+    var start = 0;
+    for (var m2 = 0; m2 < tiers; m2++) {
+      start += sizes[2 * m2] + sizes[2 * m2 + 1];
+      if (p < start) return m2;
+    }
+    return tiers - 1;
+  };
+  var placed = {};
+  (pairs || []).map(function (pr) {
+    var s = pr.slice().sort(function (x, y) { return pos[lc(x)] - pos[lc(y)]; });
+    return { pr: s, top: pos[lc(s[0])] };
+  }).sort(function (x, y) { return x.top - y.top; }).forEach(function (u) {
+    var home = tierOf(u.top), order = [];
+    for (var d = home; d < tiers; d++) order.push(d);
+    for (var up = home - 1; up >= 0; up--) order.push(up);
+    for (var i = 0; i < order.length; i++) {
+      var tier = order[i], first = turn[tier] % 2;
+      var sides = [first, 1 - first];
+      for (var j = 0; j < 2; j++) {
+        var team = 2 * tier + sides[j];
+        if (room[team] < 2) continue;
+        paired[team].push(u.pr[0], u.pr[1]);
+        room[team] -= 2;
+        turn[tier]++;
+        placed[lc(u.pr[0])] = true; placed[lc(u.pr[1])] = true;
+        return;
+      }
+    }
+  });
+  var tierNow = 0, step = 0;
+  names.forEach(function (n) {
+    if (placed[lc(n)]) return;
+    while (tierNow < tiers - 1 && room[2 * tierNow] + room[2 * tierNow + 1] === 0) { tierNow++; step = 0; }
+    var side = step % 2;
+    if (room[2 * tierNow + side] <= 0) side = 1 - side;
+    singles[2 * tierNow + side].push(n);
+    room[2 * tierNow + side]--;
+    step++;
+  });
+  return paired.map(function (p, i) { return p.concat(singles[i]); });
+}
+
+// Makes a and b one pair (P2k+1 + P2k+2) on the same team by swapping
+// players - team sizes never change. One of the two stays on their team
+// (the anchor) and the other joins them; the player that joiner replaces
+// goes to the joiner's old spot. Of all the ways to do that, it picks the
+// one whose cross-team swap is closest in standings (seedOf(name) -> lower
+// is stronger; omitted = no preference), so e.g. pairing seed 1 (Team A)
+// with seed 14 (Team D) sends A's weakest spare player to D rather than
+// seed 1's current partner. Never moves anyone in `locked` (lowercased name
+// -> true, e.g. pairs already put together). Returns true once a and b are
+// paired. Mirrored in site/index.html.
+function relayPairUp(teams, a, b, locked, seedOf) {
+  var lc = function (n) { return String(n || '').trim().toLowerCase(); };
+  var seed = function (n) { var v = seedOf ? seedOf(n) : 0; return typeof v === 'number' && isFinite(v) ? v : 9999; };
   var find = function (n) {
     for (var ti = 0; ti < teams.length; ti++) {
       for (var pi = 0; pi < teams[ti].players.length; pi++) if (lc(teams[ti].players[pi]) === lc(n)) return [ti, pi];
@@ -2898,23 +2968,25 @@ function relayPairUp(teams, a, b, locked) {
   };
   if (!find(a) || !find(b)) return false;
   if (paired()) return true;
-  var anchor = function (x, y) {
-    var px = find(x), team = teams[px[0]].players;
-    var ks = [Math.floor(px[1] / 2)];
-    for (var k = 0; k < Math.floor(team.length / 2); k++) if (k !== ks[0]) ks.push(k);
-    for (var i = 0; i < ks.length; i++) {
-      var s0 = 2 * ks[i], s1 = s0 + 1;
-      if (s1 >= team.length) continue;
-      var free = function (n) { return lc(n) === lc(x) || lc(n) === lc(y) || !locked[lc(n)]; };
+  var best = null;
+  [[a, b], [b, a]].forEach(function (xy) {
+    var x = xy[0], y = xy[1], px = find(x), py = find(y), team = teams[px[0]].players;
+    var free = function (n) { return lc(n) === lc(x) || lc(n) === lc(y) || !locked[lc(n)]; };
+    for (var k = 0; k < Math.floor(team.length / 2); k++) {
+      var s0 = 2 * k, s1 = s0 + 1;
       if (!free(team[s0]) || !free(team[s1])) continue;
-      var xSlot = lc(team[s1]) === lc(x) ? s1 : s0;
-      swap(find(x), [px[0], xSlot]);
-      swap(find(y), [px[0], xSlot ^ 1]);
-      return true;
+      [s1, s0].forEach(function (sd) {
+        var d = team[sd];
+        if (lc(d) === lc(x)) return; // x keeps this slot; y takes the other
+        var cost = (lc(d) === lc(y) || py[0] === px[0]) ? 0 : Math.abs(seed(d) - seed(y));
+        if (!best || cost < best.cost) best = { cost: cost, x: x, y: y, team: px[0], xSlot: s0 + s1 - sd, sd: sd };
+      });
     }
-    return false;
-  };
-  return (anchor(a, b) || anchor(b, a)) && paired();
+  });
+  if (!best) return false;
+  swap(find(best.x), [best.team, best.xSlot]);
+  if (lc(teams[best.team].players[best.sd]) !== lc(best.y)) swap(find(best.y), [best.team, best.sd]);
+  return paired();
 }
 
 // Everything about one tie (teams 2*tie and 2*tie+1): each round's games -
@@ -3080,15 +3152,13 @@ function relayTeamSizes(n, k) {
   return { sizes: spots.map(function (sp, i) { return sp - guests[i]; }), guests: guests };
 }
 
-// Tiered draw by standings, keeping Team A and B the strongest: the top
-// sizes[A]+sizes[B] players are split alternately between A and B (1st ->
-// A, 2nd -> B, 3rd -> A, 4th -> B, ...), the next group between C and D, and
-// so on - so each matchup (A vs B, C vs D, ...) is two evenly split teams of
-// the same level. Everyone confirmed is drawn except players marked No show,
-// checked in or not; teams short of an even size get a "Guest N" placeholder
-// at the bottom (relayTeamSizes). Partner requests from the Join page are
-// then honoured where possible (relayRequestPairs/relayPairUp). The default
-// captain is each team's top seed.
+// The team draw: eligible players = every confirmed signup except those
+// marked No show, checked in or not, in standings order. Team sizes come
+// from relayTeamSizes; relayDrawTeams places requested partner pairs first
+// (in their stronger player's tier) and alternates everyone else A, B, A, B
+// tier by tier, so Team A and B are the strongest matchup. Teams short of an
+// even size get "Guest N" placeholders at the bottom; captain = the team's
+// top seed.
 function drawTeams(dateISO, teamCount, redraw, secret, pin) {
   var g = relayGuard(dateISO, secret, pin);
   if (!g.ok) return g;
@@ -3107,24 +3177,8 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
     return { name: s.name, rank: rankFor(rankedPlayers, s.name), idx: i };
   }).sort(function (a, b) { return a.rank - b.rank || a.idx - b.idx; });
 
-  var teams = [];
-  for (var t = 0; t < teamCount; t++) teams.push({ id: RELAY_TEAM_IDS[t], captain: '', players: [] });
   var plan = relayTeamSizes(sorted.length, teamCount);
-  var sizes = plan.sizes;
-  var next = 0;
-  for (var m = 0; m < teamCount / 2; m++) {
-    var ta = teams[2 * m], tb = teams[2 * m + 1];
-    var want = [sizes[2 * m], sizes[2 * m + 1]];
-    var group = sorted.slice(next, next + want[0] + want[1]);
-    next += group.length;
-    group.forEach(function (p, i) {
-      var side = i % 2; // A, B, A, B, ...
-      if ([ta, tb][side].players.length >= want[side]) side = 1 - side; // that side is full
-      [ta, tb][side].players.push(p.name);
-    });
-  }
-  var guestNo = 0;
-  teams.forEach(function (tm, i) { for (var x = 0; x < plan.guests[i]; x++) tm.players.push('Guest ' + (++guestNo)); });
+  var names = sorted.map(function (p) { return p.name; });
   var seed = {};
   sorted.forEach(function (p, i) { seed[p.name.toLowerCase()] = i; });
 
@@ -3133,11 +3187,12 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
       if (!redraw) return { ok: false, error: 'Teams are already drawn.' };
       if (relayAnyGames(state)) return { ok: false, error: 'Games have started — teams can no longer be redrawn.' };
     }
-    // Partner requests: put each requested pair together where a swap can
-    // (top seeds first), without breaking a pair already made.
-    var locked = {};
-    relayRequestPairs(state.requests, sorted.map(function (p) { return p.name; })).forEach(function (pr) {
-      if (relayPairUp(teams, pr[0], pr[1], locked)) { locked[pr[0].toLowerCase()] = true; locked[pr[1].toLowerCase()] = true; }
+    var lists = relayDrawTeams(names, plan.sizes, relayRequestPairs(state.requests, names));
+    var guestNo = 0;
+    var teams = lists.map(function (list, i) {
+      var tm = { id: RELAY_TEAM_IDS[i], captain: '', players: list.slice() };
+      for (var x = 0; x < plan.guests[i]; x++) tm.players.push('Guest ' + (++guestNo));
+      return tm;
     });
     teams.forEach(function (tm) { // captain: the team's top seed
       tm.captain = tm.players.filter(function (p) { return p.toLowerCase() in seed; })
