@@ -187,11 +187,7 @@ Google Apps Script file, edited directly.
   one-way ones whose partner asked for no one else) and puts each pair
   together by swapping players (`relayPairUp`, team sizes unchanged); the
   Pools/pre-draw "Partner requests" card shows each one's status with a
-  "Pair them" button. On the Pools Edit view, "Move pair…" moves a player
-  together with the requested partner they're paired with, and a move or
-  removal that shifts positions puts requested pairs that were together
-  back together (`relayRestorePairs`, round-1 pairs only, before round 1
-  starts - round-2 re-pairing is untouched). Requests aren't binding - the organizer can re-pair
+  "Pair them" button. Requests aren't binding - the organizer can re-pair
   or split them. Test with `site/index.html?mock=1&doubles=1` (the older
   `&relay=1` still works).
 - **One-time environment setup** on a fresh spreadsheet binding: set the
