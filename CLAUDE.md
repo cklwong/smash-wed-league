@@ -175,7 +175,9 @@ Google Apps Script file, edited directly.
   Guest N placeholder's spot if the team has one); guests (named, or
   "Guest N") are team-only, listed in the relay state's `guests`, and never
   get rank points. Partner requests: on a doubles date the Join page takes
-  an optional preferred partner (`join` action's `partner` →
+  an optional preferred partner, picked from existing players (season
+  roster + that date's signups) or typed only for a new player (`join`
+  action's `partner` →
   `joinWithPartner`, stored as the relay state's `requests`; resubmitting
   an existing signup just saves the request, `leave` drops it). The draw
   turns requests into pairs (`relayRequestPairs`: mutual first, then

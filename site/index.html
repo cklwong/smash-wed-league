@@ -348,9 +348,9 @@
         </div>
         <div class="field" id="jf-partner-field" style="display:none;">
           <label for="jf-partner">Preferred doubles partner <span style="font-weight:400; color:var(--text-mute);">(optional)</span></label>
-          <input id="jf-partner" type="text" list="jf-partner-names" placeholder="Leave blank and the organizer pairs you" autocomplete="off">
-          <datalist id="jf-partner-names"></datalist>
-          <p class="note">Your partner should sign up too and name you back. Requests are a preference — the organizer may change pairs or put pairs on different teams to keep things balanced. Already signed up? Pick your name and submit again to add or change your partner.</p>
+          <select id="jf-partner" onchange="document.getElementById('jf-partner-new').style.display = this.value==='__new' ? 'block' : 'none';"></select>
+          <input id="jf-partner-new" type="text" placeholder="New player's full name" autocomplete="off" style="display:none; margin-top:8px;">
+          <p class="note">Pick them from the list — type a name only for someone new to the league. Your partner should sign up too and name you back. Requests are a preference — the organizer may change pairs or put pairs on different teams to keep things balanced. Already signed up? Pick your name and submit again to add or change your partner.</p>
         </div>
         <button type="submit" class="btn" id="join-submit-btn" style="width:100%;">Request a spot</button>
         <p class="note" id="join-error" style="display:none; color:var(--loss);"></p>
@@ -3124,12 +3124,30 @@ function updateJoinSubForSelected(){
   }
 }
 
-// The partner box only shows for a team doubles date that's still open.
-function updateJoinPartnerField(){
+// The partner box only shows for a team doubles date that's still open. It
+// lists existing players (the season roster plus anyone signed up for that
+// date); "Someone new…" reveals a text box for a new player's name.
+function updateJoinPartnerField(signups){
   const dateISO = getSelectedJoinDate();
   const doubles = !!(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay') && Date.now() < pacificNoonTimestamp(dateISO);
   document.getElementById('jf-partner-field').style.display = doubles ? 'block' : 'none';
-  document.getElementById('jf-partner-names').innerHTML = PLAYERS.map(p=>`<option value="${escAttr(p.name)}"></option>`).join('');
+  if(!doubles) return;
+  const sel = document.getElementById('jf-partner');
+  const prev = sel.value;
+  const seen = new Set(), names = [];
+  PLAYERS.map(p=>p.name).concat((signups||[]).map(s=>s.name)).forEach(n=>{
+    if(!seen.has(playerKey(n))){ seen.add(playerKey(n)); names.push(n); }
+  });
+  names.sort((a,b)=>a.localeCompare(b));
+  sel.innerHTML = '<option value="">No preference — the organizer pairs me</option>'
+    + names.map(n=>`<option value="${escAttr(n)}">${escHtml(n)}</option>`).join('')
+    + '<option value="__new">Someone new (type their name)…</option>';
+  if([...sel.options].some(o=>o.value===prev)) sel.value = prev;
+  document.getElementById('jf-partner-new').style.display = sel.value==='__new' ? 'block' : 'none';
+}
+function selectedJoinPartner(){
+  const v = document.getElementById('jf-partner').value;
+  return v==='__new' ? document.getElementById('jf-partner-new').value.trim() : v;
 }
 
 async function renderJoinedList(){
@@ -3159,6 +3177,7 @@ async function renderJoinedList(){
     waitlistCard.style.display = 'block';
   }
   populateExistingSelect(week.signups.map(s=>s.name));
+  updateJoinPartnerField(week.signups);
 }
 
 async function renderJoinOptions(){
@@ -3197,7 +3216,11 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   const cutoff = pacificNoonTimestamp(dateISO);
   if(Date.now() >= cutoff){ updateJoinSubForSelected(); return; }
   const relayNight = !!(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay');
-  const partner = relayNight ? document.getElementById('jf-partner').value.trim() : '';
+  const partner = relayNight ? selectedJoinPartner() : '';
+  if(relayNight && document.getElementById('jf-partner').value==='__new' && !partner){
+    const errorEl = document.getElementById('join-error');
+    errorEl.textContent = 'Type your partner\'s name, or pick them from the list.'; errorEl.style.display = 'block'; return;
+  }
 
   const errorEl = document.getElementById('join-error');
   const btn = document.getElementById('join-submit-btn');
