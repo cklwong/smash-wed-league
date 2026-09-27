@@ -56,7 +56,7 @@
  *   POST { action:'setSheetEditors', emails, secret } -> { ok, emails, updated, warnings } (admin passphrase; saves SHEET_EDITORS and adds them to the protected tabs of today's and upcoming events - never past ones)
  *   POST { action:'join', date, name, contact, partner } -> { ok, position, cap, partnerOnly? } (partner = optional preferred doubles partner on a team doubles night; resubmitting an existing signup with a partner just saves the request)
  *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team doubles night or back to singles)
- *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: draws confirmed non-no-show signups into teamCount teams in standings tiers - top group snake-split between A and B, next between C and D, ...; teams padded to an even size with Guest N placeholders)
+ *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: draws confirmed non-no-show signups into teamCount teams in standings tiers - top group split alternately between A and B, next between C and D, ...; teams padded to an even size with Guest N placeholders)
  *   POST { action:'relaySaveTeams', date, teams, guests, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, guests, removals, captain, positions, round-2 positions [lineup2]; guests = names marked as guests)
  *   POST { action:'addWalkIn', date, name, team, secret|pin } -> { ok, name, position, waitlisted, walkIn, seated|relay } (any night: signs a walk-in up without an email and checks them in; team = relay team index, optional)
  *   POST { action:'editWalkIn', date, oldName, newName, secret|pin } -> { ok, name } (fixes a desk walk-in's name tonight everywhere it appears)
@@ -2477,7 +2477,7 @@ function cleanupPastEventProperties() {
 // still calls these nights "relay" (an earlier version rotated the pairs).
 //
 // Format: players are drawn by standings into 4 or 6 teams in tiers - the
-// strongest group snake-split between A and B, the next between C and D, ...
+// strongest group split alternately between A and B, the next between C and D, ...
 // Every team has an even number of players (the draw pads with "Guest N"
 // placeholders where needed) and both teams in a matchup are the same size.
 // Each team's captain sets positions P1..Pn, which make the doubles pairs:
@@ -3058,9 +3058,9 @@ function relayTeamSizes(n, k) {
 }
 
 // Tiered draw by standings, keeping Team A and B the strongest: the top
-// sizes[A]+sizes[B] players are snake-split between A and B (1st -> A,
-// 2nd -> B, 3rd -> B, 4th -> A, ...), the next group between C and D, and so
-// on - so each matchup (A vs B, C vs D, ...) is two evenly split teams of
+// sizes[A]+sizes[B] players are split alternately between A and B (1st ->
+// A, 2nd -> B, 3rd -> A, 4th -> B, ...), the next group between C and D, and
+// so on - so each matchup (A vs B, C vs D, ...) is two evenly split teams of
 // the same level. Everyone confirmed is drawn except players marked No show,
 // checked in or not; teams short of an even size get a "Guest N" placeholder
 // at the bottom (relayTeamSizes). Partner requests from the Join page are
@@ -3095,8 +3095,7 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
     var group = sorted.slice(next, next + want[0] + want[1]);
     next += group.length;
     group.forEach(function (p, i) {
-      var lap = Math.floor(i / 2);
-      var side = (lap % 2 === 0) ? i % 2 : 1 - i % 2; // A, B, B, A, A, B, ...
+      var side = i % 2; // A, B, A, B, ...
       if ([ta, tb][side].players.length >= want[side]) side = 1 - side; // that side is full
       [ta, tb][side].players.push(p.name);
     });

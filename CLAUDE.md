@@ -167,7 +167,8 @@ Google Apps Script file, edited directly.
   or ranked (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label
   `T<team>`). The team draw (`drawTeams`) takes every confirmed signup
   except no-shows and fills teams in standings tiers - the top group
-  snake-split between A and B, the next between C and D, ... -
+  split alternately between A and B (1st A, 2nd B, 3rd A, ...), the next
+  between C and D, ... -
   `relayTeamSizes` gives every team whole pairs and equal matchups, padding
   with "Guest N" placeholders (the fewest needed, on the last teams).
   Walk-ins and late players are added through `relayAddPlayer` (=
