@@ -136,12 +136,13 @@ Google Apps Script file, edited directly.
   the first 24 non-no-shows, then fills spots freed by no-shows with
   checked-in players from past the cap (walk-ins, waitlisters who turned
   up); the Check-in list shows those past-cap check-ins with a waitlist tag.
-- **Team doubles nights** (code calls them "relay", after an earlier
-  rotating-pairs format): any date can be switched from singles to a team
+- **Team doubles nights** (code identifiers and API actions still say
+  "relay", after an earlier rotating-pairs format; nothing user-facing does): any date can be switched from singles to a team
   doubles night on the Admin tab (`setEventFormat`, stored as an
   `EVENT_<YYYY-MM-DD>` script property; no property = singles, so singles
   weeks are untouched). Teams/games live as JSON in cell A1 of a separate
-  `Relay M/D/YY` tab (rows below are a read-only readable copy) - never in
+  `Doubles M/D/YY` tab (older nights' `Relay M/D/YY` tabs are still read -
+  `findRelaySheet`) (rows below are a read-only readable copy) - never in
   the weekly tab's pool geometry. The site's This week page renders these
   nights via `paintRelay` in `index.html`, with the same Check-in / Live /
   Pools sub-tabs as singles (Pools = teams, pairs, results).
@@ -173,7 +174,17 @@ Google Apps Script file, edited directly.
   `addWalkIn` plus an optional team; `relayPlaceOnTeam` puts them in a
   Guest N placeholder's spot if the team has one); guests (named, or
   "Guest N") are team-only, listed in the relay state's `guests`, and never
-  get rank points. Test with `site/index.html?mock=1&relay=1`.
+  get rank points. Partner requests: on a doubles date the Join page takes
+  an optional preferred partner (`join` action's `partner` →
+  `joinWithPartner`, stored as the relay state's `requests`; resubmitting
+  an existing signup just saves the request, `leave` drops it). The draw
+  turns requests into pairs (`relayRequestPairs`: mutual first, then
+  one-way ones whose partner asked for no one else) and puts each pair
+  together by swapping players (`relayPairUp`, team sizes unchanged); the
+  Pools/pre-draw "Partner requests" card shows each one's status with a
+  "Pair them" button. Requests aren't binding - the organizer can re-pair
+  or split them. Test with `site/index.html?mock=1&doubles=1` (the older
+  `&relay=1` still works).
 - **One-time environment setup** on a fresh spreadsheet binding: set the
   `ADMIN_EMAILS` and `ADMIN_SECRET` script properties (Project Settings →
   Script Properties) - optionally also `SHEET_EDITORS` (comma-separated emails

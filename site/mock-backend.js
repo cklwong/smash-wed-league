@@ -72,14 +72,15 @@
     createdWeeks: [], // ISO dates created via the mock createWeek() action this session
     bans: {}, // lowercased name -> {name, until} - mirrors PLAYER_BANS in gas/Code.gs
     events: {}, // ISO date -> {format:'relay', rpMode} - mirrors EVENT_<date> script properties
-    relay: {},  // ISO date -> {rev, teams, games} - mirrors the "Relay M/D/YY" tab's JSON
+    relay: {},  // ISO date -> {rev, teams, games} - mirrors the "Doubles M/D/YY" tab's JSON
     sheetEditors: [] // mirrors the SHEET_EDITORS script property
   };
-  // ?relay=1 starts the sandbox with tonight already set up as a team
+  // ?doubles=1 (or the older ?relay=1) starts the sandbox with tonight already set up as a team
   // doubles night (otherwise switch it on the Admin tab like the real site).
   // The date isn't known yet (the page script defines getSessionDateISO
   // after this file runs), so the seed is applied on the first request.
-  STATE.pendingRelaySeed = new URLSearchParams(location.search).get('relay') === '1';
+  const qs = new URLSearchParams(location.search);
+  STATE.pendingRelaySeed = qs.get('doubles') === '1' || qs.get('relay') === '1';
   STATE.signups[STATE.signups.length - 1].checkedIn = false; // waitlist isn't "at the venue"
   STATE.signups[STATE.signups.length - 2].checkedIn = false;
 
@@ -287,9 +288,16 @@
         pair[side].players.push(p.name);
       });
     }
-    teams.forEach((t) => { t.captain = t.players[0] || ''; });
     let guestNo = 0;
     teams.forEach((t, i) => { for (let x = 0; x < plan.guests[i]; x++) t.players.push('Guest ' + (++guestNo)); });
+    // Mirrors gas/Code.gs drawTeams: honour partner requests, then top seed = captain.
+    const locked = {};
+    relayRequestPairs(st.requests, sorted.map((p) => p.name)).forEach(([a, b]) => {
+      if (relayPairUp(teams, a, b, locked)) { locked[key(a)] = true; locked[key(b)] = true; }
+    });
+    const seed = {};
+    sorted.forEach((p, i) => { seed[key(p.name)] = i; });
+    teams.forEach((t) => { t.captain = t.players.filter((p) => key(p) in seed).sort((x, y) => seed[key(x)] - seed[key(y)])[0] || ''; });
     st.teams = teams;
     st.games = [];
     st.guests = [];
@@ -571,11 +579,33 @@
     STATE.signups.push({ name, checkedIn: false, noShow: false });
     return { ok: true, row: STATE.signups.length, position: STATE.signups.length, cap: eventFor(date).cap };
   }
-  function leave(name) {
+  function leave(date, name) {
     const i = STATE.signups.findIndex((s) => key(s.name) === key(name));
     if (i < 0) return { ok: false, error: 'Signup not found for ' + name };
     STATE.signups.splice(i, 1);
+    if (isRelay(date)) { const st = relayState(date); st.requests = (st.requests || []).filter((r) => key(r.name) !== key(name)); st.rev++; }
     return { ok: true };
+  }
+  // Mirrors joinWithPartner() in gas/Code.gs.
+  function joinWithPartner(date, name, contact, partner) {
+    partner = String(partner || '').trim().slice(0, 40);
+    if (!partner || !isRelay(date)) return join(date, name, contact);
+    if (key(partner) === key(name)) return { ok: false, error: 'Pick someone other than yourself as your partner.' };
+    const idx = STATE.signups.findIndex((s) => key(s.name) === key(name));
+    let result;
+    if (idx >= 0) {
+      name = STATE.signups[idx].name;
+      result = { ok: true, partnerOnly: true, position: idx + 1, cap: eventFor(date).cap };
+    } else {
+      result = join(date, name, contact);
+      if (!result.ok) return result;
+    }
+    const st = relayState(date);
+    st.requests = (st.requests || []).filter((r) => key(r.name) !== key(name));
+    st.requests.push({ name, partner });
+    st.rev++;
+    result.partner = partner;
+    return result;
   }
 
   // Mirrors renamePlayer() in gas/Code.gs: renames a player in RANKINGS (the
@@ -856,8 +886,8 @@
       return { ok: false, error: 'This is a team doubles night — run it from the This week page.' };
     }
     switch (body.action) {
-      case 'join': return join(body.date, body.name, body.contact);
-      case 'leave': return leave(body.name);
+      case 'join': return joinWithPartner(body.date, body.name, body.contact, body.partner);
+      case 'leave': return leave(body.date, body.name);
       case 'getpin': return { ok: true, pin: '123456' }; // dev sandbox: any passphrase works
       case 'verifyPin': return { ok: true }; // dev sandbox: any PIN works
       case 'generatePools': return generatePools(body.padGuests, body.redraw);
