@@ -54,6 +54,7 @@
  *   POST { action:'listBans', secret } -> { ok, bans: [{name, until}, ...] } (admin passphrase; every currently-active ban, soonest-expiring first)
  *   POST { action:'getSheetEditors', secret } -> { ok, emails } (admin passphrase; the SHEET_EDITORS list)
  *   POST { action:'setSheetEditors', emails, secret } -> { ok, emails, updated, warnings } (admin passphrase; saves SHEET_EDITORS and adds them to the protected tabs of today's and upcoming events - never past ones)
+ *   POST { action:'join', date, name, contact, partner } -> { ok, position, cap, partnerOnly? } (partner = optional preferred doubles partner on a team doubles night; resubmitting an existing signup with a partner just saves the request)
  *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team doubles night or back to singles)
  *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: draws confirmed non-no-show signups into teamCount teams in standings tiers - top group snake-split between A and B, next between C and D, ...; teams padded to an even size with Guest N placeholders)
  *   POST { action:'relaySaveTeams', date, teams, guests, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, guests, removals, captain, positions, round-2 positions [lineup2]; guests = names marked as guests)
@@ -105,7 +106,7 @@ function doPost(e) {
   try { body = JSON.parse(e.postData.contents); } catch (err) {}
   var result;
   try {
-    if (body.action === 'join') result = addJoin(body.date, body.name, body.contact);
+    if (body.action === 'join') result = joinWithPartner(body.date, body.name, body.contact, body.partner);
     else if (body.action === 'leave') result = removeJoin(body.date, body.name);
     else if (body.action === 'getpin') result = getPin(body.date, body.secret);
     else if (body.action === 'verifyPin') result = checkPin(body.date, body.pin);
@@ -779,6 +780,43 @@ function addJoin(dateISO, name, contact, quiet) {
   return { ok: true, row: targetRow, position: position, cap: capFor(dateISO) };
 }
 
+// Join, plus an optional preferred doubles partner on a team doubles night
+// (saved in the doubles state's requests - see relayRequestPairs). An
+// existing signup resubmitting with a partner just saves/changes the
+// request. Requests aren't binding: the draw honours what it can and the
+// organizer can re-pair or move pairs between teams.
+function joinWithPartner(dateISO, name, contact, partner) {
+  partner = String(partner || '').trim().slice(0, 40);
+  if (!partner || !isRelayDate(dateISO)) return addJoin(dateISO, name, contact);
+  name = String(name || '').trim();
+  if (partner.toLowerCase() === name.toLowerCase()) return { ok: false, error: 'Pick someone other than yourself as your partner.' };
+  var sheet = getWeekSheet(dateISO);
+  if (!sheet) return { ok: false, error: 'No tab exists for ' + dateISO };
+  var signups = parseSignups(sheet.getDataRange().getValues());
+  var existing = findSignup(signups, name);
+  var result;
+  if (existing) {
+    name = existing.name;
+    result = { ok: true, partnerOnly: true, position: signups.indexOf(existing) + 1, cap: capFor(dateISO) };
+  } else {
+    result = addJoin(dateISO, name, contact);
+    if (!result.ok) return result;
+  }
+  setPartnerRequest(dateISO, name, partner);
+  result.partner = partner;
+  return result;
+}
+
+// Saves (or, with an empty partner, clears) one player's partner request.
+function setPartnerRequest(dateISO, name, partner) {
+  return updateRelayState(dateISO, function (state) {
+    var k = String(name).trim().toLowerCase();
+    state.requests = (state.requests || []).filter(function (r) { return String(r.name).trim().toLowerCase() !== k; });
+    if (partner) state.requests.push({ name: name, partner: partner });
+    return { ok: true };
+  });
+}
+
 function isEmail(contact) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((contact || '').trim());
 }
@@ -816,6 +854,10 @@ function removeJoin(dateISO, name) {
   var contact = (data[target.row - 1][CONTACT_COL - 1] || '').toString();
 
   shiftOutSignupRow(sheet, target.row);
+  if (isRelayDate(dateISO)) {
+    var hasRequest = (getRelayState(dateISO).requests || []).some(function (r) { return String(r.name).toLowerCase() === target.name.toLowerCase(); });
+    if (hasRequest) setPartnerRequest(dateISO, target.name, '');
+  }
 
   try { emailOrganizersOnRemoval(dateISO, name); }
   catch (err) { Logger.log('emailOrganizersOnRemoval failed: ' + err); }
@@ -2067,7 +2109,7 @@ function dryRunFinalize(dateISO) {
   var week = computeWeek(dateISO);
   if (!week.exists) { Logger.log('No tab exists for ' + dateISO); return; }
   if (week.relay) {
-    Logger.log('Team relay night, rpMode=' + week.event.rpMode + ' complete=' + relayIsComplete(week.relay) +
+    Logger.log('Team doubles night, rpMode=' + week.event.rpMode + ' complete=' + relayIsComplete(week.relay) +
       (week.event.rpMode === 'ranked' ? '' : ' (exhibition - finalize writes nothing)'));
     var relayResults = computeRelayResults(week.relay);
     Logger.log(JSON.stringify(relayResults, null, 2));
@@ -2165,7 +2207,7 @@ function doFinalizeWeek(dateISO) {
     if (week.event.rpMode !== 'ranked') return { ok: true, exhibition: true, date: dateISO };
     if (!relayIsComplete(week.relay)) return { ok: false, pending: true };
     results = computeRelayResults(week.relay);
-    if (!results.length) return { ok: false, error: 'No relay players found for ' + dateISO };
+    if (!results.length) return { ok: false, error: 'No team doubles players found for ' + dateISO };
   } else {
     if (!week.hasScores || !weekIsComplete(week)) return { ok: false, pending: true };
     results = computeWeekResults(week);
@@ -2455,7 +2497,7 @@ function cleanupPastEventProperties() {
 // RELAY_TEAM_BONUS if your team wins the tie. The tiebreak game only
 // decides the tie; guests never get rank points.
 //
-// The team data lives as JSON in cell A1 of a separate "Relay M/D/YY" tab
+// The team data lives as JSON in cell A1 of a separate "Doubles M/D/YY" tab
 // (rows below it are a read-only readable copy, rewritten on every change)
 // - never in the weekly M/D/YY tab's pool geometry, so parsePools, the
 // head-to-head scans and createWeek's duplicate-the-newest-tab all keep
@@ -2551,8 +2593,15 @@ function setEventFormat(dateISO, format, rpMode, secret) {
 
 // ---- Relay state storage ----
 
+// The "Doubles M/D/YY" tab (older ones are named "Relay M/D/YY" and are
+// still found). Doesn't start with a date, so headerToISODate skips it.
 function relaySheetName(dateISO) {
-  return 'Relay ' + tabNameForDate(dateISO); // doesn't start with a date, so headerToISODate skips it
+  return 'Doubles ' + tabNameForDate(dateISO);
+}
+
+function findRelaySheet(dateISO) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  return ss.getSheetByName(relaySheetName(dateISO)) || ss.getSheetByName('Relay ' + tabNameForDate(dateISO));
 }
 
 function emptyRelayState() {
@@ -2560,7 +2609,7 @@ function emptyRelayState() {
 }
 
 function getRelayState(dateISO) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(relaySheetName(dateISO));
+  var sheet = findRelaySheet(dateISO);
   if (!sheet) return emptyRelayState();
   var raw = sheet.getRange(1, 1).getValue();
   var state = null;
@@ -2574,16 +2623,15 @@ function getRelayState(dateISO) {
 
 function saveRelayState(dateISO, state) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var name = relaySheetName(dateISO);
-  var sheet = ss.getSheetByName(name);
+  var sheet = findRelaySheet(dateISO);
   if (!sheet) {
-    sheet = ss.insertSheet(name);
+    sheet = ss.insertSheet(relaySheetName(dateISO));
     var weekSheet = getWeekSheet(dateISO);
     if (weekSheet) { // park it right after its week's tab
       ss.setActiveSheet(sheet);
       ss.moveActiveSheet(weekSheet.getIndex() + 1);
     }
-    protectWeekSheet(sheet, 'Relay tab - edit via the site only');
+    protectWeekSheet(sheet, 'Doubles tab - edit via the site only');
   }
   state.rev = (state.rev || 0) + 1;
   sheet.getRange(1, 1).setValue(JSON.stringify(state));
@@ -2613,7 +2661,7 @@ function updateRelayState(dateISO, mutate) {
 // Readable copy under the JSON cell: teams, every game, player totals.
 function writeRelayMirror(sheet, state) {
   var rows = [];
-  rows.push(['Read-only copy of the relay data in cell A1 - edits here are ignored; use the site. Updated ' +
+  rows.push(['Read-only copy of the team doubles data in cell A1 - edits here are ignored; use the site. Updated ' +
     Utilities.formatDate(new Date(), 'America/Los_Angeles', 'M/d/yy h:mm a')]);
   rows.push(['']);
   rows.push(['TEAMS']);
@@ -2788,6 +2836,76 @@ function relayGameDone(g) {
   return !!g && typeof g.sa === 'number' && typeof g.sb === 'number';
 }
 
+// Partner requests ({name, partner} from the Join page) -> disjoint pairs
+// of names from `names` (who can be paired, in priority order): mutual
+// requests first, then one-way requests whose partner didn't ask for anyone
+// else on the list. Mirrored in site/index.html.
+function relayRequestPairs(requests, names) {
+  var lc = function (n) { return String(n || '').trim().toLowerCase(); };
+  var byKey = {};
+  names.forEach(function (n) { byKey[lc(n)] = n; });
+  var want = {};
+  (requests || []).forEach(function (r) {
+    var a = lc(r.name), b = lc(r.partner);
+    if (a && b && a !== b && byKey[a] && byKey[b]) want[a] = b;
+  });
+  var used = {}, out = [];
+  [true, false].forEach(function (mutualPass) {
+    names.forEach(function (n) {
+      var a = lc(n), b = want[a];
+      if (!b || used[a] || used[b]) return;
+      if (mutualPass ? want[b] !== a : !!want[b]) return;
+      used[a] = true; used[b] = true;
+      out.push([byKey[a], byKey[b]]);
+    });
+  });
+  return out;
+}
+
+// Makes a and b one pair (P2k+1 + P2k+2) on the same team by swapping
+// players - the displaced player takes the mover's old spot, crossing teams
+// if needed, so team sizes never change. Never moves anyone in `locked`
+// (lowercased name -> true, e.g. pairs already put together). Tries a's
+// team first, then b's. Returns true once a and b are paired. Mirrored in
+// site/index.html.
+function relayPairUp(teams, a, b, locked) {
+  var lc = function (n) { return String(n || '').trim().toLowerCase(); };
+  var find = function (n) {
+    for (var ti = 0; ti < teams.length; ti++) {
+      for (var pi = 0; pi < teams[ti].players.length; pi++) if (lc(teams[ti].players[pi]) === lc(n)) return [ti, pi];
+    }
+    return null;
+  };
+  var swap = function (p, q) {
+    var t = teams[p[0]].players[p[1]];
+    teams[p[0]].players[p[1]] = teams[q[0]].players[q[1]];
+    teams[q[0]].players[q[1]] = t;
+  };
+  var paired = function () {
+    var pa = find(a), pb = find(b);
+    return !!pa && !!pb && pa[0] === pb[0] && (pa[1] ^ 1) === pb[1];
+  };
+  if (!find(a) || !find(b)) return false;
+  if (paired()) return true;
+  var anchor = function (x, y) {
+    var px = find(x), team = teams[px[0]].players;
+    var ks = [Math.floor(px[1] / 2)];
+    for (var k = 0; k < Math.floor(team.length / 2); k++) if (k !== ks[0]) ks.push(k);
+    for (var i = 0; i < ks.length; i++) {
+      var s0 = 2 * ks[i], s1 = s0 + 1;
+      if (s1 >= team.length) continue;
+      var free = function (n) { return lc(n) === lc(x) || lc(n) === lc(y) || !locked[lc(n)]; };
+      if (!free(team[s0]) || !free(team[s1])) continue;
+      var xSlot = lc(team[s1]) === lc(x) ? s1 : s0;
+      swap(find(x), [px[0], xSlot]);
+      swap(find(y), [px[0], xSlot ^ 1]);
+      return true;
+    }
+    return false;
+  };
+  return (anchor(a, b) || anchor(b, a)) && paired();
+}
+
 // Everything about one tie (teams 2*tie and 2*tie+1): each round's games -
 // recorded ones as stored (names frozen at play time), the rest scheduled
 // from the current pairs and the fixed orders - plus round/tie results, the
@@ -2945,7 +3063,9 @@ function relayTeamSizes(n, k) {
 // on - so each matchup (A vs B, C vs D, ...) is two evenly split teams of
 // the same level. Everyone confirmed is drawn except players marked No show,
 // checked in or not; teams short of an even size get a "Guest N" placeholder
-// at the bottom (relayTeamSizes). The default captain is each team's top seed.
+// at the bottom (relayTeamSizes). Partner requests from the Join page are
+// then honoured where possible (relayRequestPairs/relayPairUp). The default
+// captain is each team's top seed.
 function drawTeams(dateISO, teamCount, redraw, secret, pin) {
   var g = relayGuard(dateISO, secret, pin);
   if (!g.ok) return g;
@@ -2981,15 +3101,26 @@ function drawTeams(dateISO, teamCount, redraw, secret, pin) {
       [ta, tb][side].players.push(p.name);
     });
   }
-  teams.forEach(function (tm) { tm.captain = tm.players[0] || ''; });
   var guestNo = 0;
   teams.forEach(function (tm, i) { for (var x = 0; x < plan.guests[i]; x++) tm.players.push('Guest ' + (++guestNo)); });
+  var seed = {};
+  sorted.forEach(function (p, i) { seed[p.name.toLowerCase()] = i; });
 
   return updateRelayState(dateISO, function (state) {
     if (state.teams.length) {
       if (!redraw) return { ok: false, error: 'Teams are already drawn.' };
       if (relayAnyGames(state)) return { ok: false, error: 'Games have started — teams can no longer be redrawn.' };
     }
+    // Partner requests: put each requested pair together where a swap can
+    // (top seeds first), without breaking a pair already made.
+    var locked = {};
+    relayRequestPairs(state.requests, sorted.map(function (p) { return p.name; })).forEach(function (pr) {
+      if (relayPairUp(teams, pr[0], pr[1], locked)) { locked[pr[0].toLowerCase()] = true; locked[pr[1].toLowerCase()] = true; }
+    });
+    teams.forEach(function (tm) { // captain: the team's top seed
+      tm.captain = tm.players.filter(function (p) { return p.toLowerCase() in seed; })
+        .sort(function (x, y) { return seed[x.toLowerCase()] - seed[y.toLowerCase()]; })[0] || '';
+    });
     state.teams = teams;
     state.games = [];
     state.guests = [];
@@ -3317,7 +3448,7 @@ function relayClearGame(dateISO, tie, round, seq, secret, pin) {
 
 // Wipes a relay night's teams and games (resetWeek on a relay date).
 function clearRelayState(dateISO) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(relaySheetName(dateISO));
+  var sheet = findRelaySheet(dateISO);
   if (!sheet) return;
   updateRelayState(dateISO, function (state) {
     state.teams = [];
@@ -3344,10 +3475,10 @@ function sheetEditorEmails() {
   return raw.split(',').map(function (s) { return s.trim(); }).filter(isEmail);
 }
 
-// The event date of a week tab ("9/30/26") or relay tab ("Relay 9/30/26"),
-// or null for any other tab (Rankings, etc.).
+// The event date of a week tab ("9/30/26") or doubles tab ("Doubles 9/30/26",
+// or an older "Relay 9/30/26"), or null for any other tab (Rankings, etc.).
 function eventTabDateISO(name) {
-  var m = String(name || '').match(/^Relay (.+)$/);
+  var m = String(name || '').match(/^(?:Doubles|Relay) (.+)$/);
   return headerToISODate(m ? m[1] : String(name || ''));
 }
 

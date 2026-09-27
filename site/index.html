@@ -346,6 +346,12 @@
           <div class="field"><label for="jf-contact">Email</label><input id="jf-contact" type="email" placeholder="name@email.com"></div>
           <p class="note">Please join one of the WhatsApp group chats above for league communications.</p>
         </div>
+        <div class="field" id="jf-partner-field" style="display:none;">
+          <label for="jf-partner">Preferred doubles partner <span style="font-weight:400; color:var(--text-mute);">(optional)</span></label>
+          <select id="jf-partner" onchange="document.getElementById('jf-partner-new').style.display = this.value==='__new' ? 'block' : 'none';"></select>
+          <input id="jf-partner-new" type="text" placeholder="New player's full name" autocomplete="off" style="display:none; margin-top:8px;">
+          <p class="note">Pick them from the list — type a name only for someone new to the league. Your partner should sign up too and name you back. Requests are a preference — the organizer may change pairs or put pairs on different teams to keep things balanced. Already signed up? Pick your name and submit again to add or change your partner.</p>
+        </div>
         <button type="submit" class="btn" id="join-submit-btn" style="width:100%;">Request a spot</button>
         <p class="note" id="join-error" style="display:none; color:var(--loss);"></p>
       </form>
@@ -392,7 +398,7 @@
         <p>Players tied on average are separated by rank points in the most recent week they all played, then by their most recent head-to-head result. Anyone still tied shares the rank.</p>
       </details>
     </div>
-    <div class="card faq" id="faq-relay">
+    <div class="card faq" id="faq-doubles">
       <h3>Team doubles <span class="event-tag">last Wednesday of the month</span></h3>
       <details>
         <summary>What is it?</summary>
@@ -404,7 +410,8 @@
       </details>
       <details>
         <summary>Who plays with whom?</summary>
-        <p>Before the first game the captain picks the team's <strong>doubles pairs</strong>. In each round every pair plays <strong>twice</strong>, against two different pairs from the other team, in a set order that spreads out rest (from 3 pairs up, nobody plays two games in a row).</p>
+        <p>When you sign up for a team doubles night you can name a <strong>preferred partner</strong> on the Join page (they should sign up and name you too). The draw keeps requested pairs together where it can; the organizer pairs up everyone else. Requests are a preference, not a promise — the organizer may change pairs or put pairs on different teams to keep the teams balanced.</p>
+        <p>Before the first game the captain can adjust the team's <strong>doubles pairs</strong>. In each round every pair plays <strong>twice</strong>, against two different pairs from the other team, in a set order that spreads out rest (from 3 pairs up, nobody plays two games in a row).</p>
         <p>Before round 2 starts, the captain can <strong>re-pair</strong> the team. If both teams keep their pairs, round 2's order brings in the match-ups round 1 didn't have. With 3 pairs a side, each pair meets its third opponent and replays one from round 1, so every pair plays all three opposing pairs during the night.</p>
       </details>
       <details>
@@ -443,7 +450,7 @@
       <p class="note" style="margin:0 0 8px;">Experiment with the match desk using local sample data — no spreadsheet required, nothing here touches the real roster.</p>
       <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-start;">
         <a class="btn ghost" href="?mock=1">Open mock singles night</a>
-        <a class="btn ghost" href="?mock=1&amp;relay=1">Open mock team doubles night</a>
+        <a class="btn ghost" href="?mock=1&amp;doubles=1">Open mock team doubles night</a>
       </div>
       <p class="note" style="margin:8px 0 0;">The team doubles sandbox starts this week as an exhibition team doubles night with 24 checked-in sample players — sign in on its Admin tab with any passphrase to draw teams and score games.</p>
     </div>
@@ -488,7 +495,7 @@
       <div id="noshow-summary" style="margin-top:8px;"></div>
       <p class="note" style="margin:16px 0 8px;">Currently banned players.</p>
       <div id="ban-list">—</div>
-      <p class="note" style="margin:16px 0 8px;"><strong>Sheet editors</strong> — people who can still edit the protected week/relay tabs by hand in Google Sheets. Share the spreadsheet with them as Editor first. One email per line (or comma-separated). They get edit access to today's and upcoming events' tabs only — past events stay locked, and access to an event's tabs is taken away after it's over (at the next Wednesday's 9:30pm run).</p>
+      <p class="note" style="margin:16px 0 8px;"><strong>Sheet editors</strong> — people who can still edit the protected week/doubles tabs by hand in Google Sheets. Share the spreadsheet with them as Editor first. One email per line (or comma-separated). They get edit access to today's and upcoming events' tabs only — past events stay locked, and access to an event's tabs is taken away after it's over (at the next Wednesday's 9:30pm run).</p>
       <textarea id="sheet-editors" rows="3" class="week-select" style="max-width:100%; font-family:inherit; resize:vertical;" placeholder="name@gmail.com" aria-label="Sheet editor emails"></textarea>
       <button type="button" class="btn ghost small" onclick="saveSheetEditors()">Save sheet editors</button>
       <p class="note" id="sheet-editors-out" style="display:none; margin-top:8px;"></p>
@@ -567,7 +574,7 @@ async function postAction(body){
     return await r.json();
   }catch(e){ return {ok:false, error:String(e)}; }
 }
-function postJoin(dateISO, name, contact){ return postAction({action:'join', date:dateISO, name, contact}); }
+function postJoin(dateISO, name, contact, partner){ return postAction({action:'join', date:dateISO, name, contact, partner}); }
 function postLeave(dateISO, name){ return postAction({action:'leave', date:dateISO, name}); }
 
 function partsInTZ(date, timeZone){
@@ -733,7 +740,7 @@ function showView(name){
   if(name==='admin') renderAdmin();
 }
 document.querySelectorAll('nav button').forEach(b=>b.addEventListener('click', ()=>showView(b.dataset.view)));
-// Opens the FAQ tab, optionally jumping to one section (e.g. 'faq-relay')
+// Opens the FAQ tab, optionally jumping to one section (e.g. 'faq-doubles')
 // with its questions expanded.
 function showFaq(sectionId){
   showView('faq');
@@ -1160,7 +1167,7 @@ async function resetThisWeek(){
   out.style.display = 'block'; out.textContent = 'Resetting…';
   const res = await postAction({action:'resetWeek', date:dateISO, secret: adminSecret()});
   if(!res.ok){ out.textContent = res.error || 'Could not reset the week.'; return; }
-  out.textContent = `Reset Wed, ${fmtDate(dateISO)} — draw${WEEK_FORMATS[dateISO] ? ' (relay teams)' : ''}, scores, and check-ins cleared.`;
+  out.textContent = `Reset Wed, ${fmtDate(dateISO)} — draw${WEEK_FORMATS[dateISO] ? ' (doubles teams)' : ''}, scores, and check-ins cleared.`;
   if(WEEK_DATE === dateISO) renderSchedule(true, true);
 }
 
@@ -2143,6 +2150,61 @@ function relayMatchupProblem(ta, tb){
   if(ta.players.length !== tb.players.length) return `Team ${ta.id} has ${ta.players.length} players and Team ${tb.id} has ${tb.players.length} — even them out with a guest or a late player.`;
   return '';
 }
+// Partner requests -> disjoint pairs from `names` (Code.gs relayRequestPairs):
+// mutual requests first, then one-way ones whose partner asked for no one else.
+function relayRequestPairs(requests, names){
+  const byKey = {};
+  names.forEach(n=>{ byKey[playerKey(n)] = n; });
+  const want = {};
+  (requests||[]).forEach(r=>{
+    const a = playerKey(r.name), b = playerKey(r.partner);
+    if(a && b && a!==b && byKey[a] && byKey[b]) want[a] = b;
+  });
+  const used = {}, out = [];
+  [true, false].forEach(mutualPass=>names.forEach(n=>{
+    const a = playerKey(n), b = want[a];
+    if(!b || used[a] || used[b]) return;
+    if(mutualPass ? want[b]!==a : !!want[b]) return;
+    used[a] = used[b] = true;
+    out.push([byKey[a], byKey[b]]);
+  }));
+  return out;
+}
+// Makes a and b one pair on the same team by swapping players (team sizes
+// never change), never moving anyone in `locked` (Code.gs relayPairUp).
+function relayPairUp(teams, a, b, locked){
+  const find = n=>{
+    for(let ti=0; ti<teams.length; ti++){
+      const pi = teams[ti].players.findIndex(p=>playerKey(p)===playerKey(n));
+      if(pi>=0) return [ti, pi];
+    }
+    return null;
+  };
+  const swap = (p, q)=>{
+    const t = teams[p[0]].players[p[1]];
+    teams[p[0]].players[p[1]] = teams[q[0]].players[q[1]];
+    teams[q[0]].players[q[1]] = t;
+  };
+  const paired = ()=>{ const pa = find(a), pb = find(b); return !!pa && !!pb && pa[0]===pb[0] && (pa[1]^1)===pb[1]; };
+  if(!find(a) || !find(b)) return false;
+  if(paired()) return true;
+  const anchor = (x, y)=>{
+    const px = find(x), team = teams[px[0]].players;
+    const ks = [Math.floor(px[1]/2)];
+    for(let k=0; k<Math.floor(team.length/2); k++) if(k!==ks[0]) ks.push(k);
+    const free = n=>playerKey(n)===playerKey(x) || playerKey(n)===playerKey(y) || !locked[playerKey(n)];
+    for(const k of ks){
+      const s0 = 2*k, s1 = s0+1;
+      if(s1 >= team.length || !free(team[s0]) || !free(team[s1])) continue;
+      const xSlot = playerKey(team[s1])===playerKey(x) ? s1 : s0;
+      swap(find(x), [px[0], xSlot]);
+      swap(find(y), [px[0], xSlot^1]);
+      return true;
+    }
+    return false;
+  };
+  return (anchor(a, b) || anchor(b, a)) && paired();
+}
 function relayTieCount(state){ return Math.floor(state.teams.length/2); }
 function relayFindGame(state, tie, round, seq){
   return state.games.find(g=>g.tie===tie && g.round===round && g.seq===seq) || null;
@@ -2261,7 +2323,7 @@ function paintRelay(week, dateISO){
 
   const bannerHtml = `<div class="session-banner">
     <div><div class="date">Wed, ${fmtDate(dateISO)} · Team doubles</div>
-    <div class="meta">${escHtml(relayRpText(ev))} · <a href="#" onclick="showFaq('faq-relay'); return false;" style="color:#fff;">how it works</a></div></div>
+    <div class="meta">${escHtml(relayRpText(ev))} · <a href="#" onclick="showFaq('faq-doubles'); return false;" style="color:#fff;">how it works</a></div></div>
     <div style="display:flex; gap:8px;">
       <div class="cap-pill"><div class="n">${confirmed.length}/${cap}</div><div class="l">Confirmed</div></div>
       ${drawn ? `<div class="cap-pill"><div class="n">${state.teams.length}</div><div class="l">Teams</div></div>`
@@ -2276,6 +2338,7 @@ function paintRelay(week, dateISO){
       <button class="btn small" onclick="showView('join')">Add/remove a player</button>
     </div>`;
     predrawHtml += relayDrawCard(dateISO, week, confirmed, admin, false);
+    predrawHtml += relayRequestsCard(week, state, admin);
     predrawHtml += walkInCard(week, admin);
     predrawHtml += relayCheckinCard(dateISO, week, confirmed, admin);
     predrawHtml += `<div class="card"><h3 style="margin:0 0 10px; font-size:15px; color:var(--ink);">Waitlist</h3>
@@ -2287,6 +2350,7 @@ function paintRelay(week, dateISO){
       + walkInCard(week, admin)
       + relayCheckinCard(dateISO, week, confirmed, admin);
     poolsHtml = relayProblemsHtml(state, admin)
+      + relayRequestsCard(week, state, admin)
       + relayUnassignedCard(week, confirmed, state, admin)
       + relayTeamsHtml(week, state, admin)
       + (admin ? relayNamesDatalist() : '')
@@ -2401,6 +2465,64 @@ function relayUnassignedCard(week, confirmed, state, admin){
     </select>` : ''}</div>`).join('');
   return `<div class="card" style="border-color:#E8C48A;"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Not on a team yet</h3>
     <p style="margin:0 0 6px; font-size:13px; color:var(--text-soft);">${admin ? 'Adding someone to a team with a guest takes the guest\'s spot.' : 'The organizer can add them to a team.'}</p>${rows}</div>`;
+}
+
+// Partner requests from the Join page: before the draw, who asked for whom
+// (the draw pairs them where it can); after it, whether each pair ended up
+// together, with a one-tap "Pair them" for the organizer until round 1.
+function relayRequestsCard(week, state, admin){
+  const reqs = state.requests || [];
+  if(!reqs.length) return '';
+  const drawn = state.teams.length > 0;
+  const cap = weekCap(week);
+  const signed = new Map(week.signups.map((s,i)=>[playerKey(s.name), {s, pos:i+1}]));
+  const names = drawn ? state.teams.flatMap(t=>t.players)
+    : relayDrawEligible(week.signups.slice(0, cap)).map(s=>s.name);
+  const pairs = relayRequestPairs(reqs, names);
+  const inPair = new Set(pairs.flat().map(playerKey));
+  const teamAt = n=>{
+    for(let ti=0; ti<state.teams.length; ti++){
+      const pi = state.teams[ti].players.findIndex(p=>playerKey(p)===playerKey(n));
+      if(pi>=0) return {ti, pi, id: state.teams[ti].id};
+    }
+    return null;
+  };
+  const r1Started = ti=>relayTieView(state, Math.floor(ti/2)).rounds[0].started;
+  const rows = pairs.map(([a,b])=>{
+    let status = '<span class="game-note">paired at the draw</span>', act = '';
+    if(drawn){
+      const ta = teamAt(a), tb = teamAt(b);
+      if(ta.ti===tb.ti && (ta.pi^1)===tb.pi) status = `<span class="mine-badge ok">Team ${ta.id}</span>`;
+      else {
+        status = `<span class="game-note">${ta.ti===tb.ti ? `both Team ${ta.id}, not paired` : `Team ${ta.id} / Team ${tb.id}`}</span>`;
+        if(admin && !r1Started(ta.ti) && !r1Started(tb.ti)) act = `<button class="btn small ghost" onclick="relayPairRequest('${escAttr(a).replace(/'/g,"\\'")}','${escAttr(b).replace(/'/g,"\\'")}')">Pair them</button>`;
+      }
+    }
+    return `<div class="team-row"><span class="rname">${escHtml(a)} + ${escHtml(b)} ${status}</span>${act}</div>`;
+  });
+  reqs.filter(r=>!inPair.has(playerKey(r.name)) && signed.has(playerKey(r.name))).forEach(r=>{
+    const p = signed.get(playerKey(r.partner));
+    const other = reqs.find(x=>playerKey(x.name)===playerKey(r.partner));
+    const why = !p ? 'not signed up' : p.s.noShow ? 'no-show' : p.pos > cap && !p.s.checkedIn ? 'on the waitlist'
+      : other && playerKey(other.partner)!==playerKey(r.name) ? `asked for ${escHtml(other.partner)}` : 'not on a team';
+    rows.push(`<div class="team-row"><span class="rname">${escHtml(r.name)} → ${escHtml(r.partner)} <span class="game-note">(${why})</span></span></div>`);
+  });
+  if(!rows.length) return '';
+  return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Partner requests</h3>
+    <p style="margin:0 0 6px; font-size:13px; color:var(--text-soft);">${drawn ? 'Requests are a preference — pairs can be changed or split to keep teams balanced.' : 'The draw pairs these up where it can; everyone else is paired by the organizer.'}</p>${rows.join('')}</div>`;
+}
+function relayPairRequest(a, b){
+  const state = LAST_WEEK.relay;
+  const locked = {};
+  relayRequestPairs(state.requests||[], state.teams.flatMap(t=>t.players)).forEach(([x,y])=>{
+    if([x,y].some(n=>playerKey(n)===playerKey(a) || playerKey(n)===playerKey(b))) return;
+    const t = state.teams.find(t=>t.players.some(p=>playerKey(p)===playerKey(x)));
+    const i = t.players.findIndex(p=>playerKey(p)===playerKey(x));
+    if(t.players[i^1] && playerKey(t.players[i^1])===playerKey(y)){ locked[playerKey(x)] = locked[playerKey(y)] = true; }
+  });
+  if(!relayPairUp(state.teams, a, b, locked)){ alert(`No free spot to pair ${a} and ${b} without splitting another requested pair — move them by hand with Edit.`); return; }
+  state.teams.forEach(t=>{ if(!t.players.some(p=>playerKey(p)===playerKey(t.captain))) t.captain = ''; });
+  relayCommitTeams();
 }
 
 // ---- Live tab ----
@@ -2972,10 +3094,10 @@ async function removeSignup(dateISO, name){
   if(!result.ok){ alert('Could not remove — please try again.'); return; }
   renderJoinedList();
 }
-function joinRosterRow(s, num, phase, dateISO, cap=CAP){
+function joinRosterRow(s, num, phase, dateISO, cap=CAP, partner=''){
   return `<li>
     <span class="num">${phase==='waitlist' ? cap+num : num}</span>
-    <span class="rname">${s.name}${statusBadge(s)}</span>
+    <span class="rname">${s.name}${statusBadge(s)}${partner ? ` <span class="game-note">· partner: ${escHtml(partner)}</span>` : ''}</span>
     <button type="button" class="remove-btn" title="Remove" aria-label="Remove ${s.name}" onclick="removeSignup('${dateISO}','${s.name.replace(/'/g,"\\'")}')">❌</button>
   </li>`;
 }
@@ -2994,12 +3116,38 @@ function updateJoinSubForSelected(){
     sub.textContent = `Signups for Wed, ${fmtDate(dateISO)} are closed — pick another date below.`;
     btn.disabled = true; btn.textContent = 'Signups closed';
   } else if(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay'){
-    sub.innerHTML = `Wed, ${fmtDate(dateISO)} is a team doubles night — the first ${RELAY_CAP} signups are confirmed and teams are drawn at check-in. <a href="#" onclick="showFaq('faq-relay'); return false;">How it works</a>`;
+    sub.innerHTML = `Wed, ${fmtDate(dateISO)} is a team doubles night — the first ${RELAY_CAP} signups are confirmed and teams are drawn at check-in. <a href="#" onclick="showFaq('faq-doubles'); return false;">How it works</a>`;
     btn.disabled = false; btn.textContent = 'Request a spot';
   } else {
     sub.textContent = `New players get placed into a pool by the organizer once signups close.`;
     btn.disabled = false; btn.textContent = 'Request a spot';
   }
+}
+
+// The partner box only shows for a team doubles date that's still open. It
+// lists existing players (the season roster plus anyone signed up for that
+// date); "Someone new…" reveals a text box for a new player's name.
+function updateJoinPartnerField(signups){
+  const dateISO = getSelectedJoinDate();
+  const doubles = !!(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay') && Date.now() < pacificNoonTimestamp(dateISO);
+  document.getElementById('jf-partner-field').style.display = doubles ? 'block' : 'none';
+  if(!doubles) return;
+  const sel = document.getElementById('jf-partner');
+  const prev = sel.value;
+  const seen = new Set(), names = [];
+  PLAYERS.map(p=>p.name).concat((signups||[]).map(s=>s.name)).forEach(n=>{
+    if(!seen.has(playerKey(n))){ seen.add(playerKey(n)); names.push(n); }
+  });
+  names.sort((a,b)=>a.localeCompare(b));
+  sel.innerHTML = '<option value="">No preference — the organizer pairs me</option>'
+    + names.map(n=>`<option value="${escAttr(n)}">${escHtml(n)}</option>`).join('')
+    + '<option value="__new">Someone new (type their name)…</option>';
+  if([...sel.options].some(o=>o.value===prev)) sel.value = prev;
+  document.getElementById('jf-partner-new').style.display = sel.value==='__new' ? 'block' : 'none';
+}
+function selectedJoinPartner(){
+  const v = document.getElementById('jf-partner').value;
+  return v==='__new' ? document.getElementById('jf-partner-new').value.trim() : v;
 }
 
 async function renderJoinedList(){
@@ -3018,14 +3166,18 @@ async function renderJoinedList(){
   const cap = weekCap(week);
   const confirmed = week.signups.slice(0, cap);
   const waitlist = week.signups.slice(cap);
+  const partners = {};
+  ((week.relay && week.relay.requests) || []).forEach(r=>{ partners[playerKey(r.name)] = r.partner; });
+  const pOf = s=>partners[playerKey(s.name)] || '';
   list.innerHTML = confirmed.length
-    ? confirmed.map((s,i)=>joinRosterRow(s,i+1,'confirmed',dateISO,cap)).join('')
+    ? confirmed.map((s,i)=>joinRosterRow(s,i+1,'confirmed',dateISO,cap,pOf(s))).join('')
     : '<li class="empty-row">No signups yet for this date.</li>';
   if(waitlist.length){
-    waitlistList.innerHTML = waitlist.map((s,i)=>joinRosterRow(s,i+1,'waitlist',dateISO,cap)).join('');
+    waitlistList.innerHTML = waitlist.map((s,i)=>joinRosterRow(s,i+1,'waitlist',dateISO,cap,pOf(s))).join('');
     waitlistCard.style.display = 'block';
   }
   populateExistingSelect(week.signups.map(s=>s.name));
+  updateJoinPartnerField(week.signups);
 }
 
 async function renderJoinOptions(){
@@ -3041,8 +3193,9 @@ async function renderJoinOptions(){
       <input type="radio" name="jf-date" value="${s.date}" ${s.closed?'disabled':''} ${i===firstOpenIdx?'checked':''}>
       Wed, ${fmtDate(s.date)}${WEEK_FORMATS[s.date] && WEEK_FORMATS[s.date].format==='relay' ? ' · Team doubles' : ''}${s.closed?' · Closed':''}
     </label>`).join('');
-  container.querySelectorAll('input[name="jf-date"]').forEach(inp=>inp.addEventListener('change', ()=>{ updateJoinSubForSelected(); renderJoinedList(); }));
+  container.querySelectorAll('input[name="jf-date"]').forEach(inp=>inp.addEventListener('change', ()=>{ updateJoinSubForSelected(); updateJoinPartnerField(); renderJoinedList(); }));
   updateJoinSubForSelected();
+  updateJoinPartnerField();
   updateJoinTypeFields();
   renderJoinedList();
 }
@@ -3062,12 +3215,18 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   const dateISO = getSelectedJoinDate();
   const cutoff = pacificNoonTimestamp(dateISO);
   if(Date.now() >= cutoff){ updateJoinSubForSelected(); return; }
+  const relayNight = !!(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay');
+  const partner = relayNight ? selectedJoinPartner() : '';
+  if(relayNight && document.getElementById('jf-partner').value==='__new' && !partner){
+    const errorEl = document.getElementById('join-error');
+    errorEl.textContent = 'Type your partner\'s name, or pick them from the list.'; errorEl.style.display = 'block'; return;
+  }
 
   const errorEl = document.getElementById('join-error');
   const btn = document.getElementById('join-submit-btn');
   errorEl.style.display = 'none';
   btn.disabled = true; btn.textContent = 'Submitting…';
-  const result = await postJoin(dateISO, name, contact);
+  const result = await postJoin(dateISO, name, contact, partner);
   btn.disabled = false; btn.textContent = 'Request a spot';
 
   if(!result.ok){
@@ -3078,13 +3237,13 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
 
   const position = result.position;
   const cap = result.cap || CAP;
-  const relayNight = !!(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay');
   const confirmedSpot = position <= cap;
+  const partnerNote = result.partner ? ` Partner request: ${result.partner} (the organizer makes the final pairs).` : '';
   document.getElementById('confirm-badge').className = 'ok-badge' + (confirmedSpot ? '' : ' wait');
-  document.getElementById('confirm-name').textContent = 'You\'re in, ' + name;
-  document.getElementById('confirm-detail').textContent = confirmedSpot
+  document.getElementById('confirm-name').textContent = result.partnerOnly ? 'Partner request saved, ' + name : 'You\'re in, ' + name;
+  document.getElementById('confirm-detail').textContent = (confirmedSpot
     ? `Confirmed — spot #${position} for Wed, ${fmtDate(dateISO)}. ${relayNight ? 'Teams are drawn at check-in — it\'s a team doubles night.' : 'Pools go up once signups close.'}`
-    : `Waitlisted — #${position-cap} in line for Wed, ${fmtDate(dateISO)}. You'll move up if a confirmed player drops.`;
+    : `Waitlisted — #${position-cap} in line for Wed, ${fmtDate(dateISO)}. You'll move up if a confirmed player drops.`) + partnerNote;
   document.getElementById('join-form').style.display = 'none';
   document.getElementById('join-confirm').classList.add('active');
   renderJoinedList();
