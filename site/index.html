@@ -2599,9 +2599,9 @@ function relayPairHtml(pair, won){
   return won ? `<span class="pair win">${txt}</span>` : `<span class="pair">${txt}</span>`;
 }
 
-// Only the up-next game carries Start/Score; a recorded score gets a small
-// ✎ to correct it; a game on court (or opened with ✎/Score) shows the
-// score boxes.
+// Only the up-next game carries Start (a game is always started, then
+// recorded); a recorded score gets a small ✎ to correct it; a game on court
+// (or opened with ✎) shows the score boxes.
 function relayGameRow(v, round, g, admin, readOnly, upNext){
   const key = `${v.tie}-${round}-${g.seq}`;
   const label = round===RELAY_TIEBREAK_ROUND ? 'TB' : 'G'+(g.seq+1);
@@ -2629,8 +2629,7 @@ function relayGameRow(v, round, g, admin, readOnly, upNext){
     if(admin && !readOnly && upNext && !v.problem && g.a && g.b){
       acts = clash.length
         ? `<span class="game-note">waiting for ${clash.map(escHtml).join(' & ')}</span>`
-        : `<button class="btn small" onclick="relayStartClick(${call})">Start</button>
-        <button class="btn small ghost" title="Enter a finished game's score" onclick="RELAY_OPEN_EDIT='${key}'; paintSchedule(LAST_WEEK);">Score</button>`;
+        : `<button class="btn small" onclick="relayStartClick(${call})">Start</button>`;
     }
   }
   const tag = onCourt ? ` <span class="elapsed num" data-since="${g.startedAt}">0:00</span>`
@@ -2656,13 +2655,7 @@ function relayTiebreakHtml(v, admin, readOnly){
     <span class="gnum">TB</span>
     <span class="match-up tb">${sel('a', v.a, 1)} + ${sel('a', v.a, 2)} <span class="game-note">vs</span> ${sel('b', v.b, 1)} + ${sel('b', v.b, 2)}</span>
     <span class="acts">
-      <span class="score-entry">
-        <input type="number" inputmode="numeric" min="0" id="relay-sa-${v.tie}-3-0" placeholder="${v.a.id}">
-        <span>–</span>
-        <input type="number" inputmode="numeric" min="0" id="relay-sb-${v.tie}-3-0" placeholder="${v.b.id}">
-      </span>
-      <button class="btn small ghost" onclick="relayStartClick(${v.tie},3,0)">Start</button>
-      <button class="btn small" onclick="relayScoreClick(${v.tie},3,0)">Record</button>
+      <button class="btn small" onclick="relayStartClick(${v.tie},3,0)">Start</button>
     </span>
   </div>`;
 }
