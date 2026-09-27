@@ -2691,7 +2691,7 @@ function relayTeamCard(week, state, ti, admin){
       <button class="icon-btn" title="Move down" onclick="relayMovePos(${ti},${pi},1)" ${pi===n-1||r1Locked?'disabled':''}>▼</button>
       <button class="icon-btn${playerKey(p)===playerKey(t.captain)?' on':''}" title="Make captain" onclick="relaySetCaptain(${ti},${pi})">★</button>
       ${r1Locked ? '' : `<select class="mini-select" aria-label="Move ${escAttr(p)} to another team" onchange="if(this.value!=='') relayMoveTeam(${ti},${pi},Number(this.value))">
-        <option value="">${relayRequestedMate(ti, pi) ? 'Move pair…' : 'Move…'}</option>${state.teams.map((o,oi)=>oi===ti?'':`<option value="${oi}">Team ${o.id}</option>`).join('')}
+        <option value="">Move…</option>${state.teams.map((o,oi)=>oi===ti?'':`<option value="${oi}">Team ${o.id}</option>`).join('')}
       </select>`}
       <button class="icon-btn" title="${r1Locked ? 'Replace with a guest' : 'Take off the team'}" onclick="relayRemove(${ti},${pi})">✕</button>
     </span></div>`).join('')
@@ -2833,53 +2833,11 @@ function relaySetCaptain(ti, pi){
   t.captain = t.players[pi];
   relayCommitTeams();
 }
-// Requested partner pairs (Join page) currently sitting together as one
-// round-1 pair: [[a, b], ...].
-function relayRequestedTogether(){
-  const state = LAST_WEEK.relay;
-  return relayRequestPairs(state.requests||[], state.teams.flatMap(t=>t.players)).filter(([a,b])=>{
-    const t = state.teams.find(t=>t.players.some(p=>playerKey(p)===playerKey(a)));
-    const i = t.players.findIndex(p=>playerKey(p)===playerKey(a));
-    return !!t.players[i^1] && playerKey(t.players[i^1])===playerKey(b);
-  });
-}
-// The requested partner a player is paired with right now, or ''.
-function relayRequestedMate(ti, pi){
-  const t = relayTeams()[ti], me = t.players[pi], mate = t.players[pi^1];
-  if(!mate) return '';
-  return relayRequestedTogether().some(([a,b])=>[a,b].map(playerKey).sort().join('|')===[me,mate].map(playerKey).sort().join('|')) ? mate : '';
-}
-// After a move or removal shifts positions, puts requested pairs that were
-// together before the edit (`pairs`) back together - only on teams whose
-// round 1 hasn't started (pairs are fixed after that; a captain's round-2
-// re-pairing is separate and never touched).
-function relayRestorePairs(pairs){
-  const state = LAST_WEEK.relay, locked = {};
-  const open = n=>{
-    const ti = state.teams.findIndex(t=>t.players.some(p=>playerKey(p)===playerKey(n)));
-    return ti >= 0 && !relayTieView(state, Math.floor(ti/2)).rounds[0].started;
-  };
-  const together = new Set(relayRequestedTogether().map(pr=>pr.map(playerKey).join('|')));
-  pairs.forEach(([a,b])=>{ if(together.has([a,b].map(playerKey).join('|'))) locked[playerKey(a)] = locked[playerKey(b)] = true; });
-  pairs.forEach(([a,b])=>{
-    if(locked[playerKey(a)] || !open(a) || !open(b)) return;
-    if(relayPairUp(state.teams, a, b, locked)) locked[playerKey(a)] = locked[playerKey(b)] = true;
-  });
-  state.teams.forEach(t=>{ if(t.captain && !t.players.some(p=>playerKey(p)===playerKey(t.captain))) t.captain = ''; });
-}
-// Moves a player to another team - together with their requested partner
-// when the two are paired, so they arrive as one pair.
 function relayMoveTeam(ti, pi, toTi){
   const teams = relayTeams();
-  const before = relayRequestedTogether();
-  const mate = relayRequestedMate(ti, pi);
-  const movers = mate ? [pi, pi^1].sort((x,y)=>y-x).map(i=>teams[ti].players.splice(i, 1)[0]).reverse() : teams[ti].players.splice(pi, 1);
-  movers.forEach(n=>{ if(playerKey(teams[ti].captain)===playerKey(n)) teams[ti].captain = ''; });
-  const dest = teams[toTi].players;
-  // A pair goes in as a whole pair: ahead of an odd player out, if any.
-  if(movers.length === 2 && dest.length % 2) dest.splice(dest.length-1, 0, ...movers);
-  else dest.push(...movers);
-  relayRestorePairs(before.filter(([a,b])=>!movers.some(n=>playerKey(n)===playerKey(a) || playerKey(n)===playerKey(b))));
+  const [name] = teams[ti].players.splice(pi, 1);
+  if(playerKey(teams[ti].captain)===playerKey(name)) teams[ti].captain = '';
+  teams[toTi].players.push(name);
   relayCommitTeams();
 }
 // Before round 1: takes the player off (the team is then a player short -
@@ -2896,9 +2854,7 @@ function relayRemove(ti, pi){
     if(t.lineup2) t.lineup2 = t.lineup2.map(x=>playerKey(x)===playerKey(name) ? guest : x);
   } else {
     if(!confirm(`Take ${name} off Team ${t.id}?`)) return;
-    const before = relayRequestedTogether().filter(([a,b])=>playerKey(a)!==playerKey(name) && playerKey(b)!==playerKey(name));
     t.players.splice(pi, 1);
-    relayRestorePairs(before);
   }
   if(playerKey(t.captain)===playerKey(name)) t.captain = '';
   relayCommitTeams();
