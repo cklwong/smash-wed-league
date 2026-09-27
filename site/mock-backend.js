@@ -257,7 +257,7 @@
   }
 
   // Mirrors drawTeams() in gas/Code.gs: tiered by standings - the top group
-  // snake-split between A and B, the next between C and D, ... Everyone
+  // split alternately between A and B (1st A, 2nd B, 3rd A, ...), the next between C and D, ... Everyone
   // confirmed except no-shows is drawn. Team sizes come from the page's
   // relayTeamSizes (a copy of Code.gs relayTeamSizes).
   function drawTeams(date, teamCount, redraw) {
@@ -283,7 +283,7 @@
       const group = sorted.slice(next, next + want[0] + want[1]);
       next += group.length;
       group.forEach((p, i) => {
-        let side = Math.floor(i / 2) % 2 === 0 ? i % 2 : 1 - (i % 2); // A, B, B, A, A, B, ...
+        let side = i % 2; // A, B, A, B, ...
         if (pair[side].players.length >= want[side]) side = 1 - side;
         pair[side].players.push(p.name);
       });
