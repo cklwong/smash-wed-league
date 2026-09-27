@@ -406,7 +406,7 @@
       </details>
       <details>
         <summary>How are teams formed?</summary>
-        <p>Teams are drawn by standings in tiers: the top players are split between <strong>Team A and Team B</strong>, the next group between C and D, then E and F — alternating within each pair (1st to A, 2nd to B, 3rd to A, 4th to B, …). So A vs B is the top match-up, and each match-up is two evenly split teams of similar level. Everyone signed up is drawn except no-shows. Every team has an <strong>even number of players</strong> and both teams in a match-up are the same size — a guest fills any gap (a late arrival takes the guest's spot). A guest plays for a team but doesn't earn ranking points. Each team picks a <strong>captain</strong>.</p>
+        <p>Teams are drawn by standings in tiers: the top players are split between <strong>Team A and Team B</strong>, the next group between C and D, then E and F — alternating within each pair (1st to A, 2nd to B, 3rd to A, 4th to B, …). Requested partner pairs are placed first, in the tier of the stronger partner, so everyone below them shifts down one place. So A vs B is the top match-up, and each match-up is two evenly split teams of similar level. Everyone signed up is drawn except no-shows. Every team has an <strong>even number of players</strong> and both teams in a match-up are the same size — a guest fills any gap (a late arrival takes the guest's spot). A guest plays for a team but doesn't earn ranking points. Each team picks a <strong>captain</strong>.</p>
       </details>
       <details>
         <summary>Who plays with whom?</summary>
@@ -2169,6 +2169,52 @@ function relayRequestPairs(requests, names){
     out.push([byKey[a], byKey[b]]);
   }));
   return out;
+}
+// The draw's team lists (Code.gs relayDrawTeams): requested pairs first, in
+// their stronger player's tier (alternating A, B), then everyone else in
+// standings order, tier by tier, alternating A, B.
+function relayDrawTeams(names, sizes, pairs){
+  const pos = {};
+  names.forEach((n,i)=>{ pos[playerKey(n)] = i; });
+  const tiers = Math.floor(sizes.length/2);
+  const room = sizes.slice(), paired = sizes.map(()=>[]), singles = sizes.map(()=>[]), turn = Array(tiers).fill(0);
+  const tierOf = p=>{
+    let start = 0;
+    for(let m=0; m<tiers; m++){ start += sizes[2*m] + sizes[2*m+1]; if(p < start) return m; }
+    return tiers-1;
+  };
+  const placed = {};
+  (pairs||[]).map(pr=>{
+    const s = pr.slice().sort((x,y)=>pos[playerKey(x)]-pos[playerKey(y)]);
+    return {pr: s, top: pos[playerKey(s[0])]};
+  }).sort((x,y)=>x.top-y.top).forEach(u=>{
+    const home = tierOf(u.top), order = [];
+    for(let d=home; d<tiers; d++) order.push(d);
+    for(let up=home-1; up>=0; up--) order.push(up);
+    for(const tier of order){
+      const first = turn[tier] % 2;
+      for(const side of [first, 1-first]){
+        const team = 2*tier + side;
+        if(room[team] < 2) continue;
+        paired[team].push(u.pr[0], u.pr[1]);
+        room[team] -= 2;
+        turn[tier]++;
+        placed[playerKey(u.pr[0])] = placed[playerKey(u.pr[1])] = true;
+        return;
+      }
+    }
+  });
+  let tierNow = 0, step = 0;
+  names.forEach(n=>{
+    if(placed[playerKey(n)]) return;
+    while(tierNow < tiers-1 && room[2*tierNow] + room[2*tierNow+1] === 0){ tierNow++; step = 0; }
+    let side = step % 2;
+    if(room[2*tierNow+side] <= 0) side = 1-side;
+    singles[2*tierNow+side].push(n);
+    room[2*tierNow+side]--;
+    step++;
+  });
+  return paired.map((p,i)=>p.concat(singles[i]));
 }
 // Makes a and b one pair on the same team by swapping players (team sizes
 // never change), picking the swap whose cross-team trade is closest in

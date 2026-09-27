@@ -168,9 +168,10 @@ Google Apps Script file, edited directly.
   dates. Ranking points per night: exhibition (nothing written to Rankings)
   or ranked (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label
   `T<team>`). The team draw (`drawTeams`) takes every confirmed signup
-  except no-shows and fills teams in standings tiers - the top group
-  split alternately between A and B (1st A, 2nd B, 3rd A, ...), the next
-  between C and D, ... -
+  except no-shows and fills teams in standings tiers (`relayDrawTeams`):
+  partner-request pairs first, in their stronger player's tier (alternating
+  A/B), then everyone else in standings order, tier by tier, alternating
+  A, B, A, B (1st A, 2nd B, ...), then C and D, ... -
   `relayTeamSizes` gives every team whole pairs and equal matchups, padding
   with "Guest N" placeholders (the fewest needed, on the last teams).
   Walk-ins and late players are added through `relayAddPlayer` (=
@@ -186,9 +187,12 @@ Google Apps Script file, edited directly.
   it - the Join page keeps already-signed-up names selectable on doubles
   dates for this; `leave` drops it). The draw
   turns requests into pairs (`relayRequestPairs`: mutual first, then
-  one-way ones whose partner asked for no one else) and puts each pair
-  together by swapping players (`relayPairUp`, team sizes unchanged,
-  choosing the swap whose cross-team trade is closest in standings); the
+  one-way ones whose partner asked for no one else) and places them before
+  everyone else (see `relayDrawTeams` above - a 1+14 pair takes an A/B spot
+  and the weakest A/B single slides down to C/D). After the draw, "Pair
+  them" puts a split pair back together by swapping players (`relayPairUp`,
+  team sizes unchanged, choosing the swap whose cross-team trade is closest
+  in standings); the
   Pools/pre-draw "Partner requests" card shows each one's status with a
   "Pair them" button. Requests aren't binding - the organizer can re-pair
   or split them. Test with `site/index.html?mock=1&doubles=1` (the older
