@@ -589,7 +589,15 @@
   // Mirrors joinWithPartner() in gas/Code.gs.
   function joinWithPartner(date, name, contact, partner) {
     partner = String(partner || '').trim().slice(0, 40);
-    if (!partner || !isRelay(date)) return join(date, name, contact);
+    if (!isRelay(date)) return join(date, name, contact);
+    if (!partner) {
+      const st0 = relayState(date);
+      const me = STATE.signups.findIndex((s) => key(s.name) === key(name));
+      if (me < 0 || !(st0.requests || []).some((r) => key(r.name) === key(name))) return join(date, name, contact);
+      st0.requests = st0.requests.filter((r) => key(r.name) !== key(name));
+      st0.rev++;
+      return { ok: true, partnerOnly: true, cleared: true, position: me + 1, cap: eventFor(date).cap };
+    }
     if (key(partner) === key(name)) return { ok: false, error: 'Pick someone other than yourself as your partner.' };
     const idx = STATE.signups.findIndex((s) => key(s.name) === key(name));
     let result;

@@ -180,7 +180,9 @@ Google Apps Script file, edited directly.
   roster + that date's signups) or typed only for a new player (`join`
   action's `partner` →
   `joinWithPartner`, stored as the relay state's `requests`; resubmitting
-  an existing signup just saves the request, `leave` drops it). The draw
+  an existing signup saves/changes the request, or with no partner clears
+  it - the Join page keeps already-signed-up names selectable on doubles
+  dates for this; `leave` drops it). The draw
   turns requests into pairs (`relayRequestPairs`: mutual first, then
   one-way ones whose partner asked for no one else) and puts each pair
   together by swapping players (`relayPairUp`, team sizes unchanged); the
