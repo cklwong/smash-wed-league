@@ -144,6 +144,12 @@ function doPost(e) {
   } catch (err) {
     result = { error: String(err) };
   }
+  // Every dated action may have changed that week (check-in, scores, the
+  // match desk, doubles games, signups...), so the next read recomputes it
+  // instead of serving another phone a cached board for up to 15s.
+  if (body.date && body.action !== 'getpin' && body.action !== 'verifyPin') {
+    try { bustWeekCache(body.date); } catch (err) { Logger.log('bustWeekCache failed: ' + err); }
+  }
   return jsonOutput(result);
 }
 
@@ -155,7 +161,9 @@ function jsonOutput(obj) {
 // Short-TTL cache for the read endpoints - absorbs duplicate/concurrent
 // requests (multiple phones on league night, the 45s schedule poll, repeat
 // player-modal opens) without needing invalidation wired into every write
-// action. Staleness is bounded by ttlSeconds.
+// action. Staleness is bounded by ttlSeconds. (The week view is the
+// exception: getWeek keeps its own versioned copy that doPost clears after
+// every dated action, so phones on the desk see each other's changes.)
 function cached(key, ttlSeconds, compute) {
   var cache = CacheService.getScriptCache();
   var hit = cache.get(key);
@@ -285,7 +293,20 @@ function getWeek(dateISO) {
   // `now` is excluded from the cached payload (and always computed fresh)
   // since the client uses it to sync its clock against the server's -
   // caching it would let SERVER_OFFSET drift by up to the cache TTL.
-  var result = cached('week_' + dateISO, 15, function () { return computeWeek(dateISO); });
+  var cache = CacheService.getScriptCache();
+  var key = 'week_' + dateISO, verKey = 'weekv_' + dateISO;
+  // Each cached copy is stamped with the week's version (bumped by
+  // bustWeekCache) as it stood when the read began. A read that started
+  // before a write but finishes after its bust would otherwise re-cache the
+  // old board for 15s; its stale stamp makes every later read skip it.
+  var ver = cache.get(verKey) || '';
+  var hit = cache.get(key);
+  if (hit) {
+    var entry = JSON.parse(hit);
+    if (entry && entry.v === ver && entry.data) { entry.data.now = Date.now(); return entry.data; }
+  }
+  var result = computeWeek(dateISO);
+  cache.put(key, JSON.stringify({ v: ver, data: result }), 15);
   result.now = Date.now();
   return result;
 }
@@ -2669,6 +2690,7 @@ function relayNightError() {
 function bustWeekCache(dateISO) {
   var cache = CacheService.getScriptCache();
   cache.remove('week_' + dateISO);
+  cache.put('weekv_' + dateISO, String(Date.now()) + Math.random(), 21600); // see getWeek
   cache.remove('weekDates');
 }
 

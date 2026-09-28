@@ -564,7 +564,12 @@ async function fetchWeek(dateISO){
     return await r.json();
   }catch(e){ return {date:dateISO, exists:false, signups:[], pools:[]}; }
 }
+// Bumped when any action is sent and when its reply lands: a background
+// refresh that overlapped one read the sheet mid-change, so it's dropped
+// rather than painting an older board over the newer one.
+let ACTION_SEQ = 0;
 async function postAction(body){
+  ACTION_SEQ++;
   try{
     const r = await fetch(GAS_URL, {
       method:'POST',
@@ -573,6 +578,7 @@ async function postAction(body){
     });
     return await r.json();
   }catch(e){ return {ok:false, error:String(e)}; }
+  finally{ ACTION_SEQ++; }
 }
 function postJoin(dateISO, name, contact, partner){ return postAction({action:'join', date:dateISO, name, contact, partner}); }
 function postLeave(dateISO, name){ return postAction({action:'leave', date:dateISO, name}); }
@@ -794,6 +800,33 @@ document.getElementById('schedule-subnav').addEventListener('click', e=>{
 
 let scheduleRenderToken = 0;
 let LAST_WEEK = null; // last painted week payload; optimistic actions mutate it and repaint
+let LAST_WEEK_JSON = ''; // last fetched payload (minus the server clock), so an unchanged poll skips the repaint
+
+// Repaints that arrive on their own (a background poll, or an earlier
+// action's reply landing) wait while the organizer is mid-tap or typing in a
+// score/name box: replacing the page then swallows the tap (the button under
+// the finger is gone by the time it lifts) or closes the phone keyboard
+// mid-number. The waiting repaint runs right after, from LAST_WEEK.
+let POINTER_DOWN = false, PAINT_PENDING = false;
+function scheduleUserBusy(){
+  if(POINTER_DOWN) return true;
+  const ae = document.activeElement;
+  return !!(ae && document.getElementById('view-schedule').contains(ae)
+    && (ae.tagName==='SELECT' || (ae.tagName==='INPUT' && (ae.type==='number' || ae.type==='text'))));
+}
+function paintWhenIdle(){
+  if(scheduleUserBusy()){ PAINT_PENDING = true; return; }
+  PAINT_PENDING = false;
+  if(LAST_WEEK) paintSchedule(LAST_WEEK);
+}
+function flushPendingPaint(){
+  // After the tap's click handler (or the next focus) has run.
+  setTimeout(()=>{ if(PAINT_PENDING) paintWhenIdle(); }, 50);
+}
+document.addEventListener('pointerdown', ()=>{ POINTER_DOWN = true; }, true);
+document.addEventListener('pointerup', ()=>{ POINTER_DOWN = false; flushPendingPaint(); }, true);
+document.addEventListener('pointercancel', ()=>{ POINTER_DOWN = false; flushPendingPaint(); }, true);
+document.addEventListener('focusout', flushPendingPaint, true);
 async function renderSchedule(quiet=false, force=false){
   const dateISO = getSessionDateISO();
   document.getElementById('schedule-sub').textContent = `Wed, ${fmtDate(dateISO)} · pools & results as entered by the organizer`;
@@ -801,12 +834,14 @@ async function renderSchedule(quiet=false, force=false){
   const skel = document.getElementById('schedule-skel');
   if(!quiet) skel.style.display = 'block';
   const myToken = ++scheduleRenderToken;
+  const seqAtStart = ACTION_SEQ;
   const week = await fetchWeek(dateISO);
   // Overlapping calls can race (e.g. an action's forced refresh landing while
   // the 45s poll is also in flight) - if a newer call has started since this
   // one began, abandon this one rather than let it paint stale data over
   // the newer call's result, or clobber its NEXT_MATCHES/NEXT_SELECTED state.
   if(myToken !== scheduleRenderToken) return;
+  if(quiet && !force && ACTION_SEQ !== seqAtStart) return; // an action overlapped this poll - see ACTION_SEQ
 
   if(!week.exists){
     // On a background refresh a fetch hiccup reports exists:false - keep the
@@ -828,8 +863,14 @@ async function renderSchedule(quiet=false, force=false){
 
   WEEK_DATE = dateISO;
   if(week.now) SERVER_OFFSET = week.now - Date.now();
+  const json = JSON.stringify(Object.assign({}, week, {now:0}));
+  if(isRelayWeek(week) && week.relay) relayApplyPending(week.relay); // after json, so it stays the backend's own state
+  // A background poll that brought back nothing new leaves the page alone.
+  if(quiet && !force && json === LAST_WEEK_JSON && LAST_WEEK && LAST_WEEK.date === dateISO) return;
+  LAST_WEEK_JSON = json;
   LAST_WEEK = week;
-  paintSchedule(week, dateISO);
+  if(quiet) paintWhenIdle();
+  else { PAINT_PENDING = false; paintSchedule(week, dateISO); }
 }
 
 // Pure repaint of an already-fetched week - no network. Optimistic action
@@ -1054,7 +1095,7 @@ function checkinRow(s, num, dateISO, admin){
 
 // Flip the tapped row's badge/buttons immediately rather than waiting on the
 // round trip to Apps Script (which can take a couple seconds) - the
-// renderSchedule(true) call below still fetches the authoritative state
+// renderSchedule(true, true) call below still fetches the authoritative state
 // afterward, so a failed request or a seat conflict self-corrects right away.
 async function statusAction(btnEl, action, dateISO, name){
   if(action==='noshow' && !confirm(isRelayWeek(LAST_WEEK)
@@ -1072,7 +1113,7 @@ async function statusAction(btnEl, action, dateISO, name){
   } else if(action==='checkin' && res.seated===false){
     alert(`${name} is checked in, but pools were already redrawn without a spot for them — use "Redraw pools" above to seat them.`);
   }
-  renderSchedule(true);
+  renderSchedule(true, true);
 }
 
 function adminSecret(){ return sessionStorage.getItem('sw-admin-secret') || ''; }
@@ -2068,6 +2109,22 @@ const RELAY_OPEN_ROUNDS = {};   // "tie-round" -> true: a collapsed round the or
 let RELAY_TEAM_COUNT_PICK = null;
 let RELAY_EDIT_SEQ = 0;
 let RELAY_SAVE_CHAIN = Promise.resolve();
+// Game changes (start / score / clear) shown on the board but not yet
+// confirmed by their own reply. A reply or refresh carries the backend's
+// state as of when it was read, which can predate these (e.g. game 1's reply
+// landing after game 2 was tapped), so they're re-applied on top of it -
+// otherwise game 2 would vanish until its own reply came back.
+let RELAY_PENDING = [];
+function relayApplyPending(state){ RELAY_PENDING.forEach(op=>op(state)); }
+async function relayGameAction(op, body, errMsg){
+  RELAY_PENDING.push(op);
+  op(LAST_WEEK.relay);
+  paintSchedule(LAST_WEEK);
+  const res = await postAction(body);
+  RELAY_PENDING = RELAY_PENDING.filter(o=>o!==op);
+  if(!res.ok) alert(res.error || errMsg);
+  relayAdopt(res);
+}
 
 function isRelayWeek(w){ return !!(w && w.event && w.event.format==='relay'); }
 function weekCap(w){ return (w && w.event && w.event.cap) || CAP; }
@@ -2775,9 +2832,9 @@ function relayTeamCard(week, state, ti, admin){
       ${r1Locked ? '' : `<select class="mini-select" aria-label="Move ${escAttr(p)} to another team" onchange="if(this.value!=='') relayMoveTeam(${ti},${pi},Number(this.value))">
         <option value="">Move…</option>${state.teams.map((o,oi)=>oi===ti?'':`<option value="${oi}">Team ${o.id}</option>`).join('')}
       </select>`}
-      <button class="icon-btn" title="${r1Locked ? 'Replace with a guest' : 'Take off the team'}" onclick="relayRemove(${ti},${pi})">✕</button>
+      <button class="icon-btn" title="${r1Locked && !relayCanTakeOff(ti,pi) ? 'Replace with a guest' : 'Take off the team'}" onclick="relayRemove(${ti},${pi})">✕</button>
     </span></div>`).join('')
-    + `<p class="game-note" style="margin:6px 0 0;">P1+P2, P3+P4, … are the round 1 pairs${r1Locked ? ' — fixed now that round 1 has started; ✕ swaps a player for a guest' : ''}.</p>
+    + `<p class="game-note" style="margin:6px 0 0;">P1+P2, P3+P4, … are the round 1 pairs${r1Locked ? ' — fixed now that round 1 has started; ✕ swaps a player who has played for a guest, or takes off one who hasn\'t' : ''}.</p>
     <div class="search-row" style="margin:10px 0 0; gap:6px; flex-wrap:wrap;">
       <input type="text" id="relay-add-${ti}" list="relay-player-names" placeholder="Late player or guest name" style="min-width:140px;" autocomplete="off">
       <button class="btn small ghost" title="Signs them up, checks them in and puts them on this team (in a guest's spot if there is one)" onclick="relayAddTyped(${ti})">Add player</button>
@@ -2866,7 +2923,8 @@ function relayCreds(){ return {secret: adminSecret(), pin: eventPin()}; }
 function relayAdopt(res){
   if(res && res.relay && LAST_WEEK && isRelayWeek(LAST_WEEK)){
     LAST_WEEK.relay = res.relay;
-    paintSchedule(LAST_WEEK);
+    relayApplyPending(LAST_WEEK.relay);
+    paintWhenIdle(); // the reply lands seconds later - don't cut into a tap or a score being typed
   } else {
     renderSchedule(true, true);
   }
@@ -2918,12 +2976,23 @@ function relayMoveTeam(ti, pi, toTi){
 }
 // Before round 1: takes the player off (the team is then a player short -
 // the Pools tab offers a guest). Once pairs are fixed: swaps them for a
-// guest in the same spot, so every pair stays together.
+// guest in the same spot, so every pair stays together - unless nobody from
+// their spot down has played yet (e.g. a guest added by mistake after the
+// start), who can still be taken off without changing a pair that played.
+function relayCanTakeOff(ti, pi){
+  const tie = Math.floor(ti/2);
+  const played = new Set(LAST_WEEK.relay.games.filter(g=>g.tie===tie).flatMap(g=>(g.a||[]).concat(g.b||[])).map(playerKey));
+  return relayTeams()[ti].players.slice(pi).every(p=>!played.has(playerKey(p)));
+}
 function relayRemove(ti, pi){
   const t = relayTeams()[ti];
   const name = t.players[pi];
   const v = relayTieView(LAST_WEEK.relay, Math.floor(ti/2));
-  if(v.rounds[0].started){
+  if(v.rounds[0].started && relayCanTakeOff(ti, pi)){
+    if(!confirm(`Take ${name} off Team ${t.id}? They haven't played yet.`)) return;
+    t.players.splice(pi, 1);
+    if(t.lineup2) t.lineup2 = t.lineup2.filter(x=>playerKey(x)!==playerKey(name));
+  } else if(v.rounds[0].started){
     if(!confirm(`Replace ${name} with a guest on Team ${t.id}? Games they already played stay recorded.`)) return;
     const guest = relayNextGuestName();
     t.players[pi] = guest;
@@ -2933,6 +3002,16 @@ function relayRemove(ti, pi){
     t.players.splice(pi, 1);
   }
   relayCommitTeams();
+}
+// Once a matchup has started, a team that gains a player (rather than
+// filling a Guest N spot) no longer matches its opponent, and that matchup's
+// games won't start until the sizes are even again - confirm first.
+function relayConfirmGrow(ti){
+  const tie = Math.floor(ti/2);
+  if(!relayTieView(LAST_WEEK.relay, tie).rounds[0].started) return true;
+  const t = relayTeams()[ti], o = relayTeams()[ti^1];
+  if(!o) return true;
+  return confirm(`Team ${t.id} vs Team ${o.id} has already started. Adding a player makes it ${t.players.length+1} vs ${o.players.length}, and their next games won't start until both teams have the same, even number of players again (✕ takes off anyone who hasn't played). Add anyway?`);
 }
 function relayNextGuestName(){
   const used = new Set(relayTeams().flatMap(t=>t.players.map(playerKey)));
@@ -2949,6 +3028,8 @@ async function relayAddPlayerClick(name, ti, inputEl){
   if(ti !== null){
     const clash = relayTeams().find(t=>t.players.some(p=>playerKey(p)===playerKey(name)));
     if(clash){ alert(`${name} is already on Team ${clash.id}.`); return; }
+    // A late player takes a Guest N spot if the team has one (relayPlaceOnTeam) - no size change then.
+    if(!relayTeams()[ti].players.some(p=>/^guest \d+$/i.test(String(p).trim())) && !relayConfirmGrow(ti)) return;
   }
   if(inputEl) inputEl.value = '';
   const res = await postAction({action:'relayAddPlayer', date:WEEK_DATE, name, team: ti, ...relayCreds()});
@@ -2976,6 +3057,7 @@ function relayAddGuest(ti, placeholderOnly){
   if(LAST_WEEK.signups.some(s=>playerKey(s.name)===playerKey(name))){
     alert(`${name} signed up for tonight — use "Add player" instead so they're checked in and get ranking points.`); return;
   }
+  if(!relayConfirmGrow(ti)) return;
   teams[ti].players.push(name);
   if(named) relay.guests = (relay.guests||[]).concat([name]);
   if(inp) inp.value = '';
@@ -3019,11 +3101,10 @@ async function relayStartClick(tie, round, seq){
   const clash = relayOnCourt(state, pairs.a.concat(pairs.b));
   if(clash.length){ alert(`${clash.join(' and ')} ${clash.length>1?'are':'is'} still on court in another game — score or cancel that game first.`); return; }
   // Straight onto the board; the reply reconciles (or rolls it back).
-  state.games.push({tie, round, seq, a:pairs.a, b:pairs.b, startedAt: Date.now()+SERVER_OFFSET});
-  paintSchedule(LAST_WEEK);
-  const res = await postAction(body);
-  if(!res.ok) alert(res.error || 'Could not start the game — please try again.');
-  relayAdopt(res);
+  const startedAt = Date.now()+SERVER_OFFSET;
+  await relayGameAction(st=>{
+    if(!relayFindGame(st, tie, round, seq)) st.games.push({tie, round, seq, a:pairs.a, b:pairs.b, startedAt});
+  }, body, 'Could not start the game — please try again.');
 }
 
 async function relayScoreClick(tie, round, seq){
@@ -3033,9 +3114,8 @@ async function relayScoreClick(tie, round, seq){
   if(v.error){ alert(v.error); return; }
   const body = {action:'relayScore', date:WEEK_DATE, tie, round, seq, scoreA:v.a, scoreB:v.b, ...relayCreds()};
   const state = LAST_WEEK.relay;
-  let rec = relayFindGame(state, tie, round, seq);
-  if(!rec){
-    let pairs;
+  let pairs = null;
+  if(!relayFindGame(state, tie, round, seq)){
     if(round===RELAY_TIEBREAK_ROUND){
       pairs = relayTiebreakPicks(tie);
       if(!pairs){ alert('Pick two different players from each team first.'); return; }
@@ -3044,27 +3124,27 @@ async function relayScoreClick(tie, round, seq){
       const g = relayTieView(state, tie).rounds[round-1].games[seq];
       pairs = {a:g.a, b:g.b};
     }
-    rec = {tie, round, seq, a:pairs.a, b:pairs.b};
-    state.games.push(rec);
   }
-  rec.sa = v.a; rec.sb = v.b; rec.finishedAt = Date.now()+SERVER_OFFSET;
+  const finishedAt = Date.now()+SERVER_OFFSET;
   if(ia) ia.value = ''; if(ib) ib.value = '';
   RELAY_OPEN_EDIT = null;
-  paintSchedule(LAST_WEEK);
-  const res = await postAction(body);
-  if(!res.ok) alert(res.error || 'Could not save the score — please try again.');
-  relayAdopt(res);
+  await relayGameAction(st=>{
+    let rec = relayFindGame(st, tie, round, seq);
+    if(!rec){
+      if(!pairs) return;
+      rec = {tie, round, seq, a:pairs.a, b:pairs.b};
+      st.games.push(rec);
+    }
+    rec.sa = v.a; rec.sb = v.b; rec.finishedAt = finishedAt;
+  }, body, 'Could not save the score — please try again.');
 }
 
 async function relayClearClick(tie, round, seq, done){
   if(!confirm(done ? 'Delete this game\'s score? It goes back to unplayed.' : 'Take this game off court? No score is recorded.')) return;
-  const state = LAST_WEEK.relay;
-  state.games = state.games.filter(g=>!(g.tie===tie && g.round===round && g.seq===seq));
   RELAY_OPEN_EDIT = null;
-  paintSchedule(LAST_WEEK);
-  const res = await postAction({action:'relayClearGame', date:WEEK_DATE, tie, round, seq, ...relayCreds()});
-  if(!res.ok) alert(res.error || 'Could not update the game — please try again.');
-  relayAdopt(res);
+  await relayGameAction(st=>{
+    st.games = st.games.filter(g=>!(g.tie===tie && g.round===round && g.seq===seq));
+  }, {action:'relayClearGame', date:WEEK_DATE, tie, round, seq, ...relayCreds()}, 'Could not update the game — please try again.');
 }
 
 // ---- Admin: sheet editors (SHEET_EDITORS script property) ----
