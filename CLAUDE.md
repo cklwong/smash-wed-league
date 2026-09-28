@@ -199,8 +199,7 @@ Google Apps Script file, edited directly.
   in standings); the
   Pools/pre-draw "Partner requests" card shows each one's status with a
   "Pair them" button. Requests aren't binding - the organizer can re-pair
-  or split them. Test with `site/index.html?mock=1&doubles=1` (the older
-  `&relay=1` still works).
+  or split them. Test with `site/index.html?mock=1&doubles=1`.
 - **One-time environment setup** on a fresh spreadsheet binding: set the
   `ADMIN_EMAILS` and `ADMIN_SECRET` script properties (Project Settings →
   Script Properties) - optionally also `SHEET_EDITORS` (comma-separated emails

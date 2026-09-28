@@ -75,12 +75,12 @@
     relay: {},  // ISO date -> {rev, teams, games} - mirrors the "Doubles M/D/YY" tab's JSON
     sheetEditors: [] // mirrors the SHEET_EDITORS script property
   };
-  // ?doubles=1 (or the older ?relay=1) starts the sandbox with tonight already set up as a team
+  // ?doubles=1 starts the sandbox with tonight already set up as a team
   // doubles night (otherwise switch it on the Admin tab like the real site).
   // The date isn't known yet (the page script defines getSessionDateISO
   // after this file runs), so the seed is applied on the first request.
   const qs = new URLSearchParams(location.search);
-  STATE.pendingRelaySeed = qs.get('doubles') === '1' || qs.get('relay') === '1';
+  STATE.pendingRelaySeed = qs.get('doubles') === '1';
   STATE.signups[STATE.signups.length - 1].checkedIn = false; // waitlist isn't "at the venue"
   STATE.signups[STATE.signups.length - 2].checkedIn = false;
 
