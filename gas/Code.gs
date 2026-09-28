@@ -1499,6 +1499,55 @@ function getRegisteredEmail(name) {
   return '';
 }
 
+// A new player's signup email only lands in that week's tab (CONTACT_COL);
+// the registered email getRegisteredEmail() reads lives in Rankings column
+// C, and a new player has no Rankings row until their first finalize. So
+// finalize copies each signup's email onto their Rankings row - only where
+// that row has no email yet, so one set via renamePlayer is never replaced.
+// Returns how many emails it saved.
+function saveSignupEmails(rankSheet, weekSheet) {
+  if (!rankSheet || !weekSheet) return 0;
+  var lastRow = weekSheet.getLastRow();
+  if (lastRow < 2) return 0;
+  var weekData = weekSheet.getRange(1, 1, lastRow, Math.max(CONTACT_COL, weekSheet.getLastColumn())).getValues();
+  var contacts = {}; // lowercased signup name -> email
+  parseSignups(weekData).forEach(function (s) {
+    var c = (weekData[s.row - 1][CONTACT_COL - 1] || '').toString().trim();
+    if (isEmail(c)) contacts[s.name.toLowerCase()] = c;
+  });
+  if (!Object.keys(contacts).length) return 0;
+
+  var data = rankSheet.getDataRange().getValues();
+  var saved = 0;
+  for (var r = RANKINGS_FIRST_DATA_ROW - 1; r < data.length && r < RANKINGS_LAST_DATA_ROW; r++) {
+    var nm = (data[r][RANKINGS_NAME_COL - 1] || '').toString().trim().toLowerCase();
+    if (!nm || !contacts[nm]) continue;
+    if ((data[r][RANKINGS_EMAIL_COL - 1] || '').toString().trim()) continue;
+    rankSheet.getRange(r + 1, RANKINGS_EMAIL_COL).setValue(contacts[nm]);
+    saved++;
+  }
+  if (saved) rankSheet.getRange(2, RANKINGS_EMAIL_COL).setValue('Email');
+  return saved;
+}
+
+// One-time fix, run from the Apps Script editor: fills in the registered
+// email of players who signed up with one before finalize started saving it
+// (see saveSignupEmails). Walks every weekly tab newest-first, so a player
+// who changed email between weeks gets their latest one.
+function backfillSignupEmails() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var rankSheet = ss.getSheetByName('Rankings');
+  if (!rankSheet) { Logger.log('Rankings sheet not found'); return; }
+  var weeks = ss.getSheets().filter(function (sh) { return headerToISODate(sh.getName()); });
+  weeks.sort(function (a, b) {
+    var da = headerToISODate(a.getName()), db = headerToISODate(b.getName());
+    return da < db ? 1 : (da > db ? -1 : 0);
+  });
+  var total = 0;
+  weeks.forEach(function (sh) { total += saveSignupEmails(rankSheet, sh); });
+  Logger.log('Saved ' + total + ' registered email(s) from signup contacts.');
+}
+
 // Admin-only: every player's registered email, keyed by their exact
 // Rankings name - lets the rename tool show the current email (if any) as
 // soon as an organizer picks a player, instead of guessing. Not exposed via
@@ -2302,6 +2351,7 @@ function doFinalizeWeek(dateISO) {
     }
   }
 
+  saveSignupEmails(sheet, getWeekSheet(dateISO));
   applyAbsencePasses(sheet, rCol, playedRows, names);
 
   // Rank/Avg are formulas that depend on the R/RP values and absence-pass

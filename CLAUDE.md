@@ -116,6 +116,12 @@ Google Apps Script file, edited directly.
   what a finalize would write without touching the sheet) or
   `runFinalizeDate()` (runs it for real). `fixAvgFormulas()` force-rewrites
   the Rankings Avg column if its formulas get mangled.
+- **Registered emails**: a signup's email is written to the week tab's
+  `CONTACT_COL`, but join/leave notifications read the Rankings column C
+  email (`getRegisteredEmail`). Finalize copies signup emails into column C
+  (`saveSignupEmails`, only where it's blank, so an admin-set email via
+  `renamePlayer` wins). `backfillSignupEmails()` (run once from the editor)
+  fills in players who signed up before that.
 - **Signup column A**: new week tabs (`createWeek` → `clearSignupsForNewWeek`)
   start with an empty signup list - no "Max limit (24ppl)"/"Wait List Below"
   labels and no stray "Sorted Name"/"Sorted Rank" copy below it; the site
