@@ -32,7 +32,7 @@
  *   GET  ?action=week&date=YYYY-MM-DD  -> { date, exists, hasScores, signups, pools, live } (+ event and relay on a team relay night - see computeWeek)
  *   GET  ?action=weekDates             -> { dates: ['YYYY-MM-DD', ...], formats: { 'YYYY-MM-DD': {format:'relay', rpMode}, ... } } (formats lists relay nights only)
  *   GET  ?action=headtohead&name=NAME  -> { opponents: [{name, wins, losses, matches: [{date, scoreFor, scoreAgainst, won}, ...]}, ...] } (record over NAME's last 6 completed weeks + every individual game vs each opponent shared a pool with in that window; matches are most-recent-first)
- *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error } (emails an "added" confirmation if contact looks like an email, or if the player has a registered email on file - see renamePlayer)
+ *   POST { action:'join', date, name, contact } -> { ok, row } or { ok:false, error } (emails an "added" confirmation if contact looks like an email, or if the player has a registered email on file - see renamePlayer; a first-time player who gives an email gets a welcome email instead - see isReturningPlayer)
  *   POST { action:'leave', date, name }         -> { ok:true } or { ok:false, error } (emails a "removed" notice under the same conditions as join)
  *   POST { action:'getpin', date, secret }      -> { ok, pin }
  *   POST { action:'generatePools', date, pin, padGuests:['A',...], redraw } -> { ok, pools }
@@ -774,8 +774,15 @@ function addJoin(dateISO, name, contact, quiet) {
   }
   var email = quiet ? '' : (isEmail(contact) ? contact.trim() : getRegisteredEmail(name));
   if (email) {
-    try { emailAddedNotification(email, name, dateISO); }
-    catch (err) { Logger.log('emailAddedNotification failed: ' + err); }
+    // A first-timer gets the welcome email instead - it confirms the signup
+    // too, so they don't get two emails for one join.
+    if (isEmail(contact) && !isReturningPlayer(name, dateISO)) {
+      try { emailWelcomeNewPlayer(email, name, dateISO); }
+      catch (err) { Logger.log('emailWelcomeNewPlayer failed: ' + err); }
+    } else {
+      try { emailAddedNotification(email, name, dateISO); }
+      catch (err) { Logger.log('emailAddedNotification failed: ' + err); }
+    }
   }
   return { ok: true, row: targetRow, position: position, cap: capFor(dateISO) };
 }
@@ -841,6 +848,46 @@ function emailAddedNotification(email, name, dateISO) {
     'Hi ' + name + ',\n\n' +
     'You\'ve been added to the signup list for Smash Wed on ' + dateISO + '.\n\n' +
     'You can check standings, this week\'s pools, and manage your signups any time here:\n' + SITE_URL);
+}
+
+// Whether name has played or signed up before: a Rankings row (matched the
+// same exact/short-name way as seeding - matchNameIndex), or a signup on any
+// other weekly tab. The second check covers someone who signs up for a
+// couple of weeks before their first one is finalized into Rankings.
+function isReturningPlayer(name, dateISO) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var rankSheet = ss.getSheetByName('Rankings');
+  if (rankSheet) {
+    var data = rankSheet.getDataRange().getValues();
+    var keys = [];
+    for (var r = RANKINGS_FIRST_DATA_ROW - 1; r < data.length && r < RANKINGS_LAST_DATA_ROW; r++) {
+      var nm = (data[r][RANKINGS_NAME_COL - 1] || '').toString().trim().toLowerCase();
+      if (nm) keys.push(nm);
+    }
+    if (matchNameIndex(keys, name) >= 0) return true;
+  }
+  var thisTab = tabNameForDate(dateISO);
+  return ss.getSheets().some(function (sh) {
+    if (sh.getName() === thisTab || !headerToISODate(sh.getName())) return false;
+    var lastRow = sh.getLastRow();
+    if (lastRow < 2) return false;
+    return !!findSignup(parseSignups(sh.getRange(1, 1, lastRow, 2).getValues()), name);
+  });
+}
+
+// Sent instead of emailAddedNotification the first time someone signs up
+// (see isReturningPlayer) with an email.
+function emailWelcomeNewPlayer(email, name, dateISO) {
+  MailApp.sendEmail(email.trim(),
+    'Welcome to Smash Wed! You\'re on the list for ' + dateISO,
+    'Hi ' + name + ',\n\n' +
+    'Welcome to Smash Wed League! You\'ve been added to the signup list for ' + dateISO + '.\n\n' +
+    'How it works:\n' +
+    '- Check in with the organizer when you arrive.\n' +
+    '- Players are drawn into round-robin pools (or teams on doubles nights), and results feed the season standings.\n' +
+    '- Next time you sign up, just pick your name from the list - we\'ll keep emailing you here when you\'re added to or removed from an event.\n\n' +
+    'Standings, this week\'s pools, and your signups are all here:\n' + SITE_URL + '\n\n' +
+    'See you on court!');
 }
 
 // Shifts the signup-list columns (name, check-in status, contact, no-show

@@ -121,7 +121,10 @@ Google Apps Script file, edited directly.
   email (`getRegisteredEmail`). Finalize copies signup emails into column C
   (`saveSignupEmails`, only where it's blank, so an admin-set email via
   `renamePlayer` wins). `backfillSignupEmails()` (run once from the editor)
-  fills in players who signed up before that.
+  fills in players who signed up before that. A first-time player (no
+  Rankings row, no signup on any other week tab - `isReturningPlayer`) who
+  joins with an email gets `emailWelcomeNewPlayer` instead of the usual
+  "you're on the list" email.
 - **Signup column A**: new week tabs (`createWeek` → `clearSignupsForNewWeek`)
   start with an empty signup list - no "Max limit (24ppl)"/"Wait List Below"
   labels and no stray "Sorted Name"/"Sorted Rank" copy below it; the site
