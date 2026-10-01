@@ -163,14 +163,16 @@ Google Apps Script file, edited directly.
   (the team's optional `lineup2`); if neither team re-pairs, round 2 uses
   its own order that brings in the match-ups round 1 didn't have (with 3
   pairs, each pair meets its third opponent and replays one), otherwise
-  the new pairs play round 1's order (`relaySchedule`). Round 1 pairs lock
+  the new pairs are fitted to one of the fixed orders, relabelled so they meet
+  the fewest round-1 opponents player by player (`relayRepairSchedule`, via
+  `relaySchedule`). Round 1 pairs lock
   when round 1 starts, round 2 pairs when round 2 starts; a 1-1 tie goes to
   one tiebreak game. Games only start
   when both teams in a matchup have the same, even number of players
   (`relayMatchupProblem`), and never while one of their players is still on
   court in another game (`relayOnCourt`, checked by `relayStartGame` and on
   the Live tab, which shows "waiting for …" instead of Start). The pure rules (`relayPairs`/`relayLineup`/
-  `relaySchedule`/`relayTieView`/`relayPlayerStats`/`relayTeamSizes`)
+  `relaySchedule`/`relayTieView`/`relayPlayerStats`/`relayTeamSizes`/`relayRepairSchedule`)
   exist in both `Code.gs` and `index.html` and must stay in sync (the mock
   reuses the page's copies). Singles-only actions (`generatePools`,
   `startMatch`, `recordScore`, `editScore`, `cancelMatch`) refuse on these
@@ -202,7 +204,9 @@ Google Apps Script file, edited directly.
   turns requests into pairs (`relayRequestPairs`: mutual first, then
   one-way ones whose partner asked for no one else) and places them before
   everyone else (see `relayDrawTeams` above - a 1+14 pair takes an A/B spot
-  and the weakest A/B single slides down to C/D). After the draw, "Pair
+  and the weakest A/B single slides down to C/D). On the Pools page each player's "Pair with…"
+  dropdown (round 1 positions and round 2 re-pairs) pairs two players in one
+  swap (`relayPairWith`). After the draw, "Pair
   them" puts a split pair back together by swapping players (`relayPairUp`,
   team sizes unchanged, choosing the swap whose cross-team trade is closest
   in standings); the
