@@ -141,6 +141,7 @@
   .roster-list .remove-btn{background:none; border:none; font-size:15px; line-height:1; cursor:pointer; padding:4px 6px; flex-shrink:0; opacity:.75;}
   .roster-list .remove-btn:hover{opacity:1;}
   .empty-row{color:var(--text-mute); font-size:13px; padding:8px 0;}
+  .inactive-row{opacity:.55;}
   .mine-badge{background:var(--amber-tint); color:var(--amber-deep); font-size:11px; padding:2px 7px; border-radius:20px; font-weight:500;}
   .mine-badge.ok{background:var(--win-tint); color:var(--win);}
   .mine-badge.ns{background:var(--loss-tint); color:var(--loss);}
@@ -652,16 +653,50 @@ function showChartTip(evt, label){
 }
 function closeChartTip(){ document.getElementById('chart-tip').classList.remove('active'); }
 document.addEventListener('click', e=>{ if(!e.target.closest('.spark-hit')) closeChartTip(); });
+// Players whose last ranked week is more than INACTIVE_MONTHS before the most
+// recent finalized week are tucked behind a "Show" link instead of padding the
+// table. Measured from the latest finalized week rather than today, so a
+// league break doesn't empty the board. Ranks are the sheet's own (the ones
+// pool seeding uses), so hiding someone doesn't renumber anyone else.
+const INACTIVE_MONTHS = 2;
+let showInactive = false;
+function inactiveCutoffISO(){
+  const latest = WEEKS[0] || (PLAYERS.flatMap(p=>p.trend.map(t=>t.date)).filter(Boolean).sort().pop());
+  if(!latest) return null;
+  const d = new Date(latest+'T12:00:00Z');
+  d.setUTCMonth(d.getUTCMonth() - INACTIVE_MONTHS);
+  return d.toISOString().slice(0,10);
+}
+function isInactive(p, cutoff){
+  if(!cutoff) return false;
+  const last = p.trend.length ? p.trend[p.trend.length-1].date : '';
+  return !last || last < cutoff;
+}
 function renderStandings(filter=''){
   const body = document.getElementById('standings-body');
   const f = filter.trim().toLowerCase();
-  body.innerHTML = PLAYERS.filter(p=>p.name.toLowerCase().includes(f)).map(p=>`
-    <tr class="row-clickable" onclick="openModal('${p.name.replace(/'/g,"\\'")}')">
+  const cutoff = inactiveCutoffISO();
+  const inactive = PLAYERS.filter(p=>isInactive(p, cutoff));
+  // A search always finds everyone, active or not.
+  const shown = PLAYERS.filter(p=>p.name.toLowerCase().includes(f) && (f || showInactive || !isInactive(p, cutoff)));
+  const rows = shown.map(p=>`
+    <tr class="row-clickable${isInactive(p, cutoff)?' inactive-row':''}" onclick="openModal('${p.name.replace(/'/g,"\\'")}')">
       <td><span class="rank-badge ${p.rank<=3?'top3':''}">${p.rank}</span></td>
       <td class="p-name">${p.name}</td>
       <td class="num-col avg-val">${p.avg.toFixed(2)}</td>
       <td>${sparkline(p.trend)}</td>
     </tr>`).join('');
+  const foot = (!f && inactive.length)
+    ? `<tr><td colspan="4" class="empty-row">${showInactive
+        ? `Showing ${inactive.length} player${inactive.length===1?'':'s'} who haven't played since ${fmtDate(cutoff)}. <a href="#" onclick="toggleInactive(event)">Hide</a>`
+        : `${inactive.length} player${inactive.length===1?'':'s'} who haven't played since ${fmtDate(cutoff)} hidden. <a href="#" onclick="toggleInactive(event)">Show</a>`}</td></tr>`
+    : '';
+  body.innerHTML = rows + foot;
+}
+function toggleInactive(e){
+  e.preventDefault();
+  showInactive = !showInactive;
+  renderStandings(document.getElementById('standings-search').value);
 }
 function weekPill(t){
   return `<div class="week-pill"><span class="wp-pool">${t.pool || '–'}</span><span class="wp-date">${t.date?fmtDate(t.date):''}</span></div>`;

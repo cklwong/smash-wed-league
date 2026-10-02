@@ -50,6 +50,16 @@
     }
     return { name, rank: i + 1, avg: Math.round((24 - i * 0.55) * 100) / 100, trend };
   });
+  // Two players last played ~3 months ago, so the Standings page's
+  // "haven't played in 2 months" hiding has someone to hide.
+  ['Player 07', 'Player 19'].forEach(n => {
+    const r = RANKINGS.find(x => x.name === n);
+    r.trend.forEach(t => {
+      const d = new Date(t.date + 'T12:00:00Z');
+      d.setUTCDate(d.getUTCDate() - 12 * 7);
+      t.date = d.toISOString().slice(0, 10);
+    });
+  });
 
   function rankFor(name) {
     const k = key(name);
