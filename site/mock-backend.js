@@ -220,7 +220,7 @@
   // are the page's own relay* functions - by the time any request arrives
   // the page script has defined them globally, the same way this mock
   // already borrows getSessionDateISO().
-  const RELAY_CAP = 36, RELAY_TEAM_COUNTS = [4, 6], RELAY_TEAM_BONUS = 2, RELAY_ROUNDS = 2, RELAY_TB = 3;
+  const RELAY_CAP = 32, RELAY_TEAM_COUNTS = [4, 6], RELAY_TEAM_BONUS = 2, RELAY_ROUNDS = 2, RELAY_TB = 3;
   const TEAM_IDS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
   function sessionDate() { return (typeof getSessionDateISO === 'function') ? getSessionDateISO() : ''; }
   function seedRelayIfAsked() {

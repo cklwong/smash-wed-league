@@ -2616,7 +2616,8 @@ function cleanupPastEventProperties() {
 // plays twice, against two different pairs of the other team, in a fixed
 // order (RELAY_ORDERS). Before round 2 a team may re-pair (lineup2);
 // with pairs unchanged, round 2's order brings in the match-ups round 1
-// didn't have. Round 1 pairs lock when round 1 starts, round 2 pairs when
+// didn't have; after a re-pair the new pairs are placed to avoid round 1's
+// opponents (relayRepairSchedule). Round 1 pairs lock when round 1 starts, round 2 pairs when
 // round 2 starts (site-side). A round is
 // won on doubles won, then point differential; two rounds are played, and a
 // 1-1 (or level) tie is decided by one tiebreak doubles game. Games can only
@@ -2636,7 +2637,7 @@ function cleanupPastEventProperties() {
 // signup list and check-in/no-show status are shared with singles nights
 // unchanged.
 
-var RELAY_CAP = 36;               // signups confirmed on a relay night (6 teams of 6)
+var RELAY_CAP = 32;               // signups confirmed on a relay night (4 teams of 8)
 var RELAY_TEAM_COUNTS = [4, 6];   // add 8 here once there's enough interest
 var RELAY_TEAM_BONUS = 2;         // ranked mode: rank points for winning the tie
 var RELAY_ROUNDS = 2;
@@ -2871,7 +2872,8 @@ function relayPairs(players) {
 // and replays one; with 4-5 pairs every round-2 game is new) and keeps the
 // rest spread, across the break too. Found by brute force; from 3 pairs up
 // nobody plays two games in a row. If a team re-pairs for round 2, the
-// new pairs play round 1's order. Mirrored in site/index.html.
+// new pairs are fitted to these orders (relayRepairSchedule). Mirrored in
+// site/index.html.
 var RELAY_ORDERS = {
   1: { 1: { a: [0, 0], b: [0, 0] },
        2: { a: [0, 0], b: [0, 0] } },
@@ -2929,16 +2931,85 @@ function relaySamePairs(team) {
 }
 
 // A round's games for teams ta (first of the matchup) and tb: [[aPair,
-// bPair], ...]. Round 2 with both teams' pairs unchanged plays the round-2
-// order over round 1's pairs (so the new match-ups come in); otherwise each
-// round's own pairs play round 1's order.
-function relaySchedule(ta, tb, round) {
+// bPair], ...]. Round 1 plays round 1's order. Round 2 with both teams'
+// pairs unchanged plays the round-2 order over round 1's pairs (so the new
+// match-ups come in); if either team re-paired, the new pairs are fitted to
+// the fixed orders so they meet as few round-1 opponents as possible
+// (relayRepairSchedule). played = round 1's games as [[aPair, bPair], ...]
+// (recorded names where played; defaults to round 1's schedule).
+function relaySchedule(ta, tb, round, played) {
   var repeat = round === 2 && relaySamePairs(ta) && relaySamePairs(tb);
   var pa = relayPairs(relayLineup(ta, repeat ? 1 : round)), pb = relayPairs(relayLineup(tb, repeat ? 1 : round));
   var n = Math.max(pa.length, pb.length);
   if (!n) return [];
+  if (round === 2 && !repeat) return relayRepairSchedule(pa, pb, played || relaySchedule(ta, tb, 1));
   var oa = relayFixedOrder(n, repeat ? 2 : 1, 0), ob = relayFixedOrder(n, repeat ? 2 : 1, 1);
   return oa.map(function (x, k) { return [pa[x] || null, pb[ob[k]] || null]; });
+}
+
+// Every ordering of 0..n-1, identity first (lexicographic). Past 5 just
+// the identity - 6+ pairs a side never happens in practice.
+function relayPerms(n) {
+  if (n > 5) { var id = []; for (var i = 0; i < n; i++) id.push(i); return [id]; }
+  var out = [];
+  var rec = function (cur, left) {
+    if (!left.length) { out.push(cur); return; }
+    left.forEach(function (x, i) { rec(cur.concat([x]), left.slice(0, i).concat(left.slice(i + 1))); });
+  };
+  var all = []; for (var j = 0; j < n; j++) all.push(j);
+  rec([], all);
+  return out;
+}
+
+// Round 2 after a re-pair: one of the fixed orders (round 1's, then the
+// same-pairs round-2 one - both spread the rest) with the pairs on each
+// side relabelled, choosing the labelling where the new pairs meet the
+// fewest round-1 opponents (counted player by player: each opponent you
+// already played in round 1 counts once per round-1 meeting), then where
+// nobody from round 1's last game opens round 2. First best wins, so it's
+// deterministic. Mirrored in site/index.html.
+function relayRepairSchedule(pa, pb, played) {
+  var lc = function (x) { return String(x || '').trim().toLowerCase(); };
+  var n = Math.max(pa.length, pb.length);
+  var meets = {};
+  (played || []).forEach(function (g) {
+    (g[0] || []).forEach(function (x) {
+      (g[1] || []).forEach(function (y) { var k = lc(x) + '|' + lc(y); meets[k] = (meets[k] || 0) + 1; });
+    });
+  });
+  var cost = [];
+  for (var i = 0; i < n; i++) {
+    cost.push([]);
+    for (var j = 0; j < n; j++) {
+      var c = 0;
+      (pa[i] || []).forEach(function (x) { (pb[j] || []).forEach(function (y) { c += meets[lc(x) + '|' + lc(y)] || 0; }); });
+      cost[i].push(c);
+    }
+  }
+  var lastGame = played && played.length ? played[played.length - 1] : null;
+  var tired = {};
+  if (lastGame) (lastGame[0] || []).concat(lastGame[1] || []).forEach(function (x) { tired[lc(x)] = true; });
+  var opensTired = function (pr) { return (pr || []).some(function (x) { return tired[lc(x)]; }) ? 1 : 0; };
+  var perms = relayPerms(n);
+  var best = null;
+  for (var tpl = 1; tpl <= 2; tpl++) {
+    var oa = relayFixedOrder(n, tpl, 0), ob = relayFixedOrder(n, tpl, 1);
+    for (var p = 0; p < perms.length; p++) {
+      var ra = perms[p];
+      for (var q = 0; q < perms.length; q++) {
+        var rb = perms[q], total = 0;
+        for (var k = 0; k < oa.length && (!best || total <= best.total); k++) total += cost[ra[oa[k]]][rb[ob[k]]];
+        if (best && total > best.total) continue;
+        var rest = opensTired(pa[ra[oa[0]]]) + opensTired(pb[rb[ob[0]]]);
+        if (best && total === best.total && rest >= best.rest) continue;
+        best = { total: total, rest: rest, oa: oa, ob: ob, ra: ra, rb: rb };
+        if (!total && !rest) break;
+      }
+      if (!best.total && !best.rest) break;
+    }
+    if (!best.total && !best.rest) break;
+  }
+  return best.oa.map(function (x, k) { return [pa[best.ra[x]] || null, pb[best.rb[best.ob[k]]] || null]; });
 }
 
 // Why a matchup can't start games yet ('' when it can): both teams need the
@@ -3136,8 +3207,9 @@ function relayTieView(state, tie) {
   var ta = state.teams[2 * tie], tb = state.teams[2 * tie + 1];
   var problem = relayMatchupProblem(ta, tb);
   var rounds = [];
+  var played = null; // round 1's games, for fitting re-paired round-2 pairs
   for (var r = 1; r <= RELAY_ROUNDS; r++) {
-    var sched = relaySchedule(ta, tb, r);
+    var sched = relaySchedule(ta, tb, r, played);
     var count = sched.length;
     state.games.forEach(function (g) { if (g.tie === tie && g.round === r && g.seq + 1 > count) count = g.seq + 1; });
     var games = [];
@@ -3166,6 +3238,7 @@ function relayTieView(state, tie) {
       else if (ptsA !== ptsB) winner = ptsA > ptsB ? 'a' : 'b';
       else winner = 'draw';
     }
+    if (r === 1) played = games.map(function (x) { return [x.a, x.b]; });
     rounds.push({ round: r, games: games, done: done, started: doneCount > 0 || games.some(function (x) { return !!x.startedAt; }),
       winsA: winsA, winsB: winsB, ptsA: ptsA, ptsB: ptsB, winner: winner });
   }
