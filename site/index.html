@@ -211,6 +211,10 @@
   .icon-btn.on{background:var(--amber-tint); border-color:#E8C48A; color:var(--amber-deep);}
   .team-row{display:flex; align-items:center; gap:6px; padding:7px 0; border-bottom:1px solid var(--border); font-size:14px; flex-wrap:wrap;}
   .team-row:last-child{border-bottom:none;}
+  .pair-block{border:1px solid var(--border); border-radius:8px; padding:2px 10px; margin:6px 0;}
+  .pair-head{display:flex; justify-content:space-between; align-items:center; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--text-mute); padding:5px 0 2px;}
+  .pair-head .tools{display:flex; gap:4px;}
+  tr.team-head td{background:var(--line); font-weight:600; font-size:13px;}
   .team-row .pos{font-family:'IBM Plex Mono',monospace; color:var(--text-mute); width:26px; font-size:12px; flex-shrink:0;}
   .team-row .rname{flex:1; min-width:130px;}
   .team-row .tools{display:flex; gap:4px; align-items:center; flex-wrap:wrap;}
@@ -418,7 +422,7 @@
         <summary>How does a match between two teams work?</summary>
         <ul>
           <li>Team A plays Team B, Team C plays Team D, and so on.</li>
-          <li>Each doubles game is to <strong>21 points</strong>. At 20–20 it's win by 2, capped at <strong>25</strong> (first to 25 wins, even 25–24).</li>
+          <li>Each doubles game is to <strong>21 points</strong>. At 20–20 it's win by 2, capped at <strong>25</strong> (first to 25 wins, even 25–24) — unless the organizer announces a different target that night.</li>
           <li>A <strong>round</strong> is won by the team that wins more doubles games; if that's level, by total point difference.</li>
           <li>Teams play <strong>two rounds</strong>. If each team wins one, one <strong>tiebreak doubles game</strong> (also to 21, capped at 25) decides the match — each team picks any two of its players for it.</li>
         </ul>
@@ -2883,16 +2887,14 @@ function relayTeamCard(week, state, ti, admin){
   const repaired = !relaySamePairs(t);
   let body;
   if(editing){
-    body = t.players.map((p,pi)=>`<div class="team-row"><span class="pos">P${pi+1}</span><span class="rname">${nameHtml(p)}</span><span class="tools">
-      <button class="icon-btn" title="Move up" onclick="relayMovePos(${ti},${pi},-1)" ${pi===0||r1Locked?'disabled':''}>▲</button>
-      <button class="icon-btn" title="Move down" onclick="relayMovePos(${ti},${pi},1)" ${pi===n-1||r1Locked?'disabled':''}>▼</button>
+    body = relayPairBlocks(t.players, ti, 1, r1Locked, (p,pi)=>`<div class="team-row"><span class="pos">P${pi+1}</span><span class="rname">${nameHtml(p)}</span><span class="tools">
       ${r1Locked ? '' : relayPairWithSelect(ti, t.players, pi, 1)}
       ${r1Locked ? '' : `<select class="mini-select" aria-label="Move ${escAttr(p)} to another team" onchange="if(this.value!=='') relayMoveTeam(${ti},${pi},Number(this.value))">
         <option value="">Move…</option>${state.teams.map((o,oi)=>oi===ti?'':`<option value="${oi}">Team ${o.id}</option>`).join('')}
       </select>`}
       <button class="icon-btn" title="${r1Locked && !relayCanTakeOff(ti,pi) ? 'Replace with a guest' : 'Take off the team'}" onclick="relayRemove(${ti},${pi})">✕</button>
-    </span></div>`).join('')
-    + `<p class="game-note" style="margin:6px 0 0;">P1+P2, P3+P4, … are the round 1 pairs${r1Locked ? '' : ' — "Pair with…" puts two players together in one step'}${r1Locked ? ' — fixed now that round 1 has started; ✕ swaps a player who has played for a guest, or takes off one who hasn\'t' : ''}.</p>
+    </span></div>`)
+    + `<p class="game-note" style="margin:6px 0 0;">P1+P2, P3+P4, … are the round 1 pairs${r1Locked ? '' : ' — "Pair with…" puts two players together, ▲▼ moves a pair up or down the order'}${r1Locked ? ' — fixed now that round 1 has started; ✕ swaps a player who has played for a guest, or takes off one who hasn\'t' : ''}.</p>
     <div class="search-row" style="margin:10px 0 0; gap:6px; flex-wrap:wrap;">
       <input type="text" id="relay-add-${ti}" list="relay-player-names" placeholder="Late player or guest name" style="min-width:140px;" autocomplete="off">
       <button class="btn small ghost" title="Signs them up, checks them in and puts them on this team (in a guest's spot if there is one)" onclick="relayAddTyped(${ti})">Add player</button>
@@ -2923,16 +2925,14 @@ function relayRound2Html(v, t, ti, admin, repaired, nameHtml){
   const locked = v.rounds[1].started;
   const canEdit = admin && !locked;
   if(canEdit && RELAY_R2_EDIT === ti){
-    const lineup = relayLineup(t, 2), n = lineup.length;
-    const rows = lineup.map((p,pi)=>`<div class="team-row" style="font-size:13px;"><span class="pos">P${pi+1}</span><span class="rname">${nameHtml(p)}</span><span class="tools">
-      <button class="icon-btn" title="Move up" onclick="relayMoveLineup2(${ti},${pi},-1)" ${pi===0?'disabled':''}>▲</button>
-      <button class="icon-btn" title="Move down" onclick="relayMoveLineup2(${ti},${pi},1)" ${pi===n-1?'disabled':''}>▼</button>
+    const lineup = relayLineup(t, 2);
+    const rows = relayPairBlocks(lineup, ti, 2, false, (p,pi)=>`<div class="team-row" style="font-size:13px;"><span class="pos">P${pi+1}</span><span class="rname">${nameHtml(p)}</span><span class="tools">
       ${relayPairWithSelect(ti, lineup, pi, 2)}
-    </span></div>`).join('');
+    </span></div>`);
     return `<div style="margin-top:10px;"><span class="relay-sub" style="margin:0;">Round 2 pairs</span>
       ${repaired ? `<button class="icon-btn" onclick="relayResetLineup2(${ti})">same as round 1</button>` : ''}
       <button class="icon-btn" onclick="RELAY_R2_EDIT=null; paintSchedule(LAST_WEEK);">done</button></div>
-      <p class="game-note" style="margin:2px 0 4px;">P1+P2, P3+P4, … — use "Pair with…" (or ▲▼) to re-pair. Keeping the same pairs brings in the match-ups round 1 didn't have; new pairs are matched against opponents they haven't played where possible.</p>${rows}`;
+      <p class="game-note" style="margin:2px 0 4px;">P1+P2, P3+P4, … — use "Pair with…" to re-pair, ▲▼ to move a pair up or down. Keeping the same pairs brings in the match-ups round 1 didn't have; new pairs are matched against opponents they haven't played where possible.</p>${rows}`;
   }
   const change = canEdit ? ` <button class="icon-btn" onclick="RELAY_R2_EDIT=${ti}; paintSchedule(LAST_WEEK);">change</button>` : '';
   const lockNote = locked ? ' <span class="game-note">· locked</span>' : '';
@@ -2943,18 +2943,37 @@ function relayRound2Html(v, t, ti, admin, repaired, nameHtml){
 function relayPlayersCard(state, ev){
   const ranked = ev && ev.rpMode==='ranked';
   const stats = relayPlayerStats(state, (ev && ev.teamBonus) || 2);
-  const rows = stats.map((p,i)=>`<tr>
+  // Grouped by team (draw order A, B, C, …), best first within each team;
+  // anyone no longer on a team is listed last.
+  const groups = state.teams.map((t,ti)=>({id:t.id, opp:(state.teams[ti^1]||{}).id, players:stats.filter(p=>p.team===t.id)}));
+  const loose = stats.filter(p=>!state.teams.some(t=>t.id===p.team));
+  if(loose.length) groups.push({id:'', players:loose});
+  const rows = groups.filter(g=>g.players.length).map(g=>{
+    let won = 0, played = 0; // doubles games over the two rounds (not the tiebreak)
+    state.games.forEach(x=>{
+      if(x.round > RELAY_ROUNDS || !relayGameDone(x)) return;
+      const side = (state.teams[2*x.tie]||{}).id === g.id ? 'a' : (state.teams[2*x.tie+1]||{}).id === g.id ? 'b' : '';
+      if(!side) return;
+      played++;
+      if(side==='a' ? x.sa > x.sb : x.sb > x.sa) won++;
+    });
+    const teamWon = g.players.some(p=>p.teamWon);
+    const head = g.id
+      ? `Team ${escHtml(g.id)}${g.opp ? ` <span style="font-weight:400; color:var(--text-mute);">vs Team ${escHtml(g.opp)}</span>` : ''}${teamWon ? ' <span class="mine-badge ok">won</span>' : ''}`
+      : 'Not on a team';
+    return `<tr class="team-head"><td colspan="3">${head}</td><td class="num-col num">${g.id && played ? `${won}–${played-won}` : ''}</td><td></td></tr>`
+      + g.players.map((p,i)=>`<tr>
       <td><span class="num" style="color:var(--text-mute);">${i+1}</span></td>
-      <td class="p-name">${escHtml(p.name)}${p.guest?' <span class="mine-badge">guest</span>':''}</td>
-      <td>${p.team ? 'Team '+p.team : '–'}${p.teamWon ? ' <span class="mine-badge ok">won</span>' : ''}</td>
+      <td class="p-name" colspan="2">${escHtml(p.name)}${p.guest?' <span class="mine-badge">guest</span>':''}</td>
       <td class="num-col num">${p.won}–${p.played-p.won}</td>
       <td class="num-col num">${p.guest || !p.played ? '–' : p.rp}</td>
     </tr>`).join('');
+  }).join('');
   return `<div class="card">
     <div class="pool-head"><h3>Results</h3><span class="pool-status ${ranked?'full':''}" ${ranked?'':'style="background:var(--amber-tint); color:var(--amber-deep);"'}>${ranked ? 'Ranked night' : 'Exhibition — not counted'}</span></div>
     <p style="margin:0 0 8px; font-size:13px; color:var(--text-soft);">${ranked ? 'Rank pts' : 'Pts <em>would be</em>'} = doubles won + ${(ev && ev.teamBonus) || 2} for a team win (the tiebreak game only decides the match).</p>
     <table class="standings">
-      <thead><tr><th style="width:30px;">#</th><th>Player</th><th>Team</th><th class="num-col" style="width:56px;">W–L</th><th class="num-col" style="width:60px;">${ranked ? 'Rank pts' : 'Pts'}</th></tr></thead>
+      <thead><tr><th style="width:30px;">#</th><th colspan="2">Player</th><th class="num-col" style="width:56px;">W–L</th><th class="num-col" style="width:60px;">${ranked ? 'Rank pts' : 'Pts'}</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="5" class="empty-row">No players yet.</td></tr>'}</tbody>
     </table>
   </div>`;
@@ -3021,10 +3040,30 @@ function relayCommitTeams(){
 }
 function relayTeams(){ return LAST_WEEK.relay.teams; }
 
-function relayMovePos(ti, pi, dir){
-  const p = relayTeams()[ti].players, j = pi+dir;
-  if(j<0 || j>=p.length) return;
-  [p[pi], p[j]] = [p[j], p[pi]];
+// Editor rows grouped by pair (P1+P2, P3+P4, …), each pair with ▲▼ to move
+// it up or down the team's order; an odd player out is listed on its own.
+// rowHtml(name, position) renders one player's row.
+function relayPairBlocks(lineup, ti, round, locked, rowHtml){
+  const pairs = Math.floor(lineup.length/2);
+  let html = '';
+  for(let k=0; k<pairs; k++){
+    html += `<div class="pair-block"><div class="pair-head"><span>Pair ${k+1}</span><span class="tools">
+      <button class="icon-btn" title="Move pair up" onclick="relayMovePair(${ti},${k},-1,${round})" ${k===0||locked?'disabled':''}>▲</button>
+      <button class="icon-btn" title="Move pair down" onclick="relayMovePair(${ti},${k},1,${round})" ${k===pairs-1||locked?'disabled':''}>▼</button>
+    </span></div>${rowHtml(lineup[2*k], 2*k)}${rowHtml(lineup[2*k+1], 2*k+1)}</div>`;
+  }
+  if(lineup.length % 2) html += `<div class="pair-block"><div class="pair-head"><span>Needs a partner</span></div>${rowHtml(lineup[lineup.length-1], lineup.length-1)}</div>`;
+  return html;
+}
+// Swaps pair k with the pair above (dir -1) or below (dir 1), in the round 1
+// positions or the round 2 re-pairs.
+function relayMovePair(ti, k, dir, round){
+  const t = relayTeams()[ti];
+  const lineup = round === 2 ? relayLineup(t, 2) : t.players;
+  const j = k + dir;
+  if(j < 0 || 2*j+1 >= lineup.length || 2*k+1 >= lineup.length) return;
+  [lineup[2*k], lineup[2*k+1], lineup[2*j], lineup[2*j+1]] = [lineup[2*j], lineup[2*j+1], lineup[2*k], lineup[2*k+1]];
+  if(round === 2) t.lineup2 = lineup;
   relayCommitTeams();
 }
 // "Pair with…" dropdown for position pi of a lineup (round 1 = the team
@@ -3145,14 +3184,6 @@ function relayAddGuest(ti, placeholderOnly){
   relayCommitTeams();
 }
 function relayAddExisting(name, ti){ relayAddPlayerClick(name, ti, null); }
-function relayMoveLineup2(ti, pi, dir){
-  const t = relayTeams()[ti];
-  const lineup = relayLineup(t, 2), j = pi+dir;
-  if(j<0 || j>=lineup.length) return;
-  [lineup[pi], lineup[j]] = [lineup[j], lineup[pi]];
-  t.lineup2 = lineup;
-  relayCommitTeams();
-}
 function relayResetLineup2(ti){
   delete relayTeams()[ti].lineup2;
   relayCommitTeams();

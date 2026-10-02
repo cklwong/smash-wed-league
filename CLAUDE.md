@@ -206,7 +206,9 @@ Google Apps Script file, edited directly.
   everyone else (see `relayDrawTeams` above - a 1+14 pair takes an A/B spot
   and the weakest A/B single slides down to C/D). On the Pools page each player's "Pair with…"
   dropdown (round 1 positions and round 2 re-pairs) pairs two players in one
-  swap (`relayPairWith`). After the draw, "Pair
+  swap (`relayPairWith`); players have no ▲▼ of their own - each pair
+  does, to reorder the pairs (`relayMovePair`). The Results card groups
+  players by team. After the draw, "Pair
   them" puts a split pair back together by swapping players (`relayPairUp`,
   team sizes unchanged, choosing the swap whose cross-team trade is closest
   in standings); the
