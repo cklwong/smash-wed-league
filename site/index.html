@@ -3075,16 +3075,17 @@ function relayPairWithSelect(ti, lineup, pi, round){
   return `<select class="mini-select" aria-label="Pair ${escAttr(lineup[pi])} with" onchange="if(this.value!=='') relayPairWith(${ti},${pi},Number(this.value),${round})">
     <option value="">Pair with…</option>${opts}</select>`;
 }
-// Puts positions pi and pj in one pair in a single swap: pi takes the place
-// of pj's partner (who moves to pi's old spot); if pj has no partner (the
-// odd one out at the end), pj takes the place of pi's partner instead.
+// Puts positions pi and pj in one pair in a single swap, keeping pi where it
+// is: pj swaps places with pi's current partner (so P1 "pair with" P7 swaps
+// P2 and P7). Only if pi has no partner (the odd one out at the end) does pi
+// move instead, into the place of pj's partner.
 function relayPairWith(ti, pi, pj, round){
   const t = relayTeams()[ti];
   const lineup = round === 2 ? relayLineup(t, 2) : t.players;
   const swap = (i, j)=>{ [lineup[i], lineup[j]] = [lineup[j], lineup[i]]; };
   if((pi ^ 1) === pj) return;
-  if((pj ^ 1) < lineup.length) swap(pi, pj ^ 1);
-  else swap(pj, pi ^ 1);
+  if((pi ^ 1) < lineup.length) swap(pj, pi ^ 1);
+  else swap(pi, pj ^ 1);
   if(round === 2) t.lineup2 = lineup;
   relayCommitTeams();
 }
