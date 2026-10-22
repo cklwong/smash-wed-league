@@ -580,10 +580,10 @@
     return { ok: true };
   }
   // Mirrors joinWithPartner() in gas/Code.gs.
-  function joinWithPartner(date, name, contact, partner) {
+  function joinWithPartner(date, name, contact, partner, mix) {
     partner = String(partner || '').trim().slice(0, 40);
     if (!isRelay(date)) return join(date, name, contact);
-    if (!partner) {
+    if (!partner && !mix) {
       const st0 = relayState(date);
       const me = STATE.signups.findIndex((s) => key(s.name) === key(name));
       if (me < 0 || !(st0.requests || []).some((r) => key(r.name) === key(name))) return join(date, name, contact);
@@ -603,9 +603,10 @@
     }
     const st = relayState(date);
     st.requests = (st.requests || []).filter((r) => key(r.name) !== key(name));
-    st.requests.push({ name, partner });
+    st.requests.push(partner ? { name, partner } : { name, partner: '', mix: true });
     st.rev++;
-    result.partner = partner;
+    if (partner) result.partner = partner;
+    else result.mix = true;
     return result;
   }
 
@@ -887,7 +888,7 @@
       return { ok: false, error: 'This is a team doubles night — run it from the This week page.' };
     }
     switch (body.action) {
-      case 'join': return joinWithPartner(body.date, body.name, body.contact, body.partner);
+      case 'join': return joinWithPartner(body.date, body.name, body.contact, body.partner, body.mix);
       case 'leave': return leave(body.date, body.name);
       case 'getpin': return { ok: true, pin: '123456' }; // dev sandbox: any passphrase works
       case 'verifyPin': return { ok: true }; // dev sandbox: any PIN works
