@@ -200,9 +200,13 @@ Google Apps Script file, edited directly.
   `joinWithPartner`, stored as the relay state's `requests`; resubmitting
   an existing signup saves/changes the request, or with no partner clears
   it - the Join page keeps already-signed-up names selectable on doubles
-  dates for this; `leave` drops it). The draw
+  dates for this; `leave` drops it). The partner
+  dropdown also offers "Mix me in" (`join`'s `mix`, stored as
+  `{name, partner: '', mix: true}`): no partner, and a one-way request
+  naming that player won't pair them; it's hidden on the public signup
+  list and shown to the organizer on the Partner requests card. The draw
   turns requests into pairs (`relayRequestPairs`: mutual first, then
-  one-way ones whose partner asked for no one else) and places them before
+  one-way ones whose partner asked for no one else and isn't "Mix me in") and places them before
   everyone else (see `relayDrawTeams` above - a 1+14 pair takes an A/B spot
   and the weakest A/B single slides down to C/D). On the Pools page each player's "Pair with…"
   dropdown (round 1 positions and round 2 re-pairs) pairs two players in one

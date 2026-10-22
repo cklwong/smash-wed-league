@@ -355,7 +355,7 @@
           <label for="jf-partner">Preferred doubles partner <span style="font-weight:400; color:var(--text-mute);">(optional)</span></label>
           <select id="jf-partner" onchange="document.getElementById('jf-partner-new').style.display = this.value==='__new' ? 'block' : 'none';"></select>
           <input id="jf-partner-new" type="text" placeholder="New player's full name" autocomplete="off" style="display:none; margin-top:8px;">
-          <p class="note">Pick them from the list — type a name only for someone new to the league. Your partner should sign up too and name you back. Requests are a preference — the organizer may change pairs or put pairs on different teams to keep things balanced. Already signed up? Pick your name and submit again to add or change your partner.</p>
+          <p class="note">Pick them from the list — type a name only for someone new to the league. Your partner should sign up too and name you back. Requests are a preference — the organizer may change pairs or put pairs on different teams to keep things balanced. <strong>Mix me in</strong> if you'd like a new partner: someone else's request won't pair you with them unless you name them back. Already signed up? Pick your name and submit again to add or change your partner.</p>
         </div>
         <button type="submit" class="btn" id="join-submit-btn" style="width:100%;">Request a spot</button>
         <p class="note" id="join-error" style="display:none; color:var(--loss);"></p>
@@ -415,7 +415,7 @@
       </details>
       <details>
         <summary>Who plays with whom?</summary>
-        <p>When you sign up for a team doubles night you can name a <strong>preferred partner</strong> on the Join page (they should sign up and name you too). The draw keeps requested pairs together where it can; the organizer pairs up everyone else. Requests are a preference, not a promise — the organizer may change pairs or put pairs on different teams to keep the teams balanced.</p>
+        <p>When you sign up for a team doubles night you can name a <strong>preferred partner</strong> on the Join page (they should sign up and name you too). The draw keeps requested pairs together where it can; the organizer pairs up everyone else. If someone names you and you named no one, the draw still pairs you with them, unless you picked <strong>Mix me in</strong> — then you're only paired with someone you named back. Requests are a preference, not a promise — the organizer may change pairs or put pairs on different teams to keep the teams balanced.</p>
         <p>Before the first game the organizer can adjust the team's <strong>doubles pairs</strong>. In each round every pair plays <strong>twice</strong>, against two different pairs from the other team, in a set order that spreads out rest (from 3 pairs up, nobody plays two games in a row).</p>
         <p>Before round 2 starts, a team can <strong>re-pair</strong> (the organizer sets it on the site). If both teams keep their pairs, round 2's order brings in the match-ups round 1 didn't have. If a team re-pairs, round 2 is arranged so the new pairs face as few of their round 1 opponents as possible. With 3 pairs a side, each pair meets its third opponent and replays one from round 1, so every pair plays all three opposing pairs during the night.</p>
       </details>
@@ -585,7 +585,7 @@ async function postAction(body){
   }catch(e){ return {ok:false, error:String(e)}; }
   finally{ ACTION_SEQ++; }
 }
-function postJoin(dateISO, name, contact, partner){ return postAction({action:'join', date:dateISO, name, contact, partner}); }
+function postJoin(dateISO, name, contact, partner, mix){ return postAction({action:'join', date:dateISO, name, contact, partner, mix}); }
 function postLeave(dateISO, name){ return postAction({action:'leave', date:dateISO, name}); }
 
 function partsInTZ(date, timeZone){
@@ -2302,20 +2302,22 @@ function relayMatchupProblem(ta, tb){
   return '';
 }
 // Partner requests -> disjoint pairs from `names` (Code.gs relayRequestPairs):
-// mutual requests first, then one-way ones whose partner asked for no one else.
+// mutual requests first, then one-way ones whose partner asked for no one else
+// and didn't pick "Mix me in".
 function relayRequestPairs(requests, names){
   const byKey = {};
   names.forEach(n=>{ byKey[playerKey(n)] = n; });
-  const want = {};
+  const want = {}, mix = {};
   (requests||[]).forEach(r=>{
     const a = playerKey(r.name), b = playerKey(r.partner);
+    if(a && r.mix) mix[a] = true;
     if(a && b && a!==b && byKey[a] && byKey[b]) want[a] = b;
   });
   const used = {}, out = [];
   [true, false].forEach(mutualPass=>names.forEach(n=>{
     const a = playerKey(n), b = want[a];
     if(!b || used[a] || used[b]) return;
-    if(mutualPass ? want[b]!==a : !!want[b]) return;
+    if(mutualPass ? want[b]!==a : !!want[b] || mix[b]) return;
     used[a] = used[b] = true;
     out.push([byKey[a], byKey[b]]);
   }));
@@ -2740,13 +2742,16 @@ function relayRequestsCard(week, state, admin){
     }
     return `<div class="team-row"><span class="rname">${escHtml(a)} + ${escHtml(b)} ${status}</span>${act}</div>`;
   });
-  reqs.filter(r=>!inPair.has(playerKey(r.name)) && signed.has(playerKey(r.name))).forEach(r=>{
+  reqs.filter(r=>!r.mix && !inPair.has(playerKey(r.name)) && signed.has(playerKey(r.name))).forEach(r=>{
     const p = signed.get(playerKey(r.partner));
     const other = reqs.find(x=>playerKey(x.name)===playerKey(r.partner));
     const why = !p ? 'not signed up' : p.s.noShow ? 'no-show' : p.pos > cap && !p.s.checkedIn ? 'on the waitlist'
+      : other && other.mix ? `${escHtml(other.name)} asked to be mixed in`
       : other && playerKey(other.partner)!==playerKey(r.name) ? `asked for ${escHtml(other.partner)}` : 'not on a team';
     rows.push(`<div class="team-row"><span class="rname">${escHtml(r.name)} → ${escHtml(r.partner)} <span class="game-note">(${why})</span></span></div>`);
   });
+  const mixed = reqs.filter(r=>r.mix && signed.has(playerKey(r.name))).map(r=>escHtml(r.name));
+  if(mixed.length) rows.push(`<div class="team-row"><span class="rname">Mix me in: ${mixed.join(', ')} <span class="game-note">(not paired from someone else's request)</span></span></div>`);
   if(!rows.length) return '';
   return `<div class="card"><h3 style="margin:0 0 4px; font-size:15px; color:var(--ink);">Partner requests</h3>
     <p style="margin:0 0 6px; font-size:13px; color:var(--text-soft);">${drawn ? 'Requests are a preference — pairs can be changed or split to keep teams balanced.' : 'The draw pairs these up where it can; everyone else is paired by the organizer.'}</p>${rows.join('')}</div>`;
@@ -3408,7 +3413,7 @@ function syncJoinForSelectedName(){
   btn.textContent = already ? 'Save partner' : 'Request a spot';
   if(already){
     const sel = document.getElementById('jf-partner');
-    const cur = JOIN_PARTNERS[playerKey(name)] || '';
+    const cur = JOIN_PARTNERS[playerKey(name)] || ''; // '__mix' for Mix me in
     if([...sel.options].some(o=>o.value===cur)) sel.value = cur;
     else if(cur){ sel.value = '__new'; document.getElementById('jf-partner-new').value = cur; }
     document.getElementById('jf-partner-new').style.display = sel.value==='__new' ? 'block' : 'none';
@@ -3471,14 +3476,16 @@ function updateJoinPartnerField(signups){
   });
   names.sort((a,b)=>a.localeCompare(b));
   sel.innerHTML = '<option value="">No preference — the organizer pairs me</option>'
+    + '<option value="__mix">Mix me in — a new partner, not someone who asked for me</option>'
     + names.map(n=>`<option value="${escAttr(n)}">${escHtml(n)}</option>`).join('')
     + '<option value="__new">Someone new (type their name)…</option>';
   if([...sel.options].some(o=>o.value===prev)) sel.value = prev;
   document.getElementById('jf-partner-new').style.display = sel.value==='__new' ? 'block' : 'none';
 }
+// The picked partner's name ('' for no preference or Mix me in).
 function selectedJoinPartner(){
   const v = document.getElementById('jf-partner').value;
-  return v==='__new' ? document.getElementById('jf-partner-new').value.trim() : v;
+  return v==='__new' ? document.getElementById('jf-partner-new').value.trim() : v==='__mix' ? '' : v;
 }
 
 async function renderJoinedList(){
@@ -3498,11 +3505,11 @@ async function renderJoinedList(){
   const confirmed = week.signups.slice(0, cap);
   const waitlist = week.signups.slice(cap);
   const partners = {};
-  ((week.relay && week.relay.requests) || []).forEach(r=>{ partners[playerKey(r.name)] = r.partner; });
+  ((week.relay && week.relay.requests) || []).forEach(r=>{ partners[playerKey(r.name)] = r.mix ? '__mix' : r.partner; });
   const doublesDate = isRelayWeek(week);
   JOIN_SIGNED = new Set(doublesDate ? week.signups.map(s=>playerKey(s.name)) : []);
   JOIN_PARTNERS = partners;
-  const pOf = s=>partners[playerKey(s.name)] || '';
+  const pOf = s=>partners[playerKey(s.name)]==='__mix' ? '' : partners[playerKey(s.name)] || ''; // Mix me in stays off the public list
   list.innerHTML = confirmed.length
     ? confirmed.map((s,i)=>joinRosterRow(s,i+1,'confirmed',dateISO,cap,pOf(s))).join('')
     : '<li class="empty-row">No signups yet for this date.</li>';
@@ -3551,9 +3558,10 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   if(Date.now() >= cutoff){ updateJoinSubForSelected(); return; }
   const relayNight = !!(WEEK_FORMATS[dateISO] && WEEK_FORMATS[dateISO].format==='relay');
   const partner = relayNight ? selectedJoinPartner() : '';
-  if(relayNight && JOIN_SIGNED.has(playerKey(name)) && !partner && !JOIN_PARTNERS[playerKey(name)]){
+  const mix = relayNight && document.getElementById('jf-partner').value==='__mix';
+  if(relayNight && JOIN_SIGNED.has(playerKey(name)) && !partner && !mix && !JOIN_PARTNERS[playerKey(name)]){
     const errorEl = document.getElementById('join-error');
-    errorEl.textContent = `${name} is already signed up — pick a partner above to send a request.`; errorEl.style.display = 'block'; return;
+    errorEl.textContent = `${name} is already signed up — pick a partner (or Mix me in) above to save a preference.`; errorEl.style.display = 'block'; return;
   }
   if(relayNight && document.getElementById('jf-partner').value==='__new' && !partner){
     const errorEl = document.getElementById('join-error');
@@ -3564,7 +3572,7 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   const btn = document.getElementById('join-submit-btn');
   errorEl.style.display = 'none';
   btn.disabled = true; btn.textContent = 'Submitting…';
-  const result = await postJoin(dateISO, name, contact, partner);
+  const result = await postJoin(dateISO, name, contact, partner, mix);
   btn.disabled = false; btn.textContent = 'Request a spot';
   syncJoinForSelectedName();
 
@@ -3578,9 +3586,10 @@ document.getElementById('join-form').addEventListener('submit', async e=>{
   const cap = result.cap || CAP;
   const confirmedSpot = position <= cap;
   const partnerNote = result.partner ? ` Partner request: ${result.partner} (the organizer makes the final pairs).`
+    : result.mix ? ' Mix me in — you won\'t be paired just because someone asked for you.'
     : result.cleared ? ' Partner request cleared — the organizer will pair you.' : '';
   document.getElementById('confirm-badge').className = 'ok-badge' + (confirmedSpot ? '' : ' wait');
-  document.getElementById('confirm-name').textContent = result.partnerOnly ? (result.cleared ? 'Partner request cleared, ' : 'Partner request saved, ') + name : 'You\'re in, ' + name;
+  document.getElementById('confirm-name').textContent = result.partnerOnly ? (result.cleared ? 'Partner request cleared, ' : result.mix ? 'Preference saved, ' : 'Partner request saved, ') + name : 'You\'re in, ' + name;
   document.getElementById('confirm-detail').textContent = (confirmedSpot
     ? `Confirmed — spot #${position} for Wed, ${fmtDate(dateISO)}. ${relayNight ? 'Teams are drawn at check-in — it\'s a team doubles night.' : 'Pools go up once signups close.'}`
     : `Waitlisted — #${position-cap} in line for Wed, ${fmtDate(dateISO)}. You'll move up if a confirmed player drops.`) + partnerNote;

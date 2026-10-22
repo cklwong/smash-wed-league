@@ -54,7 +54,7 @@
  *   POST { action:'listBans', secret } -> { ok, bans: [{name, until}, ...] } (admin passphrase; every currently-active ban, soonest-expiring first)
  *   POST { action:'getSheetEditors', secret } -> { ok, emails } (admin passphrase; the SHEET_EDITORS list)
  *   POST { action:'setSheetEditors', emails, secret } -> { ok, emails, updated, warnings } (admin passphrase; saves SHEET_EDITORS and adds them to the protected tabs of today's and upcoming events - never past ones)
- *   POST { action:'join', date, name, contact, partner } -> { ok, position, cap, partnerOnly?, cleared? } (partner = optional preferred doubles partner on a team doubles night; resubmitting an existing signup saves the request, or with no partner clears it)
+ *   POST { action:'join', date, name, contact, partner, mix } -> { ok, position, cap, partnerOnly?, cleared?, mix? } (partner = optional preferred doubles partner on a team doubles night; mix = true for "Mix me in" instead - no partner, and someone else's one-way request won't pair them; resubmitting an existing signup saves the request, or with neither clears it)
  *   POST { action:'setEventFormat', date, format:'singles'|'relay', rpMode:'exhibition'|'ranked', secret } -> { ok, event } (admin passphrase; makes a date a team doubles night or back to singles)
  *   POST { action:'drawTeams', date, teamCount, redraw, secret|pin } -> { ok, relay } (relay night: draws confirmed non-no-show signups into teamCount teams in standings tiers - partner-request pairs first, in their stronger player's tier, then everyone else alternately between A and B, then C and D, ...; teams padded to an even size with Guest N placeholders)
  *   POST { action:'relaySaveTeams', date, teams, guests, rev, secret|pin } -> { ok, relay } (relay night: saves team edits - moves, guests, removals, positions, round-2 positions [lineup2]; guests = names marked as guests)
@@ -106,7 +106,7 @@ function doPost(e) {
   try { body = JSON.parse(e.postData.contents); } catch (err) {}
   var result;
   try {
-    if (body.action === 'join') result = joinWithPartner(body.date, body.name, body.contact, body.partner);
+    if (body.action === 'join') result = joinWithPartner(body.date, body.name, body.contact, body.partner, body.mix);
     else if (body.action === 'leave') result = removeJoin(body.date, body.name);
     else if (body.action === 'getpin') result = getPin(body.date, body.secret);
     else if (body.action === 'verifyPin') result = checkPin(body.date, body.pin);
@@ -811,14 +811,16 @@ function addJoin(dateISO, name, contact, quiet) {
 // Join, plus an optional preferred doubles partner on a team doubles night
 // (saved in the doubles state's requests - see relayRequestPairs). An
 // existing signup resubmitting with a partner just saves/changes the
-// request, and resubmitting with no partner clears one it had. Requests
-// aren't binding: the draw honours what it can and the
-// organizer can re-pair or move pairs between teams.
-function joinWithPartner(dateISO, name, contact, partner) {
+// request, and resubmitting with no partner clears one it had. mix ("Mix
+// me in", no partner) is saved as a request with an empty partner and
+// mix:true, so a one-way request naming this player doesn't pair them (see
+// relayRequestPairs). Requests aren't binding: the draw honours what it can
+// and the organizer can re-pair or move pairs between teams.
+function joinWithPartner(dateISO, name, contact, partner, mix) {
   partner = String(partner || '').trim().slice(0, 40);
   if (!isRelayDate(dateISO)) return addJoin(dateISO, name, contact);
   name = String(name || '').trim();
-  if (!partner) {
+  if (!partner && !mix) {
     var had = (getRelayState(dateISO).requests || []).some(function (r) { return String(r.name).trim().toLowerCase() === name.toLowerCase(); });
     if (!had) return addJoin(dateISO, name, contact);
     var sh = getWeekSheet(dateISO);
@@ -841,17 +843,20 @@ function joinWithPartner(dateISO, name, contact, partner) {
     result = addJoin(dateISO, name, contact);
     if (!result.ok) return result;
   }
-  setPartnerRequest(dateISO, name, partner);
-  result.partner = partner;
+  setPartnerRequest(dateISO, name, partner, !partner);
+  if (partner) result.partner = partner;
+  else result.mix = true;
   return result;
 }
 
-// Saves (or, with an empty partner, clears) one player's partner request.
-function setPartnerRequest(dateISO, name, partner) {
+// Saves (or, with an empty partner and no mix, clears) one player's partner
+// request; mix saves "Mix me in" ({name, partner: '', mix: true}).
+function setPartnerRequest(dateISO, name, partner, mix) {
   return updateRelayState(dateISO, function (state) {
     var k = String(name).trim().toLowerCase();
     state.requests = (state.requests || []).filter(function (r) { return String(r.name).trim().toLowerCase() !== k; });
     if (partner) state.requests.push({ name: name, partner: partner });
+    else if (mix) state.requests.push({ name: name, partner: '', mix: true });
     return { ok: true };
   });
 }
@@ -3042,14 +3047,16 @@ function relayGameDone(g) {
 // Partner requests ({name, partner} from the Join page) -> disjoint pairs
 // of names from `names` (who can be paired, in priority order): mutual
 // requests first, then one-way requests whose partner didn't ask for anyone
-// else on the list. Mirrored in site/index.html.
+// else on the list and didn't pick "Mix me in" ({name, mix: true}).
+// Mirrored in site/index.html.
 function relayRequestPairs(requests, names) {
   var lc = function (n) { return String(n || '').trim().toLowerCase(); };
   var byKey = {};
   names.forEach(function (n) { byKey[lc(n)] = n; });
-  var want = {};
+  var want = {}, mix = {};
   (requests || []).forEach(function (r) {
     var a = lc(r.name), b = lc(r.partner);
+    if (a && r.mix) mix[a] = true;
     if (a && b && a !== b && byKey[a] && byKey[b]) want[a] = b;
   });
   var used = {}, out = [];
@@ -3057,7 +3064,7 @@ function relayRequestPairs(requests, names) {
     names.forEach(function (n) {
       var a = lc(n), b = want[a];
       if (!b || used[a] || used[b]) return;
-      if (mutualPass ? want[b] !== a : !!want[b]) return;
+      if (mutualPass ? want[b] !== a : !!want[b] || mix[b]) return;
       used[a] = true; used[b] = true;
       out.push([byKey[a], byKey[b]]);
     });
