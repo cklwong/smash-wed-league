@@ -8,6 +8,10 @@
  * check-in, start/record/edit/cancel match, ...) is intercepted here instead
  * of hitting script.google.com. Nothing changes for normal (non-?mock) loads.
  *
+ * Each week's game-day rules come from site/week-engine.js - the same engine
+ * the Cloudflare Worker (worker/) runs - so this sandbox exercises them; this
+ * file only adds the seed data, canned past weeks, and the admin actions.
+ *
  * State lives only in memory - reload the page to reset to the seed below.
  * Any PIN/passphrase is accepted (this is a sandbox, not a security check).
  */
@@ -15,8 +19,14 @@
   const key = (n) => (n || '').toString().trim().toLowerCase();
   const isGuestLabel = (n) => /^Guest[A-D]\d*$/i.test((n || '').toString().trim());
   const uid = () => Math.random().toString(36).slice(2, 10);
-  const CAPACITY = { A: 9, B: 8, C: 7, D: 7 };
   const LETTERS = ['A', 'B', 'C', 'D'];
+  // Always >= 2 pools: <=16 -> 2, <=21 -> 3, else 4 (poolSplitSizes() in
+  // gas/Code.gs) - for the canned past weeks below.
+  function splitSizes(n) {
+    const k = n <= 16 ? 2 : (n <= 21 ? 3 : 4);
+    const base = Math.floor(n / k), extra = n % k;
+    return Array.from({ length: k }, (_, i) => base + (i < extra ? 1 : 0));
+  }
 
   // Deterministic PRNG so reloading the page (without ?fresh) gives the same
   // seed data every time - makes it easier to talk about "Player 01" reliably.
@@ -61,141 +71,41 @@
     });
   });
 
-  function rankFor(name) {
-    const k = key(name);
-    let prefixHit = null, hits = 0;
-    for (const r of RANKINGS) {
-      const rk = key(r.name);
-      if (rk === k) return r.rank;
-      if (rk.indexOf(k + ' ') === 0) { prefixHit = r; hits++; }
+  // Every date's live state (site/week-engine.js - the same engine the
+  // Cloudflare Worker runs, so the sandbox exercises its rules). Only the
+  // fixed "This week" session and weeks created with createWeek exist;
+  // past weeks are canned below.
+  const ENGINE = createWeekEngine(window);
+  const ST = {};
+  const BANS = {}; // lowercased name -> {name, until} - mirrors PLAYER_BANS in gas/Code.gs
+  const CREATED_WEEKS = []; // ISO dates created via the mock createWeek() action this session
+  let SHEET_EDITORS = []; // mirrors the SHEET_EDITORS script property
+  function sessionDate() { return (typeof getSessionDateISO === 'function') ? getSessionDateISO() : ''; }
+  function weekState(date) {
+    if (!ST[date]) {
+      const session = date === sessionDate();
+      const exists = session || CREATED_WEEKS.includes(date);
+      const signups = session
+        ? NAMES.map((name, i) => ({ name, checkedIn: i < NAMES.length - 2, noShow: false })) // the waitlist isn't "at the venue"
+        : [];
+      ST[date] = ENGINE.fromView({ date, exists, signups, pools: [], live: { matches: [], checkins: {}, walkins: [] } }, { bans: {} });
+      // ?doubles=1 starts the sandbox with tonight already set up as a team
+      // doubles night (otherwise switch it on the Admin tab like the real site).
+      if (session && STATE_FLAGS.doubles) ST[date].event = ENGINE.relayEvent('exhibition');
     }
-    return hits === 1 ? prefixHit.rank : 9999;
+    const st = ST[date];
+    st.ranks = RANKINGS.map((r) => r.name); // seeding order, kept current across renames
+    st.bans = BANS;
+    return st;
   }
-
-  const STATE = {
-    signups: NAMES.map((name) => ({ name, checkedIn: true, noShow: false })),
-    drawn: false,
-    pools: {},   // letter -> [names / seat labels]
-    grids: {},   // letter -> NxN score matrix
-    guestMap: {},// lowercased no-show name -> the guest label covering their seat
-    live: { matches: [], checkins: {}, walkins: {} },
-    createdWeeks: [], // ISO dates created via the mock createWeek() action this session
-    bans: {}, // lowercased name -> {name, until} - mirrors PLAYER_BANS in gas/Code.gs
-    events: {}, // ISO date -> {format:'relay', rpMode} - mirrors EVENT_<date> script properties
-    relay: {},  // ISO date -> {rev, teams, games} - mirrors the "Doubles M/D/YY" tab's JSON
-    sheetEditors: [] // mirrors the SHEET_EDITORS script property
-  };
-  // ?doubles=1 starts the sandbox with tonight already set up as a team
-  // doubles night (otherwise switch it on the Admin tab like the real site).
-  // The date isn't known yet (the page script defines getSessionDateISO
-  // after this file runs), so the seed is applied on the first request.
   const qs = new URLSearchParams(location.search);
-  STATE.pendingRelaySeed = qs.get('doubles') === '1';
-  STATE.signups[STATE.signups.length - 1].checkedIn = false; // waitlist isn't "at the venue"
-  STATE.signups[STATE.signups.length - 2].checkedIn = false;
-
-  // Always >= 2 pools: <=16 -> 2, <=21 -> 3, else 4. Extras to earlier pools.
-  // (Mirrors poolSplitSizes() in gas/Code.gs and site/index.html.)
-  function splitSizes(n) {
-    const k = n <= 16 ? 2 : (n <= 21 ? 3 : 4);
-    const base = Math.floor(n / k), extra = n % k;
-    return Array.from({ length: k }, (_, i) => base + (i < extra ? 1 : 0));
-  }
-
-  function findSlot(name) {
-    const k = key(name);
-    for (const L of Object.keys(STATE.pools)) {
-      const i = STATE.pools[L].findIndex((n) => key(n) === k);
-      if (i >= 0) return { L, i };
-    }
-    return null;
-  }
-  function filled(v) { return v !== '' && v !== null && v !== undefined; }
-  // In-progress marker startMatch writes into a game's top-right grid cell
-  // (mirrors isInProgressMarker in gas/Code.gs) - never a score.
-  function isMarker(v) { return typeof v === 'string' && v.trim().toLowerCase() === 'p'; }
-  function isScore(v) { return filled(v) && !isMarker(v); }
-  // The one cell that carries a pair's marker: row of the lower index.
-  function markerCell(slotA, slotB) {
-    const top = slotA.i < slotB.i ? slotA : slotB;
-    const other = top === slotA ? slotB : slotA;
-    return { L: top.L, r: top.i, c: other.i };
-  }
-  function clearMarker(slotA, slotB) {
-    const m = markerCell(slotA, slotB);
-    if (isMarker(STATE.grids[m.L][m.r][m.c])) STATE.grids[m.L][m.r][m.c] = '';
-  }
-  function slotHasScores(L, i) {
-    const n = STATE.pools[L].length;
-    for (let c = 0; c < n; c++) if (filled(STATE.grids[L][i][c])) return true;
-    for (let r = 0; r < n; r++) if (filled(STATE.grids[L][r][i])) return true;
-    return false;
-  }
-  function hasAnyScoresAnywhere() {
-    return Object.keys(STATE.grids).some((L) => STATE.grids[L].some((row) => row.some(isScore)));
-  }
-
-  function generatePools(padGuests, redraw) {
-    // Mirrors singlesDrawEligible() in gas/Code.gs: first 24 non-no-shows,
-    // topped up from checked-in players past the cap when no-shows freed spots.
-    const eligible = STATE.signups.slice(0, 24).filter((s) => !s.noShow);
-    for (let i = 24; i < STATE.signups.length && eligible.length < 24; i++) {
-      if (STATE.signups[i].checkedIn && !STATE.signups[i].noShow) eligible.push(STATE.signups[i]);
-    }
-    if (eligible.length < 12) {
-      return { ok: false, error: 'Only ' + eligible.length + ' eligible players — the session is cancelled below 12.' };
-    }
-    if (STATE.drawn) {
-      if (!redraw) return { ok: false, error: 'Pools are already drawn.' };
-      if (hasAnyScoresAnywhere()) return { ok: false, error: 'Games have started — pools can no longer be redrawn.' };
-    }
-    const sorted = eligible
-      .map((s, i) => ({ name: s.name, rank: rankFor(s.name), idx: i }))
-      .sort((a, b) => a.rank - b.rank || a.idx - b.idx);
-    const sizes = splitSizes(sorted.length);
-    const letters = LETTERS.slice(0, sizes.length);
-    const pad = new Set((padGuests || []).map((x) => String(x).toUpperCase()));
-
-    const pools = {}; let pos = 0;
-    letters.forEach((L, i) => {
-      const members = sorted.slice(pos, pos + sizes[i]).map((p) => p.name);
-      pos += sizes[i];
-      if (pad.has(L) && members.length < CAPACITY[L]) members.push('Guest' + L);
-      pools[L] = members;
-    });
-
-    STATE.pools = pools;
-    STATE.grids = {};
-    letters.forEach((L) => {
-      const n = pools[L].length;
-      STATE.grids[L] = Array.from({ length: n }, () => Array(n).fill(''));
-    });
-    STATE.guestMap = {};
-    STATE.live.matches = [];
-    STATE.drawn = true;
-    return { ok: true, pools: letters.map((L) => ({ label: L, players: pools[L] })) };
-  }
-
-  // Mirrors resetWeek() in gas/Code.gs: wipes tonight's draw, every score,
-  // and every signup's check-in/no-show status back to undrawn, for testing
-  // pool generation/scoring flows against the mock's live "This week" state.
-  function resetWeek(date) {
-    if (date && STATE.relay[date]) { STATE.relay[date].teams = []; STATE.relay[date].games = []; STATE.relay[date].rev++; }
-    STATE.drawn = false;
-    STATE.pools = {};
-    STATE.grids = {};
-    STATE.guestMap = {};
-    STATE.live.matches = [];
-    STATE.live.checkins = {};
-    STATE.signups.forEach((s) => { s.checkedIn = false; s.noShow = false; });
-    return { ok: true };
-  }
+  const STATE_FLAGS = { doubles: qs.get('doubles') === '1' };
 
   // Mirrors computeNextWeek()/peekNextWeekDate() in gas/Code.gs: reports
   // what the next date would be - one week after the mock's fixed "This
   // week" session.
   function peekNextWeekDate() {
-    const base = (typeof getSessionDateISO === 'function' ? getSessionDateISO() : null);
+    const base = sessionDate();
     if (!base) return { ok: false, error: 'mock: no session date available' };
     const d = new Date(base + 'T00:00:00Z');
     d.setUTCDate(d.getUTCDate() + 7);
@@ -210,408 +120,24 @@
     const peek = peekNextWeekDate();
     if (!peek.ok) return peek;
     const date = dateISO || peek.date;
-    if (!STATE.createdWeeks.includes(date)) STATE.createdWeeks.push(date);
+    if (!CREATED_WEEKS.includes(date)) CREATED_WEEKS.push(date);
+    if (ST[date]) ST[date].exists = true;
     return { ok: true, date };
   }
 
   // Mirrors listWeekDates() in gas/Code.gs: the mock's fixed "This week"
   // session plus any weeks created via the mock createWeek() action.
   function weekDates() {
-    const base = (typeof getSessionDateISO === 'function' ? getSessionDateISO() : null);
+    const base = sessionDate();
     const dates = base ? [base] : [];
-    STATE.createdWeeks.forEach((d) => { if (!dates.includes(d)) dates.push(d); });
+    CREATED_WEEKS.forEach((d) => { if (!dates.includes(d)) dates.push(d); });
     const formats = {};
-    Object.keys(STATE.events).forEach((d) => { formats[d] = { format: 'relay', rpMode: STATE.events[d].rpMode }; });
+    dates.forEach((d) => { const st = weekState(d); if (ENGINE.isRelay(st)) formats[d] = { format: 'relay', rpMode: st.event.rpMode }; });
     return { dates: dates.sort(), formats };
   }
 
-  // ---- Team relay doubles (mirrors the "Team relay doubles" section of gas/Code.gs) ----
-  // The pure rules (pairs, playing order, round/tie results, player totals)
-  // are the page's own relay* functions - by the time any request arrives
-  // the page script has defined them globally, the same way this mock
-  // already borrows getSessionDateISO().
-  const RELAY_CAP = 32, RELAY_TEAM_COUNTS = [4, 6], RELAY_TEAM_BONUS = 2, RELAY_ROUNDS = 2, RELAY_TB = 3;
-  const TEAM_IDS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
-  function sessionDate() { return (typeof getSessionDateISO === 'function') ? getSessionDateISO() : ''; }
-  function seedRelayIfAsked() {
-    if (!STATE.pendingRelaySeed) return;
-    STATE.pendingRelaySeed = false;
-    const d = sessionDate();
-    if (d) STATE.events[d] = { format: 'relay', rpMode: 'exhibition' };
-  }
-  function eventFor(date) {
-    const ev = STATE.events[date];
-    if (!ev) return { format: 'singles', cap: 24 };
-    return { format: 'relay', rpMode: ev.rpMode, cap: RELAY_CAP, teamBonus: RELAY_TEAM_BONUS, teamCounts: RELAY_TEAM_COUNTS };
-  }
-  function isRelay(date) { return !!STATE.events[date]; }
-  function relayState(date) {
-    if (!STATE.relay[date]) STATE.relay[date] = { rev: 0, teams: [], games: [] };
-    return STATE.relay[date];
-  }
-  function relayReply(date, result) { const st = relayState(date); if (result.ok !== false) st.rev++; result.relay = st; return result; }
-
-  // Mirrors setEventFormat() in gas/Code.gs.
-  function setEventFormat(date, format, rpMode) {
-    if (!date) return { ok: false, error: 'Missing date.' };
-    if (format === 'relay') {
-      if (!isRelay(date) && STATE.drawn && date === sessionDate()) return { ok: false, error: 'Singles pools are already drawn for ' + date + ' — reset the week first.' };
-      STATE.events[date] = { format: 'relay', rpMode: rpMode === 'ranked' ? 'ranked' : 'exhibition' };
-    } else if (format === 'singles') {
-      if (isRelay(date) && relayState(date).teams.length) return { ok: false, error: 'Doubles teams are already drawn for ' + date + ' — reset the week first.' };
-      delete STATE.events[date];
-    } else {
-      return { ok: false, error: 'Unknown format: ' + format };
-    }
-    return { ok: true, event: eventFor(date) };
-  }
-
-  // Mirrors drawTeams() in gas/Code.gs: everyone confirmed except no-shows,
-  // placed by the page's relayDrawTeams / relayTeamSizes (copies of Code.gs).
-  function drawTeams(date, teamCount, redraw) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team doubles night.' };
-    const k = Number(teamCount);
-    if (!RELAY_TEAM_COUNTS.includes(k)) return { ok: false, error: 'Pick ' + RELAY_TEAM_COUNTS.join(' or ') + ' teams.' };
-    const eligible = STATE.signups.slice(0, RELAY_CAP).filter((s) => !s.noShow);
-    if (eligible.length < k * 2) return { ok: false, error: 'Only ' + eligible.length + ' eligible players — need at least ' + (k * 2) + ' for ' + k + ' teams.' };
-    const st = relayState(date);
-    if (st.teams.length) {
-      if (!redraw) return relayReply(date, { ok: false, error: 'Teams are already drawn.' });
-      if (st.games.length) return relayReply(date, { ok: false, error: 'Games have started — teams can no longer be redrawn.' });
-    }
-    const sorted = eligible.map((s, i) => ({ name: s.name, rank: rankFor(s.name), idx: i }))
-      .sort((a, b) => a.rank - b.rank || a.idx - b.idx);
-    // Mirrors gas/Code.gs drawTeams: requested pairs first, then alternate
-    // (the page's relayDrawTeams), guests at the bottom.
-    const plan = relayTeamSizes(sorted.length, k);
-    const names = sorted.map((p) => p.name);
-    let guestNo = 0;
-    const teams = relayDrawTeams(names, plan.sizes, relayRequestPairs(st.requests, names)).map((list, t) => {
-      const team = { id: TEAM_IDS[t], players: list.slice() };
-      for (let x = 0; x < plan.guests[t]; x++) team.players.push('Guest ' + (++guestNo));
-      return team;
-    });
-    st.teams = teams;
-    st.games = [];
-    st.guests = [];
-    return relayReply(date, { ok: true });
-  }
-
-  // Mirrors relaySaveTeams() in gas/Code.gs.
-  function relaySaveTeams(date, teams, rev, guests) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team doubles night.' };
-    const st = relayState(date);
-    if (!st.teams.length) return relayReply(date, { ok: false, error: 'Draw teams first.' });
-    if (Number(rev) !== st.rev) return relayReply(date, { ok: false, stale: true, error: 'Teams were changed on another device — showing the latest now; please redo your change.' });
-    if (!Array.isArray(teams) || teams.length !== st.teams.length) return relayReply(date, { ok: false, error: 'The number of teams cannot change after the draw — redraw instead.' });
-    const seen = {};
-    const clean = [];
-    for (let i = 0; i < teams.length; i++) {
-      const t = teams[i] || {};
-      if (t.id !== st.teams[i].id) return relayReply(date, { ok: false, error: 'Team order mismatch — refresh and try again.' });
-      const players = [];
-      for (const raw of (t.players || [])) {
-        const nm = String(raw || '').trim().slice(0, 40);
-        if (!nm) continue;
-        if (seen[key(nm)]) return relayReply(date, { ok: false, error: nm + ' is listed on more than one team.' });
-        seen[key(nm)] = true;
-        players.push(nm);
-      }
-      const tmp = { players, lineup2: t.lineup2 };
-      let lineup2 = Array.isArray(t.lineup2) ? relayLineup(tmp, 2) : null;
-      if (lineup2 && lineup2.join('\n') === players.join('\n')) lineup2 = null; // same as round 1
-      const cleanTeam = { id: t.id, players };
-      if (lineup2) cleanTeam.lineup2 = lineup2;
-      clean.push(cleanTeam);
-    }
-    // Mirrors the guests clean-up in gas/Code.gs relaySaveTeams.
-    const onTeam = {};
-    clean.forEach((t) => t.players.forEach((p) => { onTeam[key(p)] = p; }));
-    const cleanGuests = [];
-    for (const g of (Array.isArray(guests) ? guests : [])) {
-      const k = key(g);
-      if (!k || !onTeam[k] || cleanGuests.some((x) => key(x) === k)) continue;
-      if (STATE.signups.some((s) => key(s.name) === k)) return relayReply(date, { ok: false, error: onTeam[k] + ' is signed up for tonight — add them as a player, not a guest.' });
-      cleanGuests.push(onTeam[k]);
-    }
-    st.teams = clean;
-    st.guests = cleanGuests;
-    return relayReply(date, { ok: true });
-  }
-
-  // Mirrors relayAddPlayer() in gas/Code.gs: sign up (if needed) + check in,
-  // and add to a team when a team index is given.
-  function relayAddPlayer(date, name, team) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team doubles night.' };
-    return addWalkIn(date, name, team);
-  }
-
-  // Mirrors addWalkIn()/editWalkIn()/removeWalkIn() in gas/Code.gs - walk-ins
-  // added at the desk, on singles and relay nights.
-  function addWalkIn(date, name, team) {
-    name = String(name || '').trim().slice(0, 40);
-    if (!name) return { ok: false, error: "Enter the player's name." };
-    const relay = isRelay(date);
-    const st = relay ? relayState(date) : null;
-    if (relay && (st.guests || []).some((g) => key(g) === key(name))) return { ok: false, error: name + ' is on a team as a guest — take them off first to add them as a player.' };
-    let idx = STATE.signups.findIndex((s) => key(s.name) === key(name));
-    let isNew = false;
-    if (idx < 0) {
-      const j = join(date, name, '');
-      if (!j.ok) return j;
-      idx = STATE.signups.length - 1;
-      isNew = true;
-      STATE.live.walkins[key(name)] = true;
-    }
-    name = STATE.signups[idx].name;
-    const ci = checkin(name);
-    const position = idx + 1;
-    const cap = eventFor(date).cap;
-    if (!relay) return { ok: true, name, position, waitlisted: position > cap, walkIn: isNew, seated: ci.seated };
-    let result = { ok: true };
-    if (team !== null && team !== undefined && team !== '') {
-      const ti = Number(team);
-      if (!st.teams[ti]) return relayReply(date, { ok: false, error: 'Unknown team.' });
-      const on = st.teams.findIndex((t) => t.players.some((p) => key(p) === key(name)));
-      if (on >= 0 && on !== ti) return relayReply(date, { ok: false, error: name + ' is already on Team ' + st.teams[on].id + '.' });
-      if (on < 0) placeOnTeam(st.teams[ti], name);
-    }
-    result = relayReply(date, result);
-    result.position = position; result.waitlisted = position > cap; result.name = name; result.walkIn = isNew;
-    return result;
-  }
-  // Mirrors relayPlaceOnTeam() in gas/Code.gs: a late player takes the last
-  // "Guest N" placeholder's spot, else joins at the end.
-  function placeOnTeam(team, name) {
-    for (let i = team.players.length - 1; i >= 0; i--) {
-      const guest = String(team.players[i]).trim();
-      if (!/^guest \d+$/i.test(guest)) continue;
-      team.players[i] = name;
-      if (team.lineup2) team.lineup2 = team.lineup2.map((p) => (key(p) === key(guest) ? name : p));
-      return;
-    }
-    team.players.push(name);
-  }
-  function walkInTarget(name) {
-    if (!STATE.live.walkins[key(name)]) return { ok: false, error: 'Only walk-ins added at the desk can be changed here.' };
-    const idx = STATE.signups.findIndex((s) => key(s.name) === key(name));
-    if (idx < 0) return { ok: false, error: 'Signup not found for ' + name };
-    return { ok: true, idx };
-  }
-  function editWalkIn(date, oldName, newName) {
-    const t = walkInTarget(oldName);
-    if (!t.ok) return t;
-    newName = String(newName || '').trim().slice(0, 40);
-    if (!newName) return { ok: false, error: 'Enter the corrected name.' };
-    const oldKey = key(oldName), newKey = key(newName);
-    if (newKey !== oldKey && STATE.signups.some((s) => key(s.name) === newKey)) return { ok: false, error: newName + ' is already signed up tonight.' };
-    const swap = (n) => (key(n) === oldKey ? newName : n);
-    STATE.signups[t.idx].name = newName;
-    Object.keys(STATE.pools).forEach((L) => { STATE.pools[L] = STATE.pools[L].map(swap); });
-    STATE.live.matches.forEach((m) => { m.a = swap(m.a); m.b = swap(m.b); });
-    delete STATE.live.walkins[oldKey]; STATE.live.walkins[newKey] = true;
-    if (oldKey in STATE.live.checkins && newKey !== oldKey) { STATE.live.checkins[newKey] = STATE.live.checkins[oldKey]; delete STATE.live.checkins[oldKey]; }
-    if (isRelay(date)) {
-      const st = relayState(date);
-      st.teams.forEach((tm) => { tm.players = tm.players.map(swap); if (tm.lineup2) tm.lineup2 = tm.lineup2.map(swap); });
-      st.games.forEach((g) => { g.a = (g.a || []).map(swap); g.b = (g.b || []).map(swap); });
-      st.rev++;
-    }
-    return { ok: true, name: newName };
-  }
-  function removeWalkIn(date, name) {
-    const t = walkInTarget(name);
-    if (!t.ok) return t;
-    const k = key(name), nm = STATE.signups[t.idx].name;
-    if (isRelay(date)) {
-      const st = relayState(date);
-      if (st.games.some((g) => (g.a || []).concat(g.b || []).some((n) => key(n) === k))) return { ok: false, error: nm + ' has already played a game tonight — take them off their team instead.' };
-      st.teams.forEach((tm) => {
-        tm.players = tm.players.filter((p) => key(p) !== k);
-        if (tm.lineup2) tm.lineup2 = tm.lineup2.filter((p) => key(p) !== k);
-      });
-      st.rev++;
-    } else {
-      const slot = findSlot(nm);
-      if (slot) return { ok: false, error: nm + ' has a seat in Pool ' + slot.L + ' — mark them No show instead, or redraw after removing.' };
-    }
-    STATE.signups.splice(t.idx, 1);
-    delete STATE.live.walkins[k];
-    delete STATE.live.checkins[k];
-    return { ok: true };
-  }
-
-  // Mirrors relayResolvePairs() in gas/Code.gs.
-  function relayResolve(st, tie, round, seq, aPair, bPair) {
-    if (tie < 0 || tie >= relayTieCount(st)) return { ok: false, error: 'Unknown tie.' };
-    const v = relayTieView(st, tie);
-    if (round === RELAY_TB) {
-      if (!v.needsTiebreak) return { ok: false, error: "This tie doesn't need a tiebreak game." };
-      const pick = (pair, team) => {
-        if (!Array.isArray(pair) || pair.length !== 2) return null;
-        const out = pair.map((n) => team.players.find((p) => key(p) === key(n)));
-        return out.every(Boolean) && out[0] !== out[1] ? out : null;
-      };
-      const a = pick(aPair, v.a), b = pick(bPair, v.b);
-      if (!a || !b) return { ok: false, error: 'Pick two different players from each team for the tiebreak.' };
-      return { ok: true, a, b };
-    }
-    if (round < 1 || round > RELAY_ROUNDS) return { ok: false, error: 'Unknown round.' };
-    if (v.problem) return { ok: false, error: v.problem };
-    const g = v.rounds[round - 1].games[seq];
-    if (!g || !g.a || !g.b) return { ok: false, error: 'Unknown game.' };
-    return { ok: true, a: g.a, b: g.b };
-  }
-  function relayStartGame(date, tie, round, seq, aPair, bPair) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team doubles night.' };
-    const st = relayState(date);
-    tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
-    if (relayFindGame(st, tie, round, seq)) return relayReply(date, { ok: false, error: 'That game is already on court or scored.' });
-    const p = relayResolve(st, tie, round, seq, aPair, bPair);
-    if (!p.ok) return relayReply(date, p);
-    const clash = relayOnCourt(st, p.a.concat(p.b)); // mirrors gas/Code.gs relayStartGame
-    if (clash.length) return relayReply(date, { ok: false, error: clash.join(' and ') + (clash.length > 1 ? ' are' : ' is') + ' still on court in another game — score or cancel that game first.' });
-    st.games.push({ tie, round, seq, a: p.a, b: p.b, startedAt: Date.now() });
-    return relayReply(date, { ok: true });
-  }
-  function relayScore(date, tie, round, seq, scoreA, scoreB, aPair, bPair) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team doubles night.' };
-    const v = validateScores(scoreA, scoreB);
-    if (!v.ok) return v;
-    const st = relayState(date);
-    tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
-    let g = relayFindGame(st, tie, round, seq);
-    if (!g) {
-      const p = relayResolve(st, tie, round, seq, aPair, bPair);
-      if (!p.ok) return relayReply(date, p);
-      g = { tie, round, seq, a: p.a, b: p.b };
-      st.games.push(g);
-    }
-    g.sa = v.a; g.sb = v.b; g.finishedAt = Date.now();
-    return relayReply(date, { ok: true });
-  }
-  function relayClearGame(date, tie, round, seq) {
-    if (!isRelay(date)) return { ok: false, error: date + ' is not a team doubles night.' };
-    const st = relayState(date);
-    tie = Number(tie); round = Number(round); seq = Number(seq) || 0;
-    const i = st.games.findIndex((g) => g.tie === tie && g.round === round && g.seq === seq);
-    if (i < 0) return relayReply(date, { ok: false, error: 'Game not found — it may already be cleared.' });
-    st.games.splice(i, 1);
-    return relayReply(date, { ok: true });
-  }
-
-  function checkin(name) {
-    const s = STATE.signups.find((x) => key(x.name) === key(name));
-    if (!s) return { ok: false, error: 'Signup not found for ' + name };
-    let seated = true;
-    if (s.noShow && STATE.drawn) {
-      const guestLabel = STATE.guestMap[key(name)];
-      if (guestLabel) {
-        const slot = findSlot(guestLabel);
-        if (slot) {
-          if (slotHasScores(slot.L, slot.i)) {
-            return { ok: false, error: guestLabel + ' has already played — ' + name + ' cannot rejoin tonight.' };
-          }
-          STATE.pools[slot.L][slot.i] = s.name;
-        } else {
-          seated = false;
-        }
-        delete STATE.guestMap[key(name)];
-      } else {
-        seated = false;
-      }
-    }
-    s.checkedIn = true; s.noShow = false;
-    STATE.live.checkins[key(name)] = Date.now();
-    return { ok: true, seated };
-  }
-
-  function noshow(name) {
-    const s = STATE.signups.find((x) => key(x.name) === key(name));
-    if (!s) return { ok: false, error: 'Signup not found for ' + name };
-    if (s.noShow) return { ok: true };
-    const slot = findSlot(s.name);
-    if (slot) {
-      let n = 1;
-      const re = new RegExp('^Guest' + slot.L + '(\\d+)$', 'i');
-      STATE.pools[slot.L].forEach((v) => { const m = (v || '').match(re); if (m && Number(m[1]) >= n) n = Number(m[1]) + 1; });
-      const label = 'Guest' + slot.L + n;
-      STATE.pools[slot.L][slot.i] = label;
-      STATE.guestMap[key(s.name)] = label;
-    }
-    s.noShow = true; s.checkedIn = false;
-    delete STATE.live.checkins[key(name)];
-    return { ok: true };
-  }
-
-  function clearstatus(name) {
-    const s = STATE.signups.find((x) => key(x.name) === key(name));
-    if (!s) return { ok: false, error: 'Signup not found for ' + name };
-    if (s.noShow) {
-      const guestLabel = STATE.guestMap[key(name)];
-      if (guestLabel) {
-        const slot = findSlot(guestLabel);
-        if (slot) {
-          if (slotHasScores(slot.L, slot.i)) {
-            return { ok: false, error: guestLabel + ' has already played — the no-show cannot be undone.' };
-          }
-          STATE.pools[slot.L][slot.i] = s.name;
-        }
-        delete STATE.guestMap[key(name)];
-      }
-    }
-    s.checkedIn = false; s.noShow = false;
-    return { ok: true };
-  }
-
-  function join(date, name, contact) {
-    if (!name) return { ok: false, error: 'Missing name' };
-    const ban = STATE.bans[key(name)];
-    if (ban) return { ok: false, error: ban.name + ' is banned from signing up through ' + ban.until + '.' };
-    if (STATE.signups.some((s) => key(s.name) === key(name))) return { ok: false, error: 'Already signed up' };
-    STATE.signups.push({ name, checkedIn: false, noShow: false });
-    return { ok: true, row: STATE.signups.length, position: STATE.signups.length, cap: eventFor(date).cap };
-  }
-  function leave(date, name) {
-    const i = STATE.signups.findIndex((s) => key(s.name) === key(name));
-    if (i < 0) return { ok: false, error: 'Signup not found for ' + name };
-    STATE.signups.splice(i, 1);
-    if (isRelay(date)) { const st = relayState(date); st.requests = (st.requests || []).filter((r) => key(r.name) !== key(name)); st.rev++; }
-    return { ok: true };
-  }
-  // Mirrors joinWithPartner() in gas/Code.gs.
-  function joinWithPartner(date, name, contact, partner, mix) {
-    partner = String(partner || '').trim().slice(0, 40);
-    if (!isRelay(date)) return join(date, name, contact);
-    if (!partner && !mix) {
-      const st0 = relayState(date);
-      const me = STATE.signups.findIndex((s) => key(s.name) === key(name));
-      if (me < 0 || !(st0.requests || []).some((r) => key(r.name) === key(name))) return join(date, name, contact);
-      st0.requests = st0.requests.filter((r) => key(r.name) !== key(name));
-      st0.rev++;
-      return { ok: true, partnerOnly: true, cleared: true, position: me + 1, cap: eventFor(date).cap };
-    }
-    if (key(partner) === key(name)) return { ok: false, error: 'Pick someone other than yourself as your partner.' };
-    const idx = STATE.signups.findIndex((s) => key(s.name) === key(name));
-    let result;
-    if (idx >= 0) {
-      name = STATE.signups[idx].name;
-      result = { ok: true, partnerOnly: true, position: idx + 1, cap: eventFor(date).cap };
-    } else {
-      result = join(date, name, contact);
-      if (!result.ok) return result;
-    }
-    const st = relayState(date);
-    st.requests = (st.requests || []).filter((r) => key(r.name) !== key(name));
-    st.requests.push(partner ? { name, partner } : { name, partner: '', mix: true });
-    st.rev++;
-    if (partner) result.partner = partner;
-    else result.mix = true;
-    return result;
-  }
-
   // Mirrors renamePlayer() in gas/Code.gs: renames a player in RANKINGS (the
-  // season roster) plus wherever they appear in this week's signups/pools,
+  // season roster) plus wherever they appear in each week's signups/pools,
   // and optionally stashes an email on the ranking entry (not sent anywhere
   // in the sandbox - MailApp doesn't exist here).
   function renamePlayer(oldName, newName, email) {
@@ -621,9 +147,13 @@
     r.name = newName;
     if (email) r.email = email;
     let tabsUpdated = 0;
-    STATE.signups.forEach((s) => { if (key(s.name) === key(oldName)) { s.name = newName; tabsUpdated = 1; } });
-    Object.keys(STATE.pools).forEach((L) => {
-      STATE.pools[L] = STATE.pools[L].map((n) => (key(n) === key(oldName) ? newName : n));
+    Object.values(ST).forEach((st) => {
+      let hit = false;
+      st.signups.forEach((s) => { if (key(s.name) === key(oldName)) { s.name = newName; hit = true; } });
+      Object.keys(st.pools).forEach((L) => {
+        st.pools[L] = st.pools[L].map((n) => (key(n) === key(oldName) ? newName : n));
+      });
+      if (hit) tabsUpdated++;
     });
     return { ok: true, tabsUpdated };
   }
@@ -639,8 +169,8 @@
   // week (past weeks are canned with no no-shows), so this just reflects
   // tonight's signups.
   function noShowSummary() {
-    const dateISO = (typeof getSessionDateISO === 'function' ? getSessionDateISO() : null);
-    const players = STATE.signups.filter((s) => s.noShow).map((s) => ({ name: s.name, count: 1, dates: dateISO ? [dateISO] : [] }));
+    const dateISO = sessionDate();
+    const players = weekState(dateISO).signups.filter((s) => s.noShow).map((s) => ({ name: s.name, count: 1, dates: dateISO ? [dateISO] : [] }));
     players.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
     return { ok: true, players };
   }
@@ -651,144 +181,23 @@
     until = (until || '').trim();
     if (!name) return { ok: false, error: 'Player name is required.' };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) return { ok: false, error: 'Ban end date must be YYYY-MM-DD.' };
-    STATE.bans[key(name)] = { name, until };
+    BANS[key(name)] = { name, until };
     return { ok: true };
   }
   function unbanPlayer(name) {
-    delete STATE.bans[key(name)];
+    delete BANS[key(name)];
     return { ok: true };
   }
   function listBans() {
     const today = new Date().toISOString().slice(0, 10);
-    const bans = Object.values(STATE.bans).filter((b) => b.until >= today)
+    const bans = Object.values(BANS).filter((b) => b.until >= today)
       .sort((a, b) => a.until.localeCompare(b.until));
     return { ok: true, bans };
   }
 
-  function validateScores(scoreA, scoreB) {
-    const a = Number(scoreA), b = Number(scoreB);
-    if (!isFinite(a) || !isFinite(b) || a % 1 !== 0 || b % 1 !== 0 || a < 0 || b < 0) {
-      return { ok: false, error: 'Scores must be whole numbers, 0 or more.' };
-    }
-    if (a === b) return { ok: false, error: 'A game cannot end in a tie.' };
-    return { ok: true, a, b };
-  }
-
-  // Guest games write a minimal 1-0 grid result for the real player (their
-  // actual score is kept as the match's infoScore instead); guest-vs-guest
-  // games never touch the grid at all.
-  function writePairScore(nameA, nameB, scoreA, scoreB) {
-    const a = findSlot(nameA), b = findSlot(nameB);
-    if (!a) return { ok: false, error: nameA + ' no longer holds a pool seat.' };
-    if (!b) return { ok: false, error: nameB + ' no longer holds a pool seat.' };
-    if (a.L !== b.L) return { ok: false, error: 'Those players are in different pools.' };
-    const guestA = isGuestLabel(nameA), guestB = isGuestLabel(nameB);
-    if (guestA && guestB) {
-      clearMarker(a, b); // no score lands in the grid, so the marker must go
-      return { ok: true, infoOnly: true };
-    }
-    let recA = scoreA, recB = scoreB;
-    if (guestA) { recA = 0; recB = 1; }
-    if (guestB) { recA = 1; recB = 0; }
-    STATE.grids[a.L][a.i][b.i] = recA;
-    STATE.grids[b.L][b.i][a.i] = recB;
-    return { ok: true, infoOnly: guestA || guestB };
-  }
-
-  function startMatch(a, b, guestNames, clientId) {
-    if (!STATE.drawn) return { ok: false, error: 'Pools have not been drawn yet.' };
-    const slotA = findSlot(a), slotB = findSlot(b);
-    if (!slotA) return { ok: false, error: (a || '?') + ' does not hold a pool seat.' };
-    if (!slotB) return { ok: false, error: (b || '?') + ' does not hold a pool seat.' };
-    if (slotA.L !== slotB.L) return { ok: false, error: 'Those players are in different pools.' };
-    if (slotA.i === slotB.i) return { ok: false, error: 'Pick two different players.' };
-    if (isScore(STATE.grids[slotA.L][slotA.i][slotB.i]) || isScore(STATE.grids[slotB.L][slotB.i][slotA.i])) {
-      return { ok: false, error: 'That game already has a score.' };
-    }
-    const busy = STATE.live.matches.find((m) => !m.finishedAt && (key(m.a) === key(a) || key(m.a) === key(b) || key(m.b) === key(a) || key(m.b) === key(b)));
-    if (busy) return { ok: false, error: busy.a + ' vs ' + busy.b + ' is still on court — record or cancel it first.' };
-
-    const id = (typeof clientId === 'string' && clientId.length > 0 && clientId.length <= 64) ? clientId : uid();
-    const match = { id, pool: slotA.L, a: STATE.pools[slotA.L][slotA.i], b: STATE.pools[slotB.L][slotB.i], startedAt: Date.now() };
-    const mc = markerCell(slotA, slotB);
-    STATE.grids[mc.L][mc.r][mc.c] = 'p'; // in-progress marker, cleared/overwritten on record or cancel
-    const gn = {};
-    [match.a, match.b].forEach((n) => { if (isGuestLabel(n) && guestNames && guestNames[n]) gn[n] = String(guestNames[n]).trim().slice(0, 40); });
-    if (Object.keys(gn).length) match.guestNames = gn;
-    STATE.live.matches.push(match);
-    return { ok: true, match };
-  }
-
-  function recordScore(matchId, scoreA, scoreB) {
-    const match = STATE.live.matches.find((m) => m.id === matchId);
-    if (!match) return { ok: false, error: 'Match not found — refresh and try again.' };
-    if (match.finishedAt) return { ok: false, error: 'This match was already recorded.' };
-    const v = validateScores(scoreA, scoreB);
-    if (!v.ok) return v;
-    const w = writePairScore(match.a, match.b, v.a, v.b);
-    if (!w.ok) return w;
-    match.finishedAt = Date.now(); // starts both players' waiting timers
-    if (w.infoOnly) match.infoScore = [v.a, v.b];
-    return { ok: true };
-  }
-
-  function editScore(a, b, scoreA, scoreB, matchId) {
-    const v = validateScores(scoreA, scoreB);
-    if (!v.ok) return v;
-    if (!isGuestLabel(a) && !isGuestLabel(b)) {
-      const slotA = findSlot(a), slotB = findSlot(b);
-      if (!slotA) return { ok: false, error: (a || '?') + ' does not hold a pool seat.' };
-      if (!slotB) return { ok: false, error: (b || '?') + ' does not hold a pool seat.' };
-      if (slotA.L !== slotB.L) return { ok: false, error: 'Those players are in different pools.' };
-      STATE.grids[slotA.L][slotA.i][slotB.i] = v.a;
-      STATE.grids[slotB.L][slotB.i][slotA.i] = v.b;
-      return { ok: true };
-    }
-    const keyA = key(a), keyB = key(b);
-    let match = null;
-    STATE.live.matches.forEach((m) => {
-      if (!m.finishedAt) return;
-      const want = matchId ? m.id === matchId
-        : ((key(m.a) === keyA && key(m.b) === keyB) || (key(m.a) === keyB && key(m.b) === keyA));
-      if (want && (!match || m.finishedAt > match.finishedAt)) match = m;
-    });
-    if (!match) return { ok: false, error: 'No recorded match found for that guest game.' };
-    match.infoScore = key(match.a) === keyA ? [v.a, v.b] : [v.b, v.a];
-    return { ok: true };
-  }
-
-  function cancelMatch(matchId) {
-    const i = STATE.live.matches.findIndex((m) => m.id === matchId);
-    if (i < 0) return { ok: false, error: 'Match not found — it may already be cancelled.' };
-    if (STATE.live.matches[i].finishedAt) return { ok: false, error: 'That match already finished — use Edit instead.' };
-    const m = STATE.live.matches[i];
-    const slotA = findSlot(m.a), slotB = findSlot(m.b);
-    if (slotA && slotB && slotA.L === slotB.L) clearMarker(slotA, slotB);
-    STATE.live.matches.splice(i, 1);
-    return { ok: true };
-  }
-
-  function getWeek() {
-    const pools = STATE.drawn
-      ? Object.keys(STATE.pools).map((L) => ({
-          label: L, drawn: true,
-          players: STATE.pools[L].map((n) => ({ name: n, gw: 0, gl: 0, ptsWL: '', score: '', rank: '', rankPts: '' })),
-          // Like gas/Code.gs getWeek: the payload's grid contract is number | ''
-          grid: STATE.grids[L].map((row) => row.map((v) => (isMarker(v) ? '' : v)))
-        }))
-      : [];
-    const date = sessionDate();
-    const week = {
-      date,
-      exists: true,
-      hasScores: hasAnyScoresAnywhere(),
-      signups: STATE.signups,
-      pools,
-      live: { matches: STATE.live.matches, checkins: STATE.live.checkins, walkins: Object.keys(STATE.live.walkins) },
-      now: Date.now()
-    };
-    // Like gas/Code.gs computeWeek: event + relay only on a relay night.
-    if (isRelay(date)) { week.event = eventFor(date); week.relay = relayState(date); }
+  function getWeek(date) {
+    const week = ENGINE.toView(weekState(date));
+    week.now = Date.now();
     return week;
   }
 
@@ -853,7 +262,8 @@
     const k = key(name);
     const totals = {};
     const weeks = Object.values(pastWeeks());
-    if (STATE.drawn) weeks.push(getWeek());
+    const tonight = getWeek(sessionDate());
+    if (tonight.pools.length) weeks.push(tonight);
     weeks.sort((a, b) => (b.date < a.date ? -1 : b.date > a.date ? 1 : 0)); // most-recent-first
     weeks.slice(0, H2H_WEEK_WINDOW).forEach((week) => {
       (week.pools || []).forEach((p) => {
@@ -881,29 +291,24 @@
     return { opponents };
   }
 
-  const SINGLES_ONLY = ['generatePools', 'startMatch', 'recordScore', 'editScore', 'cancelMatch'];
   function handlePost(body) {
-    seedRelayIfAsked();
-    if (SINGLES_ONLY.includes(body.action) && isRelay(body.date)) {
-      return { ok: false, error: 'This is a team doubles night — run it from the This week page.' };
+    if (ENGINE.ACTIONS.includes(body.action)) {
+      // Same as the Worker: the match id is minted before the action runs,
+      // so the backend and every device agree on it.
+      if (body.action === 'startMatch' && !body.id) body.id = uid();
+      return ENGINE.apply(weekState(body.date), body, Date.now());
     }
     switch (body.action) {
-      case 'join': return joinWithPartner(body.date, body.name, body.contact, body.partner, body.mix);
-      case 'leave': return leave(body.date, body.name);
       case 'getpin': return { ok: true, pin: '123456' }; // dev sandbox: any passphrase works
       case 'verifyPin': return { ok: true }; // dev sandbox: any PIN works
-      case 'generatePools': return generatePools(body.padGuests, body.redraw);
-      case 'checkin': return checkin(body.name);
-      case 'noshow': return noshow(body.name);
-      case 'clearstatus': return clearstatus(body.name);
-      case 'startMatch': return startMatch(body.a, body.b, body.guestNames, body.id);
-      case 'recordScore': return recordScore(body.matchId, body.scoreA, body.scoreB);
-      case 'editScore': return editScore(body.a, body.b, body.scoreA, body.scoreB, body.matchId);
-      case 'cancelMatch': return cancelMatch(body.matchId);
-      case 'finalizeRankings': // dev sandbox: any passphrase works
-        if (isRelay(body.date) && STATE.events[body.date].rpMode !== 'ranked') return { ok: true, exhibition: true, date: body.date };
+      case 'finalizeRankings': { // dev sandbox: any passphrase works
+        const st = weekState(body.date);
+        if (ENGINE.isRelay(st) && st.event.rpMode !== 'ranked') return { ok: true, exhibition: true, date: body.date };
         return { ok: true, finalized: true, date: body.date, updated: RANKINGS.length, added: [], skipped: [] };
-      case 'resetWeek': return resetWeek(body.date);
+      }
+      case 'resetWeek': return ENGINE.resetWeek(weekState(body.date));
+      case 'setEventFormat': return body.date ? ENGINE.setEventFormat(weekState(body.date), body) : { ok: false, error: 'Missing date.' };
+      case 'syncReload': return { ok: true }; // the Worker's "Reload from the sheet" - nothing to reload here
       case 'createWeek': return createWeek(body.date);
       case 'peekNextWeekDate': return peekNextWeekDate();
       case 'renamePlayer': return renamePlayer(body.oldName, body.newName, body.email);
@@ -912,24 +317,14 @@
       case 'banPlayer': return banPlayer(body.name, body.until);
       case 'unbanPlayer': return unbanPlayer(body.name);
       case 'listBans': return listBans();
-      case 'getSheetEditors': return { ok: true, emails: STATE.sheetEditors };
+      case 'getSheetEditors': return { ok: true, emails: SHEET_EDITORS };
       case 'setSheetEditors': { // mirrors setSheetEditors() in gas/Code.gs (no real tabs to protect here)
         const list = String(body.emails || '').split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
         const bad = list.filter((e) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
         if (bad.length) return { ok: false, error: 'Not a valid email: ' + bad.join(', ') };
-        STATE.sheetEditors = [...new Map(list.map((e) => [key(e), e])).values()];
-        return { ok: true, emails: STATE.sheetEditors, updated: STATE.sheetEditors.length ? 3 : 0, warnings: [] };
+        SHEET_EDITORS = [...new Map(list.map((e) => [key(e), e])).values()];
+        return { ok: true, emails: SHEET_EDITORS, updated: SHEET_EDITORS.length ? 3 : 0, warnings: [] };
       }
-      case 'setEventFormat': return setEventFormat(body.date, body.format, body.rpMode);
-      case 'drawTeams': return drawTeams(body.date, body.teamCount, body.redraw);
-      case 'relaySaveTeams': return relaySaveTeams(body.date, body.teams, body.rev, body.guests);
-      case 'relayAddPlayer': return relayAddPlayer(body.date, body.name, body.team);
-      case 'addWalkIn': return addWalkIn(body.date, body.name, body.team);
-      case 'editWalkIn': return editWalkIn(body.date, body.oldName, body.newName);
-      case 'removeWalkIn': return removeWalkIn(body.date, body.name);
-      case 'relayStartGame': return relayStartGame(body.date, body.tie, body.round, body.seq, body.aPair, body.bPair);
-      case 'relayScore': return relayScore(body.date, body.tie, body.round, body.seq, body.scoreA, body.scoreB, body.aPair, body.bPair);
-      case 'relayClearGame': return relayClearGame(body.date, body.tie, body.round, body.seq);
       default: return { ok: false, error: 'mock: unhandled action ' + body.action };
     }
   }
@@ -942,14 +337,13 @@
   window.fetch = async function (url, opts) {
     try {
       const isPost = opts && (opts.method || 'GET').toUpperCase() === 'POST';
-      seedRelayIfAsked();
       if (!isPost) {
         const qs = String(url).split('?')[1] || '';
         const action = new URLSearchParams(qs).get('action');
         if (action === 'rankings') return jsonResponse({ players: RANKINGS, weeks: Object.keys(pastWeeks()) });
         if (action === 'week') {
           const date = new URLSearchParams(qs).get('date');
-          return jsonResponse(pastWeeks()[date] || getWeek());
+          return jsonResponse(pastWeeks()[date] || getWeek(date));
         }
         if (action === 'headtohead') return jsonResponse(headToHead(new URLSearchParams(qs).get('name')));
         if (action === 'weekDates') return jsonResponse(weekDates());
@@ -971,7 +365,7 @@
     document.body.appendChild(badge);
   });
 
-  window.__MOCK_STATE = STATE; // console access to the sandbox "sheet" (e.g. inspect grids for the 'p' marker)
+  window.__MOCK_STATE = ST; // console access to each date's sandbox "sheet" (e.g. inspect grids for the 'p' marker)
 
   console.log('%c[mock-backend] active — network calls to Apps Script are intercepted.', 'color:#2F7D52;font-weight:bold');
   console.log('[mock-backend] seed: 24 confirmed + 2 waitlisted, pools not drawn yet. Any PIN works for Generate pools.');
