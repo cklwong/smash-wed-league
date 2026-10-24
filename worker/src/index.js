@@ -59,6 +59,10 @@ function validDate(d) {
   return isFinite(t) && Math.abs(t - Date.now()) < 400 * 86400000 && new Date(t).toISOString().slice(0, 10) === d;
 }
 
+// The SYNC_KEY secret, minus any stray spaces/line breaks from pasting it
+// into the dashboard (Code.gs's key never has any).
+function syncKey(env) { return String(env.SYNC_KEY || '').trim(); }
+
 function eventStub(env, date) { return env.EVENTS.get(env.EVENTS.idFromName(date)); }
 function metaStub(env) { return env.META.get(env.META.idFromName('meta')); }
 
@@ -81,7 +85,7 @@ export class EventDO extends DurableObject {
           getAlarm: () => storage.getAlarm(),
           setAlarm: (ms) => storage.setAlarm(ms)
         },
-        gas: (body) => gasPost(this.env, Object.assign({ key: this.env.SYNC_KEY }, body))
+        gas: (body) => gasPost(this.env, Object.assign({ key: syncKey(this.env) }, body))
       });
     }
     return this.core;
@@ -157,7 +161,14 @@ async function handleGet(url, env) {
       return json(await gasGet(env, url.searchParams.toString()));
     }
   }
-  if (action === 'health') return json({ ok: true, worker: 'smash-wed' });
+  if (action === 'health') {
+    // For setup checks (worker/README.md): whether the Worker can see its
+    // SYNC_KEY at run time, its length, and the first 8 hex digits of its
+    // SHA-256 - compare with what setupSyncKey() logs in Apps Script. Not
+    // enough to recover the key.
+    const key = syncKey(env);
+    return json({ ok: true, worker: 'smash-wed', syncKey: key ? { set: true, length: key.length, fingerprint: (await sha256Hex(key)).slice(0, 8) } : { set: false } });
+  }
   return json(await gasGet(env, url.searchParams.toString()));
 }
 

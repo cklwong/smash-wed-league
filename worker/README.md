@@ -72,7 +72,10 @@ Trade-offs, agreed up front:
    type *Secret*, name `SYNC_KEY`, value = the key from step 1. Then
    redeploy, or wait for the next build.
 4. **Check it.** Open `https://smash-wed.<your-subdomain>.workers.dev/?action=health`.
-   It should return `{"ok":true,"worker":"smash-wed"}`. Then try
+   It should return `{"ok":true,"worker":"smash-wed","syncKey":{"set":true,"length":64,"fingerprint":"…"}}`.
+   The length and fingerprint must match what `setupSyncKey()` logs; `"set":false` means the
+   secret isn't visible at run time (it belongs under Settings → Variables and Secrets, not
+   under Settings → Build). Then try
    `?action=week&date=<an event date>`; it should return that week's JSON.
 5. **Switch the site over.** Set `WORKER_URL` near the top of the
    `<script>` in `site/index.html` to the Worker's URL and push to `main`.

@@ -3900,12 +3900,15 @@ function setupSyncKey() {
     props.setProperty('SYNC_KEY', key);
   }
   Logger.log('SYNC_KEY = ' + key);
+  // The Worker's ?action=health shows the same length and fingerprint when
+  // its SYNC_KEY secret matches.
+  Logger.log('length ' + key.length + ', fingerprint ' + sha256Hex(key).slice(0, 8));
 }
 
 function checkSyncKey(key) {
   var expected = PropertiesService.getScriptProperties().getProperty('SYNC_KEY');
   if (!expected) return { ok: false, error: 'SYNC_KEY script property is not set.' };
-  if (String(key || '') !== expected) return { ok: false, error: 'Wrong sync key.' };
+  if (String(key || '').trim() !== expected.trim()) return { ok: false, error: 'Wrong sync key.' };
   return { ok: true };
 }
 
