@@ -464,6 +464,7 @@
       <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Organizer tools</h3>
       <p class="note" style="margin:0 0 8px;">Duplicate the most recent week's tab as a new blank tab one week later — pool grids and formatting carried over, signups/draw/scores wiped.</p>
       <button type="button" class="btn ghost small" onclick="createNextWeek()">Create next week</button>
+      <p class="note" id="create-week-out" style="display:none; margin:8px 0 0;"></p>
       <p class="note" style="margin:12px 0 8px;">Event format — make a date a <strong>team doubles</strong> night (planned for the last Wednesday of each month) or keep it a regular singles night, and pick whether a team doubles night counts toward the standings.</p>
       <div id="event-format-box">
         <select id="ef-date" class="week-select" aria-label="Event date" onchange="syncEventFormatForm()"></select>
@@ -1272,7 +1273,7 @@ async function reloadWeekFromSheet(){
 }
 
 async function createNextWeek(){
-  const out = document.getElementById('admin-tools-out');
+  const out = document.getElementById('create-week-out');
   const peek = await postAction({action:'peekNextWeekDate', secret: adminSecret()});
   if(!peek.ok){ out.style.display = 'block'; out.textContent = peek.error || 'Could not determine next week.'; return; }
   const input = prompt('Create a new tab for which Wednesday? (YYYY-MM-DD)', peek.date);
@@ -1413,13 +1414,17 @@ function statusBadge(s){
 // ---- Walk-ins (singles and doubles nights) ----
 // Someone at the desk who didn't sign up: pick a returning season player
 // from the dropdown (so the name matches Rankings) or type a new player's
-// name. addWalkIn signs them up (no email) and checks them in; tonight's
+// name. The dropdown also lists tonight's waitlisted signups who haven't
+// checked in yet (tagged "waitlist") - picking one just checks them in. addWalkIn signs them up (no email) and checks them in; tonight's
 // walk-ins are listed with ✎ (fix the name) and ✕ (remove, if added by
 // mistake) - both only for walk-ins, see editWalkIn/removeWalkIn in Code.gs.
 function walkInCard(week, admin){
   if(!admin) return '';
   const signed = new Set(week.signups.map(s=>playerKey(s.name)));
-  const returning = PLAYERS.map(p=>p.name).filter(n=>!signed.has(playerKey(n))).sort((a,b)=>a.localeCompare(b));
+  const waitlisted = week.signups.slice(weekCap(week)).filter(s=>!s.checkedIn && !s.noShow).map(s=>s.name);
+  const options = PLAYERS.map(p=>p.name).filter(n=>!signed.has(playerKey(n))).map(n=>({n, tag:''}))
+    .concat(waitlisted.map(n=>({n, tag:' (waitlist)'})))
+    .sort((a,b)=>a.n.localeCompare(b.n));
   const walk = new Set(((week.live && week.live.walkins) || []).map(playerKey));
   const mine = week.signups.map((s,i)=>({s, i})).filter(({s})=>walk.has(playerKey(s.name)));
   const rows = mine.map(({s,i})=>`<li><span class="rname">${escHtml(s.name)}${statusBadge(s)}</span>
@@ -1431,7 +1436,7 @@ function walkInCard(week, admin){
     <p style="margin:0 0 10px; font-size:13px; color:var(--text-soft);">Someone here who didn't sign up? Pick a returning player, or type a new player's name, then <strong>Add &amp; check in</strong>.</p>
     <div class="search-row" style="margin:0 0 6px; gap:6px; flex-wrap:wrap;">
       <select id="walkin-pick" class="mini-select" style="flex:1; min-width:170px; padding:9px 10px; font-size:14px;" aria-label="Returning player">
-        <option value="">Returning player…</option>${returning.map(n=>`<option value="${escAttr(n)}">${escHtml(n)}</option>`).join('')}
+        <option value="">Returning player…</option>${options.map(o=>`<option value="${escAttr(o.n)}">${escHtml(o.n+o.tag)}</option>`).join('')}
       </select>
       <input type="text" id="walkin-new" placeholder="…or a new player's name" autocomplete="off" style="flex:1; min-width:170px;">
       <button class="btn small" id="walkin-add-btn" onclick="walkInAddClick()">Add &amp; check in</button>
