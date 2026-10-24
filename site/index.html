@@ -1275,7 +1275,19 @@ async function showSheetSync(){
   const out = document.getElementById('sheet-sync-status');
   const week = await fetchWeek(getSessionDateISO());
   const sync = week.sync;
-  if(!sync){ out.textContent = 'All changes are in the sheet.'; return; }
+  if(!sync){
+    // Through the Worker every week carries `sync`; the sandbox's doesn't.
+    out.textContent = USING_WORKER ? 'Couldn\'t reach the site\'s database — this week came straight from the spreadsheet.' : 'All changes are in the sheet.';
+    return;
+  }
+  // direct: the Worker couldn't load this week and served it from Apps
+  // Script instead (worker/src/index.js) - everything is going straight to
+  // the sheet, slowly, until that's fixed.
+  if(sync.direct){
+    out.innerHTML = escHtml(`Not using the site's fast database for this week — everything goes straight to the spreadsheet (slower). ${sync.error || ''}`)
+      + '<br>Usual fixes: deploy the latest Code.gs as a new version, and check the Worker\'s SYNC_KEY secret matches the one setupSyncKey() logs (worker/README.md).';
+    return;
+  }
   const parts = [sync.pending ? `${sync.pending} change${sync.pending>1?'s':''} on the way to the sheet.` : 'All changes are in the sheet.'];
   if(sync.error) parts.push(`Last sync attempt failed (${sync.error}) — it keeps retrying.`);
   (sync.conflicts || []).forEach(c=>parts.push(`The sheet refused ${c.op}: ${c.error}`));
