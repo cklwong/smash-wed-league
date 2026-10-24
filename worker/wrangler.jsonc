@@ -1,0 +1,28 @@
+// Cloudflare Worker config - see README.md. Deployed by Cloudflare's
+// Workers Builds from this folder (root directory "worker"); the project
+// name in the Cloudflare dashboard must match "name" below.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "smash-wed",
+  "main": "src/index.js",
+  "compatibility_date": "2025-09-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "vars": {
+    // The Apps Script web-app deployment (same URL as GAS_URL in site/index.html).
+    "GAS_URL": "https://script.google.com/macros/s/AKfycbzBdibEu1hw4dri1-cfT_ql406Sc5pvBCU_u1Z2L5dEJDr9Imsw0kePRiTMgX4Uv8C8ag/exec"
+  },
+  // SYNC_KEY is a secret: set it in the dashboard (Settings > Variables and
+  // Secrets), never here.
+  "durable_objects": {
+    "bindings": [
+      { "name": "EVENTS", "class_name": "EventDO" },
+      { "name": "META", "class_name": "MetaDO" }
+    ]
+  },
+  // SQLite-backed Durable Objects (the only kind on the Workers Free plan).
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["EventDO", "MetaDO"] }
+  ]
+}
