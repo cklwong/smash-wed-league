@@ -12,6 +12,10 @@
  *                        Editors too). Easiest to set from the site's Admin tab
  *                        ("Sheet editors"), which also applies it to already-protected
  *                        tabs of today's/upcoming events (past events stay owner-only); if set here instead, run applySheetEditorsToProtectedTabs()
+ *        SYNC_KEY      - only if the site runs through the Cloudflare Worker
+ *                        (worker/): a long random string, also set as the
+ *                        Worker's SYNC_KEY secret - easiest made by running
+ *                        setupSyncKey() (see worker/README.md)
  *   2. Run setupTriggers() once (authorizes MailApp - also needed for the
  *      new-player welcome email on signup - and installs the Wednesday
  *      9:30pm auto-finalize/cleanup check, see autoFinalizeWeekly). The PIN
@@ -65,6 +69,9 @@
  *   POST { action:'relayStartGame', date, tie, round, seq, aPair, bPair, secret|pin } -> { ok, relay } (relay night: marks a game on court; aPair/bPair only for the tiebreak, round 3)
  *   POST { action:'relayScore', date, tie, round, seq, scoreA, scoreB, aPair, bPair, secret|pin } -> { ok, relay } (relay night: records or corrects a game's score)
  *   POST { action:'relayClearGame', date, tie, round, seq, secret|pin } -> { ok, relay } (relay night: cancels an on-court game or deletes a recorded score)
+ *   POST { action:'syncHydrate', key, date } -> { ok, snapshot: {week, markers, guestMap}, ranks, bans, auth: {admin, pin} } (Cloudflare Worker only - key = SYNC_KEY script property; see the Worker sync section at the bottom)
+ *   POST { action:'syncBatch', key, date, ops: [{action, ...fields, at}] } -> { ok, processed, results, finalize, snapshot } (Cloudflare Worker only: replays its queued actions as the organizer, in order)
+ *   POST { action:'syncAuth', key, date } -> { ok, auth: {admin, pin} } (Cloudflare Worker only: sha256 hashes of ADMIN_SECRET and the date's PIN)
  */
 
 var CONTACT_COL = 30; // column AD - far past the template's used columns, to avoid clobbering formulas
@@ -104,6 +111,18 @@ function doGet(e) {
 function doPost(e) {
   var body = {};
   try { body = JSON.parse(e.postData.contents); } catch (err) {}
+  var result = dispatchPost(body);
+  // Every dated action may have changed that week (check-in, scores, the
+  // match desk, doubles games, signups...), so the next read recomputes it
+  // instead of serving another phone a cached board for up to 15s.
+  if (body.date && body.action !== 'getpin' && body.action !== 'verifyPin') {
+    try { bustWeekCache(body.date); } catch (err) { Logger.log('bustWeekCache failed: ' + err); }
+  }
+  return jsonOutput(result);
+}
+
+// Runs one POST action (doPost's body, also each op of a syncBatch).
+function dispatchPost(body) {
   var result;
   try {
     if (body.action === 'join') result = joinWithPartner(body.date, body.name, body.contact, body.partner, body.mix);
@@ -140,17 +159,14 @@ function doPost(e) {
     else if (body.action === 'relayStartGame') result = relayStartGame(body.date, body.tie, body.round, body.seq, body.aPair, body.bPair, body.secret, body.pin);
     else if (body.action === 'relayScore') result = relayScore(body.date, body.tie, body.round, body.seq, body.scoreA, body.scoreB, body.aPair, body.bPair, body.secret, body.pin);
     else if (body.action === 'relayClearGame') result = relayClearGame(body.date, body.tie, body.round, body.seq, body.secret, body.pin);
+    else if (body.action === 'syncHydrate') result = syncHydrate(body.key, body.date);
+    else if (body.action === 'syncBatch') result = syncBatch(body.key, body.date, body.ops);
+    else if (body.action === 'syncAuth') result = syncAuth(body.key, body.date);
     else result = { error: 'unknown action: ' + body.action };
   } catch (err) {
     result = { error: String(err) };
   }
-  // Every dated action may have changed that week (check-in, scores, the
-  // match desk, doubles games, signups...), so the next read recomputes it
-  // instead of serving another phone a cached board for up to 15s.
-  if (body.date && body.action !== 'getpin' && body.action !== 'verifyPin') {
-    try { bustWeekCache(body.date); } catch (err) { Logger.log('bustWeekCache failed: ' + err); }
-  }
-  return jsonOutput(result);
+  return result;
 }
 
 function jsonOutput(obj) {
@@ -1828,7 +1844,7 @@ function setCheckin(dateISO, name, secret, pin) {
   sheet.getRange(target.row, 2).setValue('y');
   // Waiting-time baseline for the match desk, until their first game finishes.
   updateLiveState(dateISO, function (state) {
-    state.checkins[target.name.toLowerCase()] = Date.now();
+    state.checkins[target.name.toLowerCase()] = nowMs();
     return { ok: true };
   });
   return { ok: true, seated: seated };
@@ -2020,7 +2036,7 @@ function startMatch(dateISO, a, b, guestNames, clientId, secret, pin) {
       pool: slotA.letter,
       a: nameA,
       b: nameB,
-      startedAt: Date.now()
+      startedAt: nowMs()
     };
     for (var k in gn) { if (!match.guestNames) match.guestNames = {}; match.guestNames[k] = gn[k]; }
     state.matches.push(match);
@@ -2085,7 +2101,7 @@ function recordScore(dateISO, matchId, scoreA, scoreB, secret, pin) {
     var data = sheet.getDataRange().getValues();
     var w = writePairScore(sheet, data, match.a, match.b, v.a, v.b);
     if (!w.ok) return w;
-    match.finishedAt = Date.now(); // starts both players' waiting timers
+    match.finishedAt = nowMs(); // starts both players' waiting timers
     if (w.infoOnly) match.infoScore = [v.a, v.b];
     // writePairScore patched `data` with the new scores, so completeness can
     // be judged here without the flush + full re-read finalizeWeek does.
@@ -3685,7 +3701,7 @@ function relayStartGame(dateISO, tie, round, seq, aPair, bPair, secret, pin) {
     if (!p.ok) return p;
     var clash = relayOnCourt(state, p.a.concat(p.b));
     if (clash.length) return { ok: false, error: clash.join(' and ') + (clash.length > 1 ? ' are' : ' is') + ' still on court in another game — score or cancel that game first.' };
-    state.games.push({ tie: tie, round: round, seq: seq, a: p.a, b: p.b, startedAt: Date.now() });
+    state.games.push({ tie: tie, round: round, seq: seq, a: p.a, b: p.b, startedAt: nowMs() });
     return { ok: true };
   });
 }
@@ -3709,7 +3725,7 @@ function relayScore(dateISO, tie, round, seq, scoreA, scoreB, aPair, bPair, secr
     }
     game.sa = v.a;
     game.sb = v.b;
-    game.finishedAt = Date.now();
+    game.finishedAt = nowMs();
     return { ok: true, complete: relayIsComplete(state) };
   });
   // Finalize runs outside the relay lock (finalizeWeek takes the same lock).
@@ -3849,4 +3865,145 @@ function setSheetEditors(emails, secret) {
   props.setProperty('SHEET_EDITORS', clean.join(', '));
   var applied = applySheetEditorsToProtectedTabs();
   return { ok: true, emails: clean, updated: applied.updated, warnings: applied.warnings };
+}
+
+// ---- Cloudflare Worker sync (see worker/README.md) ----
+//
+// The site can run through a Cloudflare Worker that keeps each event date's
+// state in its own database, answers game-day actions and signups at once,
+// and replays them here in order (syncBatch) - this script and the sheet stay
+// the source of truth: every batch reply carries a fresh syncSnapshot that
+// replaces the Worker's copy. All three actions need the SYNC_KEY script
+// property (the same value is set as a secret on the Worker); without it
+// they refuse, and nothing changes for the site talking to this script
+// directly.
+
+var SYNC_BATCH_BUDGET_MS = 45000; // stop starting new ops after this; the Worker resends the rest
+var BATCH_NOW = 0;                // the replayed op's own time (nowMs), so timers match the Worker's
+
+// Date.now(), except while syncBatch replays an op - then the time the
+// Worker first applied it, so match/game timers and check-in times don't
+// jump by the replay delay.
+function nowMs() {
+  return BATCH_NOW || Date.now();
+}
+
+// Run once from the editor when setting up the Worker: creates the SYNC_KEY
+// script property (a long random string) if it isn't set yet, and logs it -
+// copy it from the execution log into the Worker's SYNC_KEY secret in the
+// Cloudflare dashboard. Running it again just logs the existing key.
+function setupSyncKey() {
+  var props = PropertiesService.getScriptProperties();
+  var key = props.getProperty('SYNC_KEY');
+  if (!key) {
+    key = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+    props.setProperty('SYNC_KEY', key);
+  }
+  Logger.log('SYNC_KEY = ' + key);
+}
+
+function checkSyncKey(key) {
+  var expected = PropertiesService.getScriptProperties().getProperty('SYNC_KEY');
+  if (!expected) return { ok: false, error: 'SYNC_KEY script property is not set.' };
+  if (String(key || '') !== expected) return { ok: false, error: 'Wrong sync key.' };
+  return { ok: true };
+}
+
+function sha256Hex(value) {
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(value), Utilities.Charset.UTF_8);
+  return bytes.map(function (b) { return ('0' + (b & 0xff).toString(16)).slice(-2); }).join('');
+}
+
+// Hashes of the admin passphrase and the date's event PIN (null when unset),
+// so the Worker can check sign-ins itself without holding either secret.
+function syncAuthHashes(dateISO) {
+  var props = PropertiesService.getScriptProperties();
+  var secret = props.getProperty('ADMIN_SECRET');
+  var pin = dateISO ? props.getProperty('PIN_' + dateISO) : null;
+  return { admin: secret ? sha256Hex(secret) : null, pin: pin ? sha256Hex(pin) : null };
+}
+
+// computeWeek plus what its payload leaves out but the Worker's copy needs:
+// the grid cells holding the on-court "p" marker ([letter, row, col]) and
+// the no-show -> Guest seat swaps (NOSHOW_GUEST_COL).
+function syncSnapshot(dateISO) {
+  var week = computeWeek(dateISO);
+  var markers = [], guestMap = {};
+  var sheet = getWeekSheet(dateISO);
+  if (sheet) {
+    var data = sheet.getDataRange().getValues();
+    POOL_LETTERS.forEach(function (L) {
+      var lay = POOL_LAYOUT[L];
+      for (var r = 0; r < lay.size; r++) {
+        var row = data[lay.firstSlotRow - 1 + r] || [];
+        for (var c = 0; c < lay.size; c++) {
+          if (isInProgressMarker(row[GRID_FIRST_COL - 1 + c])) markers.push([L, r, c]);
+        }
+      }
+    });
+    parseSignups(data).forEach(function (s) {
+      var label = ((data[s.row - 1] || [])[NOSHOW_GUEST_COL - 1] || '').toString().trim();
+      if (label) guestMap[s.name.toLowerCase()] = label;
+    });
+  }
+  return { week: week, markers: markers, guestMap: guestMap };
+}
+
+function syncHydrate(key, dateISO) {
+  var k = checkSyncKey(key);
+  if (!k.ok) return k;
+  if (!dateISO || !/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) return { ok: false, error: 'Missing date.' };
+  return {
+    ok: true,
+    snapshot: syncSnapshot(dateISO),
+    ranks: getRankings().players.map(function (p) { return p.name; }),
+    bans: getBans(),
+    auth: syncAuthHashes(dateISO)
+  };
+}
+
+function syncAuth(key, dateISO) {
+  var k = checkSyncKey(key);
+  if (!k.ok) return k;
+  return { ok: true, auth: syncAuthHashes(dateISO) };
+}
+
+// Replays the Worker's queued actions for one date, in order, as the
+// organizer: the Worker already checked each sign-in and applied the action
+// to its copy. Each op is { action, ...its POST fields, at } where at is when
+// the Worker applied it (nowMs). The rev guard on relaySaveTeams is the
+// Worker's own (it saw the edit against its copy), so it's satisfied here.
+// Returns every processed op's result, in order, and a fresh snapshot;
+// `processed` < ops.length means the time budget ran out and the Worker
+// sends the rest next time.
+function syncBatch(key, dateISO, ops) {
+  var k = checkSyncKey(key);
+  if (!k.ok) return k;
+  if (!dateISO || !/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) return { ok: false, error: 'Missing date.' };
+  ops = Array.isArray(ops) ? ops : [];
+  var secret = PropertiesService.getScriptProperties().getProperty('ADMIN_SECRET');
+  var started = Date.now();
+  var results = [], finalize = false;
+  for (var i = 0; i < ops.length; i++) {
+    if (i > 0 && Date.now() - started > SYNC_BATCH_BUDGET_MS) break;
+    var op = {};
+    for (var f in ops[i]) op[f] = ops[i][f];
+    op.date = dateISO;
+    op.secret = secret;
+    op.pin = '';
+    if (op.action === 'relaySaveTeams') op.rev = getRelayState(dateISO).rev;
+    BATCH_NOW = Number(op.at) || 0;
+    var r;
+    try { r = dispatchPost(op); }
+    catch (err) { r = { ok: false, error: String(err) }; }
+    finally { BATCH_NOW = 0; }
+    r = r || {};
+    if (r.complete || r.finalize) finalize = true;
+    // The relay state comes back in the snapshot - no need to repeat it per op.
+    var slim = {};
+    for (var rk in r) if (rk !== 'relay') slim[rk] = r[rk];
+    results.push(slim);
+  }
+  bustWeekCache(dateISO);
+  return { ok: true, processed: results.length, results: results, finalize: finalize, snapshot: syncSnapshot(dateISO) };
 }
