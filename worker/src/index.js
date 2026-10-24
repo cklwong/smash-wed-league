@@ -141,9 +141,13 @@ async function handleGet(url, env) {
     try {
       return json(await eventStub(env, date).week(date));
     } catch (err) {
-      // No copy yet and Apps Script couldn't be reached through the object:
-      // ask it directly, exactly as the site used to.
-      return json(await gasGet(env, url.searchParams.toString()));
+      // No copy yet and it couldn't be loaded from Apps Script (often a
+      // SYNC_KEY mismatch, or Code.gs not redeployed): ask Apps Script
+      // directly, exactly as the site used to, and say why in `sync` so the
+      // Admin tab's Sheet sync box shows it.
+      const week = await gasGet(env, url.searchParams.toString());
+      if (week && typeof week === 'object') week.sync = { pending: 0, conflicts: [], direct: true, error: 'Could not load this week into the site\'s database: ' + String(err && err.message || err) };
+      return json(week);
     }
   }
   if (action === 'rankings' || action === 'weekDates' || action === 'headtohead') {

@@ -291,3 +291,18 @@ test('meta cache: serves stale data at once and refreshes in the background', as
   assert.equal((await meta.get('rankings')).version, 3);
   assert.equal((await meta.get('headtohead', 'Player 01')).q, 'action=headtohead&name=Player%2001');
 });
+
+test('a failed first load is not retried for a minute, so the fallback stays quick', async () => {
+  const gas = fakeGas();
+  const core = makeCore(gas);
+  gas.fail = 1;
+  await assert.rejects(core.week(), /network down/);
+  const calls = gas.calls.length;
+  await assert.rejects(core.week(), /network down/);
+  await assert.rejects(core.action({ action: 'join', date: DATE, name: 'Someone' }), /network down/);
+  assert.equal(gas.calls.length, calls, 'no new Apps Script call within the minute');
+  core.tick(61000);
+  const w = await core.week();
+  assert.equal(w.exists, true, 'loads again after a minute');
+  assert.equal(w.sync.pending, 0);
+});

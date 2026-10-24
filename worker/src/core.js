@@ -32,6 +32,7 @@ const AUTH_REFRESH_MS = 15 * 1000;      // re-fetch sign-in hashes at most this 
 const RETRY_MS = [2000, 5000, 15000, 30000, 60000, 120000];
 const CONFLICTS_KEPT = 20;
 const DRAIN_TIMEOUT_MS = 60 * 1000;
+const LOAD_RETRY_MS = 60 * 1000;        // after a failed first load, don't retry for this long
 
 export async function sha256Hex(value) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value))));
@@ -92,9 +93,21 @@ export class EventCore {
     if (cur == null || cur > at) await this.storage.setAlarm(at);
   }
 
+  // The first read of a date loads it from Apps Script. If that fails, the
+  // Worker answers from Apps Script directly instead (src/index.js); for
+  // LOAD_RETRY_MS after a failure this throws at once with the same error,
+  // so every request doesn't pay for a doomed load first.
   async ensureLoaded() {
     await this.load();
-    if (!this.s.base) await this.serial(() => this.hydrate());
+    if (this.s.base) return this.s;
+    if (this.loadError && this.now() - this.loadError.at < LOAD_RETRY_MS) throw new Error(this.loadError.message);
+    try {
+      await this.serial(() => this.hydrate());
+    } catch (err) {
+      this.loadError = { at: this.now(), message: String(err && err.message || err) };
+      throw err;
+    }
+    this.loadError = null;
     return this.s;
   }
 
