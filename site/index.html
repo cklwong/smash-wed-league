@@ -548,7 +548,7 @@ const GAS_URL = 'https://script.google.com/macros/s/AKfycbzBdibEu1hw4dri1-cfT_ql
 // brings the sheet up to date in the background. Empty = talk to Apps Script
 // directly, as before; ?direct=1 does that for one visit (a fallback if the
 // Worker ever misbehaves).
-const WORKER_URL = '';
+const WORKER_URL = 'https://smash-wed.clarencew.workers.dev/';
 const USING_WORKER = !!WORKER_URL && new URLSearchParams(location.search).get('direct') !== '1';
 const API_URL = USING_WORKER ? WORKER_URL : GAS_URL;
 // The This week board's background refresh - cheap through the Worker, so
