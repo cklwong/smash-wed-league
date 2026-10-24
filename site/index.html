@@ -450,6 +450,7 @@
       </div>
       <p class="note" id="admin-pin-out" style="display:none;"></p>
       <button type="button" class="btn ghost small" id="admin-signout-btn" style="display:none; margin-top:8px;" onclick="adminSignOut()">Sign out</button>
+      <p class="note" id="direct-mode-note" style="display:none; margin:12px 0 0;"></p>
     </div>
     <div class="card" style="max-width:440px; display:none;" id="admin-mock-card">
       <h3 style="margin:0 0 8px; font-size:15px; color:var(--ink);">Developer sandbox</h3>
@@ -1195,6 +1196,7 @@ function weekPinSignOut(){
 }
 
 function renderAdmin(){
+  renderDirectModeNote();
   document.getElementById('admin-secret').value = sessionStorage.getItem('sw-admin-secret') || '';
   document.getElementById('admin-mock-card').style.display = 'none';
   document.getElementById('admin-tools-card').style.display = 'none';
@@ -1242,6 +1244,24 @@ async function fetchEventPin(){
   populateEventFormat();
   loadSheetEditors();
   showSheetSync();
+}
+
+// The same page with ?direct=1 added (on) or removed (off) - see WORKER_URL.
+function directModeHref(on){
+  const u = new URL(location.href);
+  if(on) u.searchParams.set('direct', '1'); else u.searchParams.delete('direct');
+  return u.pathname + u.search + u.hash;
+}
+// Emergency bypass, on the Sign in card so it's there even if signing in
+// through the Worker fails: ?direct=1 makes this visit talk to Apps Script
+// directly, as the site did before the Worker.
+function renderDirectModeNote(){
+  const el = document.getElementById('direct-mode-note');
+  if(!WORKER_URL){ el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = USING_WORKER
+    ? `<strong>If the site stops working or isn't saving</strong> (e.g. "Sheet sync" below keeps showing an error), <a href="${escAttr(directModeHref(true))}">open the site in direct mode</a> — it skips the site's fast database and talks to the spreadsheet directly, like before (slower, but nothing in between). Every organizer device needs to switch, and players' pages stay as they are. To get there by hand, add <code>?direct=1</code> to the end of the site's address.`
+    : `<strong>Direct mode is on</strong> — this page talks to the spreadsheet directly, skipping the site's fast database. <a href="${escAttr(directModeHref(false))}">Switch back to normal</a> when things work again, then sign in and press <strong>Reload this week from the sheet</strong> so the site picks up what was done in direct mode.`;
 }
 
 // Worker only (or the ?mock=1 sandbox): how far behind the spreadsheet is
