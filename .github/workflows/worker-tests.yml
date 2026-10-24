@@ -1,0 +1,25 @@
+name: Worker tests
+
+# The Worker's event logic (worker/src) and the game-day engine it shares
+# with the ?mock=1 sandbox (site/week-engine.js, site/relay-rules.js),
+# run against a fake Apps Script. No install needed - plain Node.
+on:
+  pull_request:
+    paths: ['worker/**', 'site/week-engine.js', 'site/relay-rules.js', '.github/workflows/worker-tests.yml']
+  push:
+    branches: [main]
+    paths: ['worker/**', 'site/week-engine.js', 'site/relay-rules.js', '.github/workflows/worker-tests.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+        working-directory: worker

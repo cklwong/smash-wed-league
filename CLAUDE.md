@@ -10,11 +10,14 @@ check-in and the match desk from an admin-signed-in device.
 
 ```
 Players' browsers
-      │  fetch(GAS_URL, ...)
+      │  fetch(API_URL, ...)
       ▼
 site/index.html  ──deployed by GitHub Pages (.github/workflows/pages.yml)──
       │
       │  HTTPS GET/POST (JSON)
+      ▼
+Cloudflare Worker (worker/, optional - WORKER_URL in index.html; '' = skip it)
+      │  one database per event date; replays actions in the background
       ▼
 Google Apps Script Web App (gas/Code.gs, bound to the spreadsheet)
       │
@@ -27,8 +30,17 @@ Google Apps Script Web App (gas/Code.gs, bound to the spreadsheet)
 - **`site/index.html`** is the entire frontend: one static HTML file with
   inline CSS/JS, no build step, no framework. It's a single-page app with
   four tabs — Standings, This week, Past weeks, Join — plus an Admin panel.
-  It talks to the backend only through `fetch()` calls to `GAS_URL`, a
-  constant near the top of the `<script>` block.
+  It talks to the backend only through `fetch()` calls to `API_URL` - the
+  Cloudflare Worker's `WORKER_URL` when that's set, else `GAS_URL` (both
+  constants near the top of the `<script>` block; `?direct=1` forces
+  `GAS_URL` for one visit).
+- **`site/relay-rules.js`** holds the pure team-doubles rules and
+  **`site/week-engine.js`** every game-day action on one date's state
+  (check-in, pools, match desk, walk-ins, doubles, join/leave) - plain JS
+  shared by the page, the `?mock=1` sandbox and the Worker. Both mirror
+  `gas/Code.gs` function by function and must stay in sync with it.
+- **`worker/`** is a Cloudflare Worker (free plan) in front of Apps Script;
+  see `worker/README.md` and "Worker sync" below.
 - **`gas/Code.gs`** is a Google Apps Script project bound to the league
   spreadsheet. It's deployed as a Web App and exposes a small JSON API via
   `doGet`/`doPost` (full endpoint list is in the file's header comment) that
@@ -44,11 +56,15 @@ Google Apps Script Web App (gas/Code.gs, bound to the spreadsheet)
   rank/avg math.
 - **`site/mock-backend.js`** is a stand-in for `Code.gs` used only for local
   frontend development in a browser, without touching the real spreadsheet.
+  Its game-day actions run on `site/week-engine.js` (the Worker's engine);
+  it adds the seed data, canned past weeks and admin actions.
 
 ## Commands
 
-There is no build, lint, or test suite — this is a static HTML file plus a
-Google Apps Script file, edited directly.
+There is no build or lint - a static HTML file plus a Google Apps Script
+file, edited directly. The only tests are the Worker's (`cd worker && npm
+test`, plain Node, also run by `.github/workflows/worker-tests.yml`), which
+cover `worker/src` and `site/week-engine.js` against a fake Apps Script.
 
 - **Run the frontend locally**: open `site/index.html?mock=1` in a browser.
   The `?mock=1` query param makes `index.html`'s `<head>` `document.write` in
@@ -57,8 +73,8 @@ Google Apps Script file, edited directly.
   `script.google.com`. Reload to reset state to the seed; any PIN/passphrase
   is accepted in mock mode (it's a sandbox, not a security check).
 - **Test against the real backend**: open `site/index.html` normally (no
-  `?mock=1`) — it uses the `GAS_URL` deployment URL hardcoded near the top of
-  the inline `<script>`.
+  `?mock=1`) — it uses `WORKER_URL` (or `GAS_URL` when that's empty, or with
+  `?direct=1`) near the top of the inline `<script>`.
 - **Deploy the frontend**: push to `main` touching anything under `site/` —
   `.github/workflows/pages.yml` publishes `site/` as-is to GitHub Pages.
   Nothing to build or install.
@@ -69,6 +85,10 @@ Google Apps Script file, edited directly.
   Script editor and deploy a new Web App version (Deploy → Manage
   deployments → Edit → New version). Treat the repo as source of truth and
   the Apps Script editor as the deploy target — keep them in sync.
+- **Deploy the Worker**: Cloudflare Workers Builds deploys `worker/` on every
+  push to `main` that touches `worker/*`, `site/week-engine.js` or
+  `site/relay-rules.js` (the Worker bundles those two). One-time setup and the
+  `SYNC_KEY` secret: `worker/README.md`.
 
 ## Architecture notes
 
@@ -173,8 +193,8 @@ Google Apps Script file, edited directly.
   court in another game (`relayOnCourt`, checked by `relayStartGame` and on
   the Live tab, which shows "waiting for …" instead of Start). The pure rules (`relayPairs`/`relayLineup`/
   `relaySchedule`/`relayTieView`/`relayPlayerStats`/`relayTeamSizes`/`relayRepairSchedule`)
-  exist in both `Code.gs` and `index.html` and must stay in sync (the mock
-  reuses the page's copies). Singles-only actions (`generatePools`,
+  exist in both `Code.gs` and `site/relay-rules.js` (loaded by the page, the
+  mock and the Worker) and must stay in sync. Singles-only actions (`generatePools`,
   `startMatch`, `recordScore`, `editScore`, `cancelMatch`) refuse on these
   dates. Ranking points per night: exhibition (nothing written to Rankings)
   or ranked (doubles won + `RELAY_TEAM_BONUS` for a tie win, R label
@@ -219,6 +239,22 @@ Google Apps Script file, edited directly.
   Pools/pre-draw "Partner requests" card shows each one's status with a
   "Pair them" button. Requests aren't binding - the organizer can re-pair
   or split them. Test with `site/index.html?mock=1&doubles=1`.
+- **Worker sync** (when `WORKER_URL` is set): each event date is a Durable
+  Object (`worker/src/core.js`) holding the week as Apps Script last
+  reported it plus queued actions on top. Game-day actions, walk-ins,
+  doubles games and join/leave are checked (sign-in against hashes from
+  `syncAuth`, then `site/week-engine.js`), answered at once and replayed in
+  order to `Code.gs` `syncBatch` (as the organizer, `nowMs()` = the original
+  tap time) about half a second later; each reply's `syncSnapshot` replaces
+  the copy, so the sheet stays the source of truth and a refused action or a
+  hand edit wins on the next sync. Finalize/reset/format switch flush the
+  queue first, then run in Apps Script, then reload; other admin actions go
+  straight through. Join/leave emails go out on replay (about a minute
+  late). Don't hand-edit a week's tab while it's in use - or press "Reload
+  this week from the sheet" on the Admin tab after (`syncReload`). Any new
+  game-day action needs adding to `week-engine.js` too (or it goes straight
+  to Apps Script, unqueued - only safe for actions that don't touch a week
+  the Worker holds).
 - **One-time environment setup** on a fresh spreadsheet binding: set the
   `ADMIN_EMAILS` and `ADMIN_SECRET` script properties (Project Settings →
   Script Properties) - optionally also `SHEET_EDITORS` (comma-separated emails
@@ -231,3 +267,5 @@ Google Apps Script file, edited directly.
   (also used for the new-player welcome email on signup) and install the
   Wednesday-9:30pm `autoFinalizeWeekly` trigger. It does not install a
   recurring PIN email - the PIN is retrieved on demand from the Admin tab.
+  For the Worker, also run `setupSyncKey()` once and put the logged key in
+  the Worker's `SYNC_KEY` secret (`worker/README.md`).
